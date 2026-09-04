@@ -1,0 +1,31 @@
+#!/bin/sh
+# Refuse tool attribution in a commit message.
+#
+# Not a style preference, and not left to whoever is typing. A sibling
+# repository shipped ten commits to main carrying a Claude-Session: trailer
+# before anyone read the default that produced it, and removing them meant
+# restamping every hash. The cost of that is high enough that this is a gate.
+#
+# Enable with `make hooks` (sets core.hooksPath), once per clone.
+
+set -eu
+
+msg_file="$1"
+
+found=$(grep -niE \
+	'co-authored-by:.*(claude|anthropic|copilot|cursor|chatgpt|gpt-|gemini)|^[[:space:]]*(claude-session|x-claude|ai-session|assisted-by):|generated with .*(claude|copilot|cursor)|https?://claude\.ai/' \
+	"$msg_file" || true)
+
+if [ -n "$found" ]; then
+	{
+		echo "commit-msg: refused. This is tool attribution:"
+		echo
+		printf '%s\n' "$found"
+		echo
+		echo "This repository does not carry it, in commit messages or anywhere"
+		echo "else that leaves the machine. Remove the line and commit again."
+	} >&2
+	exit 1
+fi
+
+exit 0

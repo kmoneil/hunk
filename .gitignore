@@ -1,0 +1,21 @@
+# Plans, scratch, reviews. Never committed.
+_plans/
+_tmp/
+_reviews/
+_reports/
+# The benchmark's staging directory (scripts/bench.sh).
+_bench/
+
+# Build output.
+/hunk
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# AI files. Local law and local scratch, none of it committed.
+CLAUDE.md
+GEMINI.md
+.claude/
