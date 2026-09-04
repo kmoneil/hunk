@@ -169,6 +169,15 @@ func (r *Report) writeSuccess(w io.Writer) {
 
 	fmt.Fprintf(w, "%s, %s, +%d -%d",
 		count(len(res.Files), "file"), count(res.Hunks, "hunk"), res.Added(), res.Removed())
+	// The note (§5.1). Printed only when the batch bought nothing this tool
+	// offers and nothing was riding on it: one file, one hunk, one occurrence,
+	// no verify. It does not refuse; the work was valid and only the choice of
+	// tool was wasteful, and saying so once is cheaper than arguing in advance.
+	if r.trivial() {
+		defer fmt.Fprintf(w, "note: %s. %s is cheaper than a patch for this.\n",
+			"one replacement in one file, with no --verify", alternativeTo(res.Files[0].Op))
+	}
+
 	switch {
 	case r.DryRun && r.Verify != nil:
 		// §4: --dry-run writes nothing and runs no verify. Both are said,
@@ -254,6 +263,25 @@ func (r *Report) writeVerifyFailure(w io.Writer) {
 	}
 }
 
+// trivial reports whether the note applies: the transaction's own verdict, plus
+// the two things only the report knows, that no verify ran and this was a real
+// apply rather than a preview.
+func (r *Report) trivial() bool {
+	return r.Result != nil && r.Result.Trivial && len(r.Result.Files) == 1 &&
+		!r.DryRun && r.Verify == nil
+}
+
+// alternativeTo names the cheaper tool for a batch that needed none of this.
+func alternativeTo(op string) string {
+	switch op {
+	case "create":
+		return "Write"
+	case "delete":
+		return "rm"
+	}
+	return "Edit"
+}
+
 // opLetter is §5.1's first column.
 func opLetter(op string) string {
 	switch op {
@@ -290,6 +318,7 @@ type jsonReport struct {
 	Exit     int           `json:"exit"`
 	Files    []jsonFile    `json:"files,omitempty"`
 	Hunks    int           `json:"hunks,omitempty"`
+	Trivial  bool          `json:"trivial,omitempty"`
 	Verify   *jsonVerify   `json:"verify,omitempty"`
 	Failures []jsonFailure `json:"failures,omitempty"`
 	Error    string        `json:"error,omitempty"`
@@ -352,6 +381,7 @@ func (r *Report) JSON(w io.Writer) error {
 	out := jsonReport{OK: r.Exit == exitOK, Exit: r.Exit, DryRun: r.DryRun}
 	if r.Result != nil {
 		out.Hunks = r.Result.Hunks
+		out.Trivial = r.trivial()
 		for _, f := range r.Result.Files {
 			out.Files = append(out.Files, jsonFile{f.Path, f.Op, f.Added, f.Removed, f.SeamAdded})
 		}

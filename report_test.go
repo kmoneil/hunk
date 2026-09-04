@@ -399,3 +399,114 @@ func TestJSONDoesNotHTMLEscape(t *testing.T) {
 		t.Errorf("command not readable: %s", b.String())
 	}
 }
+
+// §5.1's note. It exists because a skill can only advise, and advises before
+// the fact; a note from the tool is deterministic, arrives at the moment the
+// choice was made, and applies whether or not any skill is loaded.
+//
+// The condition has to be tight. Firing it on a batch that did buy something
+// would be the tool nagging about work it was right to do, which is worse than
+// saying nothing.
+func TestTheTrivialPatchNote(t *testing.T) {
+	const note = "note: one replacement in one file"
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		patch string
+		args  []string
+		want  bool
+	}{
+		{"one replacement, one file, no verify", map[string]string{"v.go": "0.3.1\n"},
+			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n", nil, true},
+		{"a verify was riding on it", map[string]string{"v.go": "0.3.1\n"},
+			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n", []string{"--verify", "true"}, false},
+		{"two occurrences, which no single Edit does safely", map[string]string{"a.txt": "x\nx\n"},
+			"@@ file a.txt\n@@ old x2\nx\n@@ new\ny\n", nil, false},
+		{"two hunks", map[string]string{"a.txt": "one\ntwo\n"},
+			"@@ file a.txt\n@@ old\none\n@@ new\nONE\n@@ old\ntwo\n@@ new\nTWO\n", nil, false},
+		{"two files", map[string]string{"a.txt": "x\n", "b.txt": "y\n"},
+			"@@ file a.txt\n@@ old\nx\n@@ new\nX\n@@ file b.txt\n@@ old\ny\n@@ new\nY\n", nil, false},
+		{"a dry run is not an apply", map[string]string{"v.go": "0.3.1\n"},
+			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n", []string{"--dry-run"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, c.files)
+			code, out, errOut := runCLI(t, root, c.args, c.patch)
+			if code != exitOK {
+				t.Fatalf("exit %d: %s", code, errOut)
+			}
+			if got := strings.Contains(out, note); got != c.want {
+				t.Errorf("note present = %v, want %v:\n%s", got, c.want, out)
+			}
+		})
+	}
+
+	t.Run("it names the cheaper tool for the op", func(t *testing.T) {
+		for _, c := range []struct{ patch, want string }{
+			{"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n", "Edit is cheaper"},
+			{"@@ create n.txt\nhi\n\n", "Write is cheaper"},
+			{"@@ delete v.go\n", "rm is cheaper"},
+		} {
+			root := cliTree(t, map[string]string{"v.go": "0.3.1\n"})
+			_, out, errOut := runCLI(t, root, nil, c.patch)
+			if !strings.Contains(out, c.want) {
+				t.Errorf("want %q:\n%s%s", c.want, out, errOut)
+			}
+		}
+	})
+
+	t.Run("--quiet suppresses it with the rest of the success report", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"v.go": "0.3.1\n"})
+		_, out, _ := runCLI(t, root, []string{"--quiet"},
+			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n")
+		if out != "" {
+			t.Errorf("out = %q", out)
+		}
+	})
+
+	t.Run("--json carries it as a field, not as prose", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"v.go": "0.3.1\n"})
+		_, out, _ := runCLI(t, root, []string{"--json"},
+			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n")
+		var v map[string]any
+		must(t, json.Unmarshal([]byte(out), &v))
+		if v["trivial"] != true {
+			t.Errorf("trivial = %v", v["trivial"])
+		}
+		if strings.Contains(out, "cheaper") {
+			t.Errorf("the prose leaked into the JSON:\n%s", out)
+		}
+	})
+
+	t.Run("golden", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"greeter/version.go": "const Version = \"0.3.1\"\n"})
+		_, out, _ := runCLI(t, root, nil,
+			"@@ file greeter/version.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n")
+		golden(t, "cli-trivial-note", out)
+	})
+}
+
+// A single hunk that changes nothing produces no changed files, so the note's
+// guard on len(Files) is what stops res.Files[0] indexing an empty slice. A
+// mutation check found that nothing exercised this path through the report.
+func TestANoOpBatchDoesNotPrintOrPanic(t *testing.T) {
+	root := cliTree(t, map[string]string{"a.txt": "x\n"})
+	code, out, errOut := runCLI(t, root, nil, "@@ file a.txt\n@@ old\nx\n@@ new\nx\n")
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if strings.Contains(out, "note:") {
+		t.Errorf("a batch that changed nothing got advice about its tool choice:\n%s", out)
+	}
+	if !strings.Contains(out, "0 files") {
+		t.Errorf("out = %q", out)
+	}
+
+	// And the same through the JSON path.
+	_, js, _ := runCLI(t, root, []string{"--json"}, "@@ file a.txt\n@@ old\nx\n@@ new\nx\n")
+	var v map[string]any
+	must(t, json.Unmarshal([]byte(js), &v))
+	if v["trivial"] == true {
+		t.Errorf("a no-op batch reported trivial: %s", js)
+	}
+}

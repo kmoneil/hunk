@@ -121,6 +121,15 @@ type FileResult struct {
 type Result struct {
 	Files []FileResult
 	Hunks int
+
+	// Trivial means the batch bought nothing this tool offers: one file, one
+	// hunk, one occurrence. Reported as a note (§5.1) rather than refused,
+	// because the work was valid and only the choice of tool was wasteful.
+	//
+	// It exists because a skill can only advise, and advises before the fact.
+	// A note from the tool is deterministic, arrives at the moment the choice
+	// was made, and applies whether or not any skill is loaded.
+	Trivial bool
 }
 
 // ValidationError is exit 2: one or more hunks did not match, and nothing was
@@ -205,6 +214,10 @@ type Txn struct {
 	opt   Options
 	files []*file          // first-appearance order, which is §5.1's output order
 	index map[string]*file // by resolved name, so one file is one entry
+	// maxCount is the largest occurrence count any applied hunk claimed. A
+	// batch that replaced three occurrences at once is not trivial, however
+	// few files it touched: no single Edit does that safely.
+	maxCount int
 	// per hunk, filled by Load. Validate indexes rather than resolving again:
 	// resolving twice is both wasted work and a second error path that cannot
 	// happen, since Load would already have refused it.
@@ -405,6 +418,9 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		if !bytes.Equal(next, f.cur) {
 			f.changed = true
 			f.applied++
+			if h.Count > x.maxCount {
+				x.maxCount = h.Count
+			}
 			// Per occurrence, not per hunk: an "@@ old x2" that rewrites two
 			// lines changed two lines, and a diffstat saying +1 -1 understates
 			// it. §5.1's globals.go row is +2 -2 and §3.6's hunk for that file
@@ -472,6 +488,9 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 	}
 	f.changed = true
 	f.applied++
+	if x.maxCount < 1 {
+		x.maxCount = 1
+	}
 }
 
 // finalOp is what commit does for this path: the batch's final state, not the
@@ -711,6 +730,10 @@ func shortHash(sum [sha256.Size]byte) string {
 
 func (x *Txn) result(hunks int) *Result {
 	r := &Result{Hunks: hunks}
+	// One file, one hunk, one occurrence: nothing here needed a transaction,
+	// an occurrence guard, or a rollback. Whether a verify was given is the
+	// caller's to know, so report.go makes the final call.
+	r.Trivial = hunks == 1 && x.maxCount <= 1
 	for _, f := range x.files {
 		op := f.finalOp()
 		if op == "" {
