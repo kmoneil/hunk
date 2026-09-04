@@ -140,9 +140,9 @@ func TestReportGoldens(t *testing.T) {
 // pins the rule and keeps the spec's own rows.
 func TestSuccessLinesUpOnTheLongestPath(t *testing.T) {
 	rep := &Report{Result: &Result{Hunks: 4, Files: []FileResult{
-		{"internal/cli/root.go", "modify", 2, 1},
-		{"internal/registry/globals.go", "modify", 2, 2},
-		{"internal/cli/scope.go", "create", 4, 0},
+		{Path: "internal/cli/root.go", Op: "modify", Added: 2, Removed: 1},
+		{Path: "internal/registry/globals.go", Op: "modify", Added: 2, Removed: 2},
+		{Path: "internal/cli/scope.go", Op: "create", Added: 4, Removed: 0},
 	}}}
 	var out, errOut bytes.Buffer
 	rep.Text(&out, &errOut, false)
@@ -174,7 +174,6 @@ func TestExitCode(t *testing.T) {
 	}{
 		{"success", nil, exitOK},
 		{"a parse error", &ParseError{Line: 1, Msg: "x"}, exitUsage},
-		{"an unimplemented op", &UnsupportedOpError{Op: OpDelete}, exitUsage},
 		{"a hunk that did not match", &ValidationError{}, exitNoMatch},
 		{"a refused path", &PathRefusal{Path: "x"}, exitNoMatch},
 		{"a file changed underneath", &ChangedError{Path: "x"}, exitChanged},
@@ -295,7 +294,7 @@ func TestJSONIsAlwaysOneValidObject(t *testing.T) {
 		name string
 		rep  *Report
 	}{
-		{"success", NewReport(&Result{Hunks: 1, Files: []FileResult{{"a", "modify", 1, 1}}}, nil, nil, false, 1)},
+		{"success", NewReport(&Result{Hunks: 1, Files: []FileResult{{Path: "a", Op: "modify", Added: 1, Removed: 1}}}, nil, nil, false, 1)},
 		{"empty", NewReport(nil, nil, nil, false, 0)},
 		{"io error", NewReport(nil, fs.ErrPermission, nil, false, 0)},
 		{"changed", NewReport(nil, &ChangedError{Path: "a"}, nil, false, 0)},
@@ -327,7 +326,7 @@ func TestReportEdges(t *testing.T) {
 	})
 
 	t.Run("verify ok is reported with its duration", func(t *testing.T) {
-		rep := NewReport(&Result{Hunks: 1, Files: []FileResult{{"a.go", "modify", 1, 1}}},
+		rep := NewReport(&Result{Hunks: 1, Files: []FileResult{{Path: "a.go", Op: "modify", Added: 1, Removed: 1}}},
 			nil, &Verify{Ran: true, OK: true, Seconds: 11.3}, false, 1)
 		var out, errOut bytes.Buffer
 		rep.Text(&out, &errOut, false)

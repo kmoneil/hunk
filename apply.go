@@ -87,6 +87,16 @@ type Failure struct {
 	// Near explains the miss (§7). Nil for a skipped hunk, and nil past
 	// §7.2's cap of ten diagnosed hunks per batch.
 	Near *Diagnosis
+
+	// Refusal is why the hunk could not be attempted at all: the file is
+	// missing, or already exists, or an earlier hunk in the batch deleted it.
+	// Set instead of Expected and Found, which describe a text mismatch.
+	//
+	// It is a per-hunk failure rather than an error that aborts the load,
+	// because §5.2 reports every failing hunk so one round trip fixes all of
+	// them. Stopping at the first missing file wastes the round trip this tool
+	// exists to save.
+	Refusal string
 }
 
 // Skipped reports whether this hunk was never evaluated (§5.2 reports those
@@ -97,9 +107,14 @@ func (f Failure) Skipped() bool { return f.SkippedAfter != 0 }
 // A FileResult is one line of §5.1's success output.
 type FileResult struct {
 	Path    string
-	Op      string // "modify"; "create" and "delete" arrive with their own card
+	Op      string // "modify", "create" or "delete" (§6.6)
 	Added   int
 	Removed int
+
+	// SeamAdded means append or prepend inserted a newline the patch did not
+	// contain (§3.3). Reported rather than done quietly, which is the whole
+	// reason normalizing the seam was acceptable.
+	SeamAdded bool
 }
 
 // A Result is a successful apply.
@@ -137,21 +152,6 @@ func (e *ChangedError) Error() string {
 	return e.Path + " changed on disk between being read and being written; nothing was written"
 }
 
-// UnsupportedOpError is temporary. The parser emits five ops and this file
-// applies one, and a hunk it cannot perform has to say so rather than silently
-// not doing it. Silently not doing an edit the patch asked for is the failure
-// class the whole tool is built against, and "not implemented yet" is not an
-// excuse the caller can see.
-type UnsupportedOpError struct {
-	Op   Op
-	Path string
-	Line int
-}
-
-func (e *UnsupportedOpError) Error() string {
-	return fmt.Sprintf("patch line %d: %s %s is not implemented yet", e.Line, e.Op, e.Path)
-}
-
 // a loaded file, and the hunks' running effect on it
 type file struct {
 	target  Target
@@ -161,6 +161,32 @@ type file struct {
 	sum     [sha256.Size]byte
 	eol     string // the dominant line ending (§6.4)
 	changed bool
+
+	// existed and deleted are the batch's final state for this path (§6.6).
+	// Commit writes that state, not the sequence that produced it: a create
+	// followed by a delete in one batch changes nothing and must touch nothing.
+	//
+	//	existed  deleted  commit
+	//	yes      no       modify, if changed
+	//	no       no       create
+	//	yes      yes      delete
+	//	no       yes      nothing at all
+	existed bool
+	deleted bool
+	// created means a hunk in this batch made it. Distinct from existed, which
+	// is only about the disk at load: a path the batch created is present for
+	// every later hunk (§3.5 says a @@ old may follow a @@ create) while still
+	// being a create at commit.
+	created bool
+
+	// madeDirs are directories create had to make, deepest first, so rollback
+	// can unwind exactly the ones this tool created (§6.6).
+	madeDirs []string
+
+	// seamAdded records that append or prepend inserted a newline the patch did
+	// not contain (§3.3). Reported rather than done quietly, which is the whole
+	// reason normalizing the seam was acceptable.
+	seamAdded bool
 
 	failedAt int // the first hunk against this file that did not match
 	applied  int // hunks that changed this file before the current one
@@ -230,9 +256,6 @@ func (x *Txn) Preview(p *Patch) (*Result, error) {
 func (x *Txn) Load(p *Patch) error {
 	x.hunkFile = make([]*file, len(p.Hunks))
 	for i, h := range p.Hunks {
-		if h.Op != OpReplace {
-			return &UnsupportedOpError{Op: h.Op, Path: h.Path, Line: h.Line}
-		}
 		f, err := x.load(h)
 		if err != nil {
 			return err
@@ -240,6 +263,34 @@ func (x *Txn) Load(p *Patch) error {
 		x.hunkFile[i] = f
 	}
 	return nil
+}
+
+// requireState enforces §6.1 step 2's classification for one hunk: a missing
+// file for anything but create, or an existing one for create, is exit 2 rather
+// than exit 5, because the fix is in the patch.
+//
+// "Existing" means as the batch has left it, not as the disk has it. A create
+// after a delete in the same batch is legal (§6.6) and a replace after one is
+// not, and the message says an earlier hunk deleted it rather than "no such
+// file", which would send the agent looking at the disk.
+func requireState(f *file, h Hunk, root string) *PathRefusal {
+	present := (f.existed || f.created) && !f.deleted
+	if h.Op == OpCreate {
+		if present {
+			return &PathRefusal{Path: h.Path, Root: root,
+				Reason: "it already exists; delete it first in the same batch to replace it wholesale"}
+		}
+		return nil
+	}
+	if present {
+		return nil
+	}
+	if f.deleted {
+		return &PathRefusal{Path: h.Path, Root: root,
+			Reason: "an earlier hunk in this batch deleted it"}
+	}
+	return &PathRefusal{Path: h.Path, Root: root,
+		Reason: "no such file; only " + DefaultMarker + " create makes one"}
 }
 
 func (x *Txn) load(h Hunk) (*file, error) {
@@ -252,34 +303,39 @@ func (x *Txn) load(h Hunk) (*file, error) {
 	if f, ok := x.index[tg.name]; ok {
 		return f, nil
 	}
+	f := &file{target: tg, mode: createMode, eol: "\n"}
 	fi, err := x.tree.Stat(tg)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, &PathRefusal{Path: h.Path, Root: x.tree.Root(),
-				Reason: "no such file; a hunk that edits a file needs the file to exist"}
-		}
-		return nil, err
-	}
-	if fi.IsDir() {
+	switch {
+	case err == nil && fi.IsDir():
 		return nil, &PathRefusal{Path: h.Path, Root: x.tree.Root(),
 			Reason: "it is a directory, not a file"}
-	}
-	b, err := x.tree.ReadFile(tg)
-	if err != nil {
+	case err == nil:
+		b, readErr := x.tree.ReadFile(tg)
+		if readErr != nil {
+			return nil, readErr
+		}
+		f.existed = true
+		f.orig, f.cur = b, b
+		f.mode = fi.Mode().Perm()
+		f.sum = sha256.Sum256(b)
+		f.eol = dominantEOL(b)
+	case errors.Is(err, fs.ErrNotExist):
+		// Not an error here. Whether its absence is legal is requireState's
+		// call, per hunk, because create needs it absent and the rest need it
+		// present.
+	default:
 		return nil, err
-	}
-	f := &file{
-		target: tg,
-		orig:   b,
-		cur:    b,
-		mode:   fi.Mode().Perm(),
-		sum:    sha256.Sum256(b),
-		eol:    dominantEOL(b),
 	}
 	x.index[tg.name] = f
 	x.files = append(x.files, f)
 	return f, nil
 }
+
+// createMode is the mode of a file @@ create makes. §6.6 does not say, and 0644
+// before umask is the only sane default. A created shell script wants 0755 and
+// the format has no way to ask; if that turns out to matter, the directive
+// grammar has room for a suffix.
+const createMode fs.FileMode = 0o644
 
 // Validate walks the hunks in order, applying each in memory against the file
 // as previous hunks have left it (§6.1 step 3, §3.5). Nothing is written.
@@ -295,10 +351,22 @@ func (x *Txn) Validate(p *Patch) []Failure {
 	for i, h := range p.Hunks {
 		n := i + 1
 		f := x.hunkFile[i]
+		if err := requireState(f, h, x.tree.Root()); err != nil {
+			// Load's classification is per hunk, because the same path can be
+			// legally absent for one hunk and present for the next.
+			f.failedAt = n
+			failures = append(failures, Failure{Hunk: n, Path: h.Path, PatchLine: h.Line,
+				Refusal: err.Reason})
+			continue
+		}
 		if f.failedAt != 0 {
 			failures = append(failures, Failure{
 				Hunk: n, Path: h.Path, PatchLine: h.Line, SkippedAfter: f.failedAt,
 			})
+			continue
+		}
+		if h.Op != OpReplace {
+			x.applyWhole(f, h)
 			continue
 		}
 		old := x.convert(h.Old, f.eol)
@@ -350,12 +418,95 @@ func (x *Txn) Validate(p *Patch) []Failure {
 	return failures
 }
 
+// applyWhole performs the four ops that do not match text (§6.6). None of them
+// can fail against the file's contents, so none produces a Failure: whether the
+// path may be created or deleted is requireState's call, already made.
+func (x *Txn) applyWhole(f *file, h Hunk) {
+	eol := []byte(f.eol)
+	switch h.Op {
+	case OpCreate:
+		// §6.4 converts a payload to the file's dominant ending, and a file
+		// that does not exist yet has none to convert to. So the payload is
+		// written exactly as given and the new file's ending is sampled from
+		// it, falling back to LF when it has no newline at all.
+		//
+		// Converting first, as an earlier draft did, normalized every created
+		// file to LF and made this sampling a no-op: a CRLF payload created an
+		// LF file, and a later append to it then used the wrong seam byte. A
+		// mutation check found it, by surviving.
+		f.cur = append([]byte{}, h.Body...)
+		f.deleted = false
+		f.created = true
+		f.eol = dominantEOL(f.cur)
+		f.added += lineCount(f.cur)
+
+	case OpDelete:
+		f.removed += lineCount(f.cur)
+		f.deleted = true
+		f.cur = nil
+
+	case OpAppend:
+		// The seam: a weld happens when the text on the left of it does not end
+		// in a newline, which for append is the file (§3.3). The inserted byte
+		// is recorded so the report can say it happened.
+		base := f.cur
+		if len(base) > 0 && !bytes.HasSuffix(base, eol) {
+			base = append(append([]byte{}, base...), eol...)
+			f.seamAdded = true
+		}
+		body := x.convert(h.Body, f.eol)
+		f.cur = append(append([]byte{}, base...), body...)
+		f.added += lineCount(body)
+
+	case OpPrepend:
+		// The mirror: for prepend the text on the left of the seam is the
+		// payload, and §3.3 never gives a payload a trailing newline, so
+		// without this it would weld by default.
+		body := x.convert(h.Body, f.eol)
+		if len(body) > 0 && !bytes.HasSuffix(body, eol) {
+			body = append(body, eol...)
+			f.seamAdded = true
+		}
+		f.cur = append(append([]byte{}, body...), f.cur...)
+		f.added += lineCount(body)
+	}
+	f.changed = true
+	f.applied++
+}
+
+// finalOp is what commit does for this path: the batch's final state, not the
+// sequence that produced it (§6.6). An empty string means the batch ends up
+// changing nothing here.
+func (f *file) finalOp() string {
+	switch {
+	case !f.existed && f.deleted:
+		return "" // created and then deleted in one batch: touch nothing
+	case f.deleted:
+		return "delete"
+	case !f.existed:
+		return "create"
+	case f.changed:
+		return "modify"
+	}
+	return ""
+}
+
 // Check re-hashes every target and compares to the load-time hash (§6.1 step
 // 4). Any difference is exit 6 with nothing written: something else is writing
 // the tree. This closes the concurrent-writer window to microseconds; §6.2 says
 // plainly that it does not eliminate it, and no lock file is used.
 func (x *Txn) Check() error {
 	for _, f := range x.files {
+		if !f.existed {
+			// A path that was absent at load has no hash to compare. The guard
+			// is that it is still absent: a second writer creating it between
+			// load and commit is exactly the case exit 6 exists for, and
+			// create would otherwise overwrite it.
+			if _, err := x.tree.Stat(f.target); err == nil {
+				return &ChangedError{Path: f.target.Orig()}
+			}
+			continue
+		}
 		b, err := x.tree.ReadFile(f.target)
 		if err != nil {
 			return &ChangedError{Path: f.target.Orig()}
@@ -371,13 +522,24 @@ func (x *Txn) Check() error {
 // so a symlinked target is written through rather than replaced (§6.5).
 func (x *Txn) Commit() error {
 	for _, f := range x.files {
-		if !f.changed {
-			continue
+		switch f.finalOp() {
+		case "delete":
+			if err := x.tree.Remove(f.target); err != nil {
+				return err
+			}
+		case "create":
+			made, err := x.tree.MkdirAll(f.target)
+			f.madeDirs = made // recorded even on failure, so rollback unwinds what was made
+			if err != nil {
+				return err
+			}
+			fallthrough
+		case "modify":
+			if err := x.tree.WriteAtomic(f.target, f.cur, f.mode); err != nil {
+				return err
+			}
+			f.wrote = sha256.Sum256(f.cur)
 		}
-		if err := x.tree.WriteAtomic(f.target, f.cur, f.mode); err != nil {
-			return err
-		}
-		f.wrote = sha256.Sum256(f.cur)
 	}
 	return nil
 }
@@ -437,7 +599,60 @@ func RunVerify(command, root string, tailLines int) (*Verify, error) {
 // deliberate removal, which is the whole reason the default refuses.
 func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored) {
 	for _, f := range x.files {
-		if !f.changed {
+		op := f.finalOp()
+		if op == "" {
+			continue
+		}
+		if op == "create" {
+			// Rollback of a create removes the file, and any directory the
+			// commit made that is empty afterward (§6.6).
+			if !mayFormat {
+				now, err := x.tree.ReadFile(f.target)
+				if err != nil || sha256.Sum256(now) != f.wrote {
+					notRestored = append(notRestored, NotRestored{
+						Path: f.target.Orig(),
+						Reason: fmt.Sprintf("hunk created it and wrote %s; it is now something else,\n"+
+							"so removing it could discard somebody's work.\n"+
+							"--verify-may-format says the verify command is expected to rewrite files.",
+							shortHash(f.wrote)),
+					})
+					continue
+				}
+			}
+			if err := x.tree.Remove(f.target); err != nil {
+				notRestored = append(notRestored, NotRestored{
+					Path: f.target.Orig(), Reason: "It could not be removed: " + err.Error()})
+				continue
+			}
+			// Deepest first, stopping at the first that is not empty.
+			for _, d := range f.madeDirs {
+				if err := x.tree.RemoveDir(d); err != nil {
+					break
+				}
+			}
+			restored++
+			continue
+		}
+		if op == "delete" {
+			// Rollback of a delete restores bytes and mode (§6.6). If something
+			// put a file back at that path, it is not hunk's to overwrite.
+			if !mayFormat {
+				if _, err := x.tree.Stat(f.target); err == nil {
+					notRestored = append(notRestored, NotRestored{
+						Path: f.target.Orig(),
+						Reason: "hunk deleted it and something has since created it there,\n" +
+							"so restoring would overwrite that.\n" +
+							"--verify-may-format says the verify command is expected to do that.",
+					})
+					continue
+				}
+			}
+			if err := x.tree.WriteAtomic(f.target, f.orig, f.mode); err != nil {
+				notRestored = append(notRestored, NotRestored{
+					Path: f.target.Orig(), Reason: "It could not be written: " + err.Error()})
+				continue
+			}
+			restored++
 			continue
 		}
 		if !mayFormat {
@@ -497,11 +712,13 @@ func shortHash(sum [sha256.Size]byte) string {
 func (x *Txn) result(hunks int) *Result {
 	r := &Result{Hunks: hunks}
 	for _, f := range x.files {
-		if !f.changed {
+		op := f.finalOp()
+		if op == "" {
 			continue
 		}
 		r.Files = append(r.Files, FileResult{
-			Path: f.target.Orig(), Op: "modify", Added: f.added, Removed: f.removed,
+			Path: f.target.Orig(), Op: op, Added: f.added, Removed: f.removed,
+			SeamAdded: f.seamAdded,
 		})
 	}
 	return r

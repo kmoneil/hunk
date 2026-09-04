@@ -88,10 +88,6 @@ func ExitCode(err error) int {
 	if errors.As(err, &pe) {
 		return exitUsage
 	}
-	var ue *UnsupportedOpError
-	if errors.As(err, &ue) {
-		return exitUsage
-	}
 	var ve *ValidationError
 	if errors.As(err, &ve) {
 		return exitNoMatch
@@ -164,7 +160,11 @@ func (r *Report) writeSuccess(w io.Writer) {
 		}
 	}
 	for _, f := range res.Files {
-		fmt.Fprintf(w, "%s %-*s +%d -%d\n", opLetter(f.Op), width, f.Path, f.Added, f.Removed)
+		fmt.Fprintf(w, "%s %-*s +%d -%d", opLetter(f.Op), width, f.Path, f.Added, f.Removed)
+		if f.SeamAdded {
+			fmt.Fprint(w, "  (added a final newline)")
+		}
+		fmt.Fprintln(w)
 	}
 
 	fmt.Fprintf(w, "%s, %s, +%d -%d",
@@ -209,6 +209,10 @@ func (r *Report) writeValidationFailure(w io.Writer) {
 		fmt.Fprintf(w, "\nhunk %d  %s  (patch line %d)\n", f.Hunk, f.Path, f.PatchLine)
 		if f.Skipped() {
 			fmt.Fprintf(w, "  skipped: same file as hunk %d, which did not match\n", f.SkippedAfter)
+			continue
+		}
+		if f.Refusal != "" {
+			fmt.Fprintf(w, "  %s\n", f.Refusal)
 			continue
 		}
 		fmt.Fprintf(w, "  expected %s, found %d\n", count(f.Expected, "occurrence"), f.Found)
@@ -293,10 +297,11 @@ type jsonReport struct {
 }
 
 type jsonFile struct {
-	Path    string `json:"path"`
-	Op      string `json:"op"`
-	Added   int    `json:"added"`
-	Removed int    `json:"removed"`
+	Path      string `json:"path"`
+	Op        string `json:"op"`
+	Added     int    `json:"added"`
+	Removed   int    `json:"removed"`
+	SeamAdded bool   `json:"added_final_newline,omitempty"`
 }
 
 type jsonVerify struct {
@@ -324,8 +329,9 @@ type jsonFailure struct {
 	// hunk and no answer at all for a skipped one. §5.2's skipped example
 	// carries neither expected nor found, and omitempty on an int cannot tell
 	// those two zeros apart.
-	Found        *int `json:"found,omitempty"`
-	SkippedAfter int  `json:"skipped_after,omitempty"`
+	Found        *int   `json:"found,omitempty"`
+	SkippedAfter int    `json:"skipped_after,omitempty"`
+	Refusal      string `json:"refusal,omitempty"`
 	// Lines sits beside expected and found, not inside near_miss. That is
 	// §5.2's shape and §10 makes it an interface.
 	Lines    []int     `json:"lines,omitempty"`
@@ -347,7 +353,7 @@ func (r *Report) JSON(w io.Writer) error {
 	if r.Result != nil {
 		out.Hunks = r.Result.Hunks
 		for _, f := range r.Result.Files {
-			out.Files = append(out.Files, jsonFile{f.Path, f.Op, f.Added, f.Removed})
+			out.Files = append(out.Files, jsonFile{f.Path, f.Op, f.Added, f.Removed, f.SeamAdded})
 		}
 	}
 	if v := r.Verify; v != nil {
@@ -360,8 +366,8 @@ func (r *Report) JSON(w io.Writer) error {
 	}
 	for _, f := range r.Failures {
 		jf := jsonFailure{Hunk: f.Hunk, Path: f.Path, PatchLine: f.PatchLine,
-			Expected: f.Expected, SkippedAfter: f.SkippedAfter}
-		if !f.Skipped() {
+			Expected: f.Expected, SkippedAfter: f.SkippedAfter, Refusal: f.Refusal}
+		if !f.Skipped() && f.Refusal == "" {
 			found := f.Found
 			jf.Found = &found
 		}

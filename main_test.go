@@ -88,10 +88,10 @@ func TestExitCodeWalk(t *testing.T) {
 			untouched: true,
 		},
 		{
-			name:      "1, an unimplemented op",
+			name:      "2, a create over a file that exists",
 			files:     map[string]string{"a.go": "one\n"},
-			stdin:     "@@ delete a.go\n",
-			want:      exitUsage,
+			stdin:     "@@ create a.go\nnew\n",
+			want:      exitNoMatch,
 			untouched: true,
 		},
 	}

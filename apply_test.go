@@ -273,15 +273,24 @@ func TestApplyRefuses(t *testing.T) {
 		assertUnchanged(t, root, before)
 	})
 
-	t.Run("a missing file is exit 2, not an I/O error", func(t *testing.T) {
+	// A missing file is a per-hunk refusal, not an error that aborts the load,
+	// so a patch with several of them reports all of them in one round trip.
+	t.Run("a missing file is a reported refusal, not an aborted load", func(t *testing.T) {
 		tree, _ := fixture(t, map[string]string{"a.go": "x\n"})
-		_, err := run(t, tree, "@@ file gone.go\n@@ old\nx\n@@ new\ny\n", Options{})
-		var pr *PathRefusal
-		if !errors.As(err, &pr) {
-			t.Fatalf("want *PathRefusal, got %T: %v", err, err)
+		_, err := run(t, tree, ""+
+			"@@ file gone.go\n@@ old\nx\n@@ new\ny\n"+
+			"@@ file also-gone.go\n@@ old\nx\n@@ new\ny\n", Options{})
+		var ve *ValidationError
+		if !errors.As(err, &ve) {
+			t.Fatalf("want *ValidationError, got %T: %v", err, err)
 		}
-		if !strings.Contains(pr.Reason, "no such file") {
-			t.Errorf("reason = %q", pr.Reason)
+		if len(ve.Failures) != 2 {
+			t.Fatalf("got %d failures, want both reported: %+v", len(ve.Failures), ve.Failures)
+		}
+		for _, f := range ve.Failures {
+			if !strings.Contains(f.Refusal, "no such file") {
+				t.Errorf("hunk %d refusal = %q", f.Hunk, f.Refusal)
+			}
 		}
 	})
 
@@ -300,18 +309,19 @@ func TestApplyRefuses(t *testing.T) {
 		}
 	})
 
-	// The parser emits five ops and this file applies one. A hunk it cannot
-	// perform says so rather than silently not doing it.
-	t.Run("an unimplemented op refuses instead of skipping", func(t *testing.T) {
+	// A replace after a delete in the same batch fails against the file the
+	// batch removed, and says so rather than "no such file", which would send
+	// the agent looking at a disk that still has it.
+	t.Run("a hunk after a delete says an earlier hunk deleted it", func(t *testing.T) {
 		tree, root := fixture(t, map[string]string{"a.go": "x\n"})
 		before := snapshot(t, root)
-		_, err := run(t, tree, "@@ file a.go\n@@ old\nx\n@@ new\ny\n@@ delete a.go\n", Options{})
-		var ue *UnsupportedOpError
-		if !errors.As(err, &ue) {
-			t.Fatalf("want *UnsupportedOpError, got %T: %v", err, err)
+		_, err := run(t, tree, "@@ delete a.go\n@@ old\nx\n@@ new\ny\n", Options{})
+		var ve *ValidationError
+		if !errors.As(err, &ve) {
+			t.Fatalf("want *ValidationError, got %T: %v", err, err)
 		}
-		if ue.Op != OpDelete {
-			t.Errorf("op = %v", ue.Op)
+		if !strings.Contains(ve.Failures[0].Refusal, "earlier hunk in this batch deleted it") {
+			t.Errorf("refusal = %q", ve.Failures[0].Refusal)
 		}
 		assertUnchanged(t, root, before)
 	})
@@ -675,12 +685,6 @@ func TestRunPropagatesACheckFailure(t *testing.T) {
 }
 
 func TestErrorMessages(t *testing.T) {
-	ue := &UnsupportedOpError{Op: OpAppend, Path: "a.go", Line: 7}
-	for _, want := range []string{"patch line 7", "append", "a.go", "not implemented"} {
-		if !strings.Contains(ue.Error(), want) {
-			t.Errorf("%q missing %q", ue.Error(), want)
-		}
-	}
 	ce := &ChangedError{Path: "b.go"}
 	for _, want := range []string{"b.go", "between being read and being written", "nothing was written"} {
 		if !strings.Contains(ce.Error(), want) {
