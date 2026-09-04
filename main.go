@@ -66,7 +66,7 @@ is untouched.
 FLAGS
 
   --verify CMD          Shell command run after a successful apply. Non-zero
-                        rolls everything back. Optional: 66% of the measured
+                        rolls everything back. Optional: 58% of the measured
                         calls this tool was designed from bundled one, and
                         requiring it would be obnoxious for documentation edits.
   --verify-may-format   On verify failure, restore original bytes even for files

@@ -1,0 +1,23 @@
+1 sessions under <root>
+
+                            calls    replaces
+python-heredoc file edits       4           4
+  no uniqueness guard           2 (50%)
+    of which also no            1 (25%)   a count limit is not a guard
+    replace(..., 1) limit       1 (25%)
+  bundled a verify command      1 (25%)
+  hand-rolled backup            1 (25%)
+bytes of those commands       443
+mean replaces per call        1.0, max 1
+file touches                    5 over 4 calls, max 2
+
+tool mix overall           Bash 5    Edit 1
+
+§12, which §1 does not have
+  edit episodes                   4
+  failed attempts                 1
+  calls per successful edit    1.50
+  hunk calls                      0
+
+heredoc edits by project (1 projects)
+  -workspace-demo                               4

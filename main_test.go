@@ -378,8 +378,11 @@ func TestHelpCarriesWhatTheSpecCommitsItTo(t *testing.T) {
 		!strings.Contains(got, "silently reverting another writer's work") {
 		t.Error("--help gives --verify-may-format without its reason (§6.3)")
 	}
-	// §11: --help quotes the figure for why --verify is optional.
-	if !strings.Contains(got, "66%") {
+	// §11: --help quotes the figure for why --verify is optional. It was 66%
+	// until the baseline measurement found that figure counted a verify word
+	// appearing inside the text an edit writes, rather than a command run after
+	// it. scripts/corpus is what re-derives it.
+	if !strings.Contains(got, "58%") {
 		t.Error("--help does not quote §11's figure for why --verify is optional")
 	}
 	// Every flag in §4's table appears.

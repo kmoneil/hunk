@@ -3,7 +3,7 @@
 GO  ?= go
 BIN := hunk
 
-.PHONY: all build fmt fmt-check vet test gates deps-gate check hooks clean
+.PHONY: all build fmt fmt-check vet test gates deps-gate check corpus corpus-test hooks clean
 
 all: check
 
@@ -42,7 +42,22 @@ deps-gate:
 		exit 1; \
 	fi
 
-check: fmt-check vet gates test
+check: fmt-check vet gates test corpus-test
+
+# scripts/corpus is its own module: it is not part of the binary and must not
+# appear in hunk's coverage, its dependency gate, or its import graph. Its tests
+# still run under `make check`, because the classifier it holds is what §12's
+# comparison rests on.
+corpus-test:
+	cd scripts/corpus && $(GO) vet ./... && $(GO) test ./...
+
+# Re-derive §1's table and §12's figures. Writes a dated report to _reports/,
+# which is gitignored: the method is tracked, the measurement is not.
+corpus:
+	@mkdir -p _reports
+	cd scripts/corpus && $(GO) run . > ../../_reports/corpus-$$(date +%Y-%m-%d).txt
+	cd scripts/corpus && $(GO) run . --json > ../../_reports/corpus-$$(date +%Y-%m-%d).json
+	@echo "wrote _reports/corpus-$$(date +%Y-%m-%d).{txt,json}"
 
 # Once per clone. The commit-msg gate refuses tool attribution.
 hooks:
