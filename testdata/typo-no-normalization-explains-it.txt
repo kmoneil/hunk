@@ -1,0 +1,7 @@
+  closest span starts at line 1; line 3 of your old differs at column 17:
+    yours | 		return s.projet, nil
+    file  | 		return s.project, nil
+      1 | func (s *Scope) Project() (string, error) {
+      2 | 	if s == nil {
+      3 | 		return s.project, nil
+      4 | 	}

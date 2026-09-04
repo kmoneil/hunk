@@ -1,0 +1,4 @@
+  the text is there with different line endings, at line 4:
+      4 | delta
+      5 | epsilon
+  the file has mixed line endings, 3 CRLF and 2 LF

@@ -1,0 +1,2 @@
+  the text is there with different whitespace, at line 1:
+      1 | a→ →b

@@ -1,0 +1,5 @@
+  the text is there with different leading whitespace, at line 1:
+      1 | func f() {
+      2 |     return nil
+      3 | }
+  your old used a tab; the file uses 4 spaces

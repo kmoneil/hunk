@@ -47,7 +47,24 @@ const (
 // later phases or to the CLI.
 type Options struct {
 	EOL EOL
+	// Context caps the lines of file text echoed in a near-miss report (§4's
+	// --context, default 20). Zero means the default.
+	Context int
 }
+
+// DefaultContext is §4's default for --context. §11 keeps it at 20: the span is
+// bounded by the length of old, so the cap rarely binds.
+const DefaultContext = 20
+
+func (o Options) context() int {
+	if o.Context <= 0 {
+		return DefaultContext
+	}
+	return o.Context
+}
+
+// diagnoseLimit is §7.2's cap of ten diagnosed hunks per batch.
+const diagnoseLimit = 10
 
 // A Failure is one hunk that did not apply, or one skipped because an earlier
 // hunk against the same file did not. Both text and JSON reports render from
@@ -63,6 +80,10 @@ type Failure struct {
 	// SkippedAfter is the hunk that failed first against this file. Non-zero
 	// means this hunk was never evaluated, and Expected and Found are unset.
 	SkippedAfter int
+
+	// Near explains the miss (§7). Nil for a skipped hunk, and nil past
+	// §7.2's cap of ten diagnosed hunks per batch.
+	Near *Diagnosis
 }
 
 // Skipped reports whether this hunk was never evaluated (§5.2 reports those
@@ -139,6 +160,7 @@ type file struct {
 	changed bool
 
 	failedAt int // the first hunk against this file that did not match
+	applied  int // hunks that changed this file before the current one
 	added    int
 	removed  int
 
@@ -253,6 +275,7 @@ func (x *Txn) load(h Hunk) (*file, error) {
 // Hunks against other files are still evaluated and still reported.
 func (x *Txn) Validate(p *Patch) []Failure {
 	var failures []Failure
+	diagnosed := 0
 	for i, h := range p.Hunks {
 		n := i + 1
 		f := x.hunkFile[i]
@@ -266,10 +289,27 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		found := bytes.Count(f.cur, old)
 		if found != h.Count {
 			f.failedAt = n
-			failures = append(failures, Failure{
+			fail := Failure{
 				Hunk: n, Path: h.Path, PatchLine: h.Line,
 				Expected: h.Count, Found: found,
-			})
+			}
+			// §7.2 caps diagnosis at ten hunks per batch. Beyond that the
+			// failure is still reported; only the near-miss block is dropped,
+			// because a diagnostic that blows the context window is a worse
+			// failure than no diagnostic.
+			if diagnosed < diagnoseLimit {
+				diagnosed++
+				if found == 0 {
+					fail.Near = Diagnose(old, f.cur, x.opt.context())
+				} else {
+					fail.Near = DiagnoseTooMany(old, f.cur)
+				}
+				// Validation writes nothing, so the file on disk is still the
+				// one loaded. Any hunk that already changed it in memory has
+				// shifted the line numbers away from what the agent can see.
+				fail.Near.Shifted = f.applied
+			}
+			failures = append(failures, fail)
 			continue
 		}
 		repl := x.convert(h.New, f.eol)
@@ -280,6 +320,7 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		// change and the file is not listed in the diffstat.
 		if !bytes.Equal(next, f.cur) {
 			f.changed = true
+			f.applied++
 			f.added += lineCount(repl)
 			f.removed += lineCount(old)
 		}

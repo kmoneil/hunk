@@ -1,0 +1,3 @@
+  the text is there with characters that look the same, at line 1:
+      1 | msg := “hello”
+  the file has a curly double quote (U+201C) at offset 7, where your old has '"'

@@ -1,0 +1,4 @@
+  the text is there with different trailing whitespace, at line 1:
+      1 | alpha···
+      2 | beta
+  on line 1 your old has none; the file's ends in 3 spaces
