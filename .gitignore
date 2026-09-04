@@ -14,6 +14,9 @@ _bench/
 # exactly as _reports/ holds the corpus measurement's output.
 skills/*-workspace/
 
+# The grader's tests import grade.py, and importing compiles it.
+__pycache__/
+
 # OS / editor
 .DS_Store
 *.swp

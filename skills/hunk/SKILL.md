@@ -67,6 +67,12 @@ Every byte between two `@@` lines is payload. **No escaping, ever**: no JSON
 strings, no shell quoting of the text, no backslash-n. Paste the source as it
 is.
 
+The one exception is a payload line that itself begins with `@@`, which is read
+as a directive and will fail the patch. That happens when you edit a file which
+quotes a hunk patch: a test fixture, a doc, this file. `--marker '%%'` changes
+the directive prefix for the whole patch and the `@@` lines become ordinary
+text.
+
 ## The four rules that catch people
 
 **1. A payload never gains a trailing newline.** To match text that ends in a

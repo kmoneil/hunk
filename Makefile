@@ -3,7 +3,7 @@
 GO  ?= go
 BIN := hunk
 
-.PHONY: all build fmt fmt-check vet test gates deps-gate check corpus corpus-test skill-grade install hooks clean
+.PHONY: all build fmt fmt-check vet test gates deps-gate check corpus corpus-test skill-grade skill-grade-test install hooks clean
 
 all: check
 
@@ -49,8 +49,18 @@ check: fmt-check vet gates test corpus-test
 
 # Grade the skill eval runs in skills/hunk-workspace/. Does not launch the runs
 # (those are agent invocations); it scores the trees they left behind.
-skill-grade:
-	python3 skills/hunk/evals/grade.py
+#
+#   make skill-grade WORKSPACE=skills/hunk-workspace/iteration-4
+#
+# Defaults to the iteration in grade.py. The grader's own tests run first: it
+# has been wrong four times and each fix moved a published number, so "check
+# the instrument before believing the measurement" gets a mechanism rather than
+# a sentence in a README.
+skill-grade: skill-grade-test
+	python3 skills/hunk/evals/grade.py $(WORKSPACE)
+
+skill-grade-test:
+	python3 skills/hunk/evals/grade_test.py
 
 # scripts/corpus is its own module: it is not part of the binary and must not
 # appear in hunk's coverage, its dependency gate, or its import graph. Its tests

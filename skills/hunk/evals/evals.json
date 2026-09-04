@@ -27,6 +27,9 @@
      "expected_output": "CHANGELOG.md does not exist so the verify fails and everything rolls back. Reports that the tree is unchanged rather than re-applying or patching around it."},
     {"id": 8, "name": "crlf-file", "should_trigger": true,
      "prompt": "in meta.yaml change owner from nobody to platform-team, and add a line `tier: gold` after it",
-     "expected_output": "meta.yaml uses CRLF line endings. The edit lands and the file is still CRLF throughout, with no mixed or doubled line endings."}
+     "expected_output": "meta.yaml uses CRLF line endings. The edit lands and the file is still CRLF throughout, with no mixed or doubled line endings."},
+    {"id": 9, "name": "unprompted-verify", "should_trigger": true,
+     "prompt": "Greet hard-codes \"hello\". make the greeting word a second parameter instead.",
+     "expected_output": "Two Go files have to change together and the prompt asks for no verification at all. Batches them and gates the batch on a build without being told to. An agent that edits only greeter.go leaves main.go one argument short, which is what the verify catches. Cases 0, 6 and 7 ask for the verification outright; this is the only case that measures reaching for it unasked."}
   ]
 }
