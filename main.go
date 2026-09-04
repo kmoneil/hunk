@@ -41,6 +41,14 @@ const (
 )
 
 func main() {
-	fmt.Fprintln(os.Stderr, "hunk: nothing is implemented yet. See SPEC.md and _plans/progress.md.")
+	// Flags and the patch pipeline are not wired yet. `hunk format` is, because
+	// §2 goal 8 makes it the way an agent learns the format from cold, and it
+	// is a property of the parser rather than of the CLI: the example it prints
+	// is parsed by a test, so the help text cannot drift from the grammar.
+	if len(os.Args) == 2 && os.Args[1] == "format" {
+		fmt.Print(formatDoc)
+		os.Exit(exitOK)
+	}
+	fmt.Fprintln(os.Stderr, "hunk: only `hunk format` works so far. See SPEC.md and _plans/progress.md.")
 	os.Exit(exitUsage)
 }
