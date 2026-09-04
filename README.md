@@ -38,15 +38,19 @@ payload, which is the property that makes a heredoc work.
 
 ## Status
 
-**Not implemented.** This repository currently holds the module scaffold, the
-exit-code contract, and the two gates that keep the claims below honest. The
-specification is complete and is not shipped here.
+All five hunk operations work, with all thirteen flags. Not released: there is
+no tag and no published module, so install from source. The specification is
+complete and is not shipped here.
 
 ## Install
 
 ```
-go install github.com/kmoneil/hunk@latest
+git clone <this repo> && cd hunk && make install
 ```
+
+That builds the binary onto your `PATH` and installs the agent skill into
+`~/.claude/skills/hunk`. `go install github.com/kmoneil/hunk@latest` will work
+once the module is published; it is not yet.
 
 A static binary. No configuration file, no state directory, no network, and no
 dependency outside the Go standard library. The last two are asserted by tests

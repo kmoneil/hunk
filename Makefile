@@ -3,7 +3,7 @@
 GO  ?= go
 BIN := hunk
 
-.PHONY: all build fmt fmt-check vet test gates deps-gate check corpus corpus-test skill-grade hooks clean
+.PHONY: all build fmt fmt-check vet test gates deps-gate check corpus corpus-test skill-grade install hooks clean
 
 all: check
 
@@ -66,6 +66,20 @@ corpus:
 	cd scripts/corpus && $(GO) run . > ../../_reports/corpus-$$(date +%Y-%m-%d).txt
 	cd scripts/corpus && $(GO) run . --json > ../../_reports/corpus-$$(date +%Y-%m-%d).json
 	@echo "wrote _reports/corpus-$$(date +%Y-%m-%d).{txt,json}"
+
+# Install the binary and the agent skill for personal use.
+#
+# The skill ships SKILL.md and references/ only. evals/ is development
+# material: a grader and its cases, of no use to a session that is trying to
+# edit a file.
+SKILLDIR ?= $(HOME)/.claude/skills/hunk
+install:
+	$(GO) install .
+	@mkdir -p $(SKILLDIR)/references
+	@cp skills/hunk/SKILL.md $(SKILLDIR)/
+	@cp skills/hunk/references/*.md $(SKILLDIR)/references/
+	@echo "binary:  $$($(GO) env GOPATH)/bin/hunk"
+	@echo "skill:   $(SKILLDIR)/SKILL.md"
 
 # Once per clone. The commit-msg gate refuses tool attribution.
 hooks:
