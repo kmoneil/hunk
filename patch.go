@@ -285,6 +285,18 @@ loop:
 			old, next := collectPayload(lines, i, marker)
 			i = next
 
+			// An empty old matches at every position rather than at one:
+			// strings.Count(s, "") is len(s)+1, and on an empty file it is
+			// exactly 1, so the batch would succeed and insert at offset 0.
+			// That is the wrong-position edit §2 exists to refuse, so it is
+			// refused here rather than left to produce a count nobody can act
+			// on. §3.3's "a payload may be empty" is about new, not old.
+			if len(old) == 0 {
+				return nil, &ParseError{ln, fmt.Sprintf(
+					"%s has an empty payload, which would match at every position in the file rather than at one. A single blank line joins to nothing, so leave two to match an empty line. To insert text, put a surrounding line in old and repeat it in new, or use %s or %s at a file boundary",
+					marker+" old", marker+" append", marker+" prepend")}
+			}
+
 			if i >= len(lines) {
 				return nil, &ParseError{ln, fmt.Sprintf(
 					"%q has no %q; every old needs the text to put in its place, even if that text is empty",

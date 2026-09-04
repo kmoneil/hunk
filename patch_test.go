@@ -222,6 +222,11 @@ func TestParseErrors(t *testing.T) {
 		{"@@ old with no @@ new", "", "@@ file a.go\n@@ old\nx\n", 2, "has no"},
 		{"@@ old closed by the wrong directive", "", "@@ file a.go\n@@ old\nx\n@@ delete b.go\n", 4, "expected"},
 		{"@@ new with no @@ old", "", "@@ file a.go\n@@ new\ny\n", 2, "with no"},
+
+		// An empty old matches everywhere: strings.Count(s, "") is len(s)+1,
+		// and on an empty file it is 1, so it would apply.
+		{"an empty old", "", "@@ file a.go\n@@ old\n@@ new\nx\n", 2, "every position"},
+		{"an old of one blank line joins to nothing", "", "@@ file a.go\n@@ old\n\n@@ new\nx\n", 2, "every position"},
 		{"@@ new takes no argument", "", "@@ file a.go\n@@ old\nx\n@@ new x2\ny\n", 4, "takes no argument"},
 
 		{"@@ file with no path", "", "@@ file\n", 1, "needs a path"},
@@ -352,6 +357,9 @@ func FuzzParse(f *testing.F) {
 			}
 			if h.Op == OpReplace && h.Count < 1 {
 				t.Errorf("replace at line %d has count %d", h.Line, h.Count)
+			}
+			if h.Op == OpReplace && len(h.Old) == 0 {
+				t.Errorf("replace at line %d has an empty old, which matches everywhere", h.Line)
 			}
 		}
 	})
