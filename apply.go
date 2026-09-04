@@ -28,6 +28,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os/exec"
+	"strings"
+	"time"
 )
 
 // EOL is the --eol mode (§6.4).
@@ -377,6 +380,118 @@ func (x *Txn) Commit() error {
 		f.wrote = sha256.Sum256(f.cur)
 	}
 	return nil
+}
+
+// RunVerify is phase 6 (§6.1 step 6): run cmd via sh -c with cwd root and
+// capture combined output.
+//
+// A command that cannot start is not a failed verify. Exit 3 means the verify
+// ran and said no; a missing shell means nothing was verified at all, and
+// reporting that as "the tests failed" would be a lie about the tree. That case
+// returns an error, which the CLI maps to exit 5.
+func RunVerify(command, root string, tailLines int) (*Verify, error) {
+	v := &Verify{Ran: true, Command: command}
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Dir = root
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+	v.Seconds = time.Since(start).Seconds()
+
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		v.OK = true
+	case errors.As(err, &exitErr):
+		v.OK = false
+	default:
+		return nil, fmt.Errorf("could not run the verify command: %w", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		lines = nil
+	}
+	v.TotalLines = len(lines)
+	if tailLines > 0 && len(lines) > tailLines {
+		lines = lines[len(lines)-tailLines:]
+	}
+	v.Tail = lines
+	return v, nil
+}
+
+// Rollback is phase 7 (§6.3). It restores each file this transaction wrote,
+// after checking that the file on disk is still the one it wrote.
+//
+// The hash comparison is the design. A file that still hashes to what commit
+// left is restored. A file that does not was rewritten by something after hunk
+// wrote it, and there are two possibilities the tool cannot tell apart: a
+// formatter run by --verify, or a second agent working the same tree.
+//
+// By default such a file is left alone and named, because silently reverting
+// another writer's work is the one behaviour that would make this tool
+// dangerous. mayFormat is the caller asserting the first case: that the verify
+// command is expected to rewrite files and nothing else is writing the tree.
+//
+// A file the verify deleted counts as differing. Restoring it could not discard
+// anybody's work, but the tool cannot tell a formatter's cleanup from a
+// deliberate removal, which is the whole reason the default refuses.
+func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored) {
+	for _, f := range x.files {
+		if !f.changed {
+			continue
+		}
+		if !mayFormat {
+			now, err := x.tree.ReadFile(f.target)
+			if err != nil {
+				notRestored = append(notRestored, NotRestored{
+					Path: f.target.Orig(),
+					Reason: fmt.Sprintf("It is gone from disk, so something removed it after hunk\n"+
+						"wrote %s there.\n"+
+						"--verify-may-format says the verify command is expected to do that.",
+						shortHash(f.wrote)),
+				})
+				continue
+			}
+			if sum := sha256.Sum256(now); sum != f.wrote {
+				notRestored = append(notRestored, NotRestored{
+					Path: f.target.Orig(),
+					Reason: fmt.Sprintf("Something rewrote it after hunk did, and restoring could\n"+
+						"discard that work. hunk wrote %s; the file is now %s.\n"+
+						"--verify-may-format says the verify command is expected to rewrite files.",
+						shortHash(f.wrote), shortHash(sum)),
+				})
+				continue
+			}
+		}
+		if err := x.tree.WriteAtomic(f.target, f.orig, f.mode); err != nil {
+			notRestored = append(notRestored, NotRestored{
+				Path:   f.target.Orig(),
+				Reason: "It could not be written: " + err.Error(),
+			})
+			continue
+		}
+		restored++
+	}
+	return restored, notRestored
+}
+
+// Applied is how many hunks actually changed something, for §5.3's first line:
+// "applied 4 hunks, verify failed, rolled back 3 files". Hunks, not files, and
+// not the size of the patch: a hunk whose new text equalled its old matched and
+// changed nothing, and saying it was applied would overstate what the rollback
+// has to undo.
+func (x *Txn) Applied() int {
+	n := 0
+	for _, f := range x.files {
+		n += f.applied
+	}
+	return n
+}
+
+// shortHash is what a message can carry without becoming unreadable. Enough to
+// compare two by eye, which is the only thing it is for.
+func shortHash(sum [sha256.Size]byte) string {
+	return fmt.Sprintf("%x", sum[:6])
 }
 
 func (x *Txn) result(hunks int) *Result {

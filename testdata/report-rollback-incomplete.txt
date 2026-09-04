@@ -4,5 +4,6 @@ $ make fmt && go test ./...
 FAIL github.com/kmoneil/jr [build failed]
 (last 1 of 1 lines)
 
-internal/cli/root.go was not restored: it changed after hunk wrote it, so restoring would discard somebody else's work; --verify-may-format says the verify command is expected to rewrite files
-its original bytes are gone; recover it from version control
+internal/cli/root.go was not restored.
+  it changed after hunk wrote it, so restoring would discard somebody else's work; --verify-may-format says the verify command is expected to rewrite files
+  hunk did not write its original bytes back; they are in version control.

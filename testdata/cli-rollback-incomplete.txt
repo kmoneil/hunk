@@ -1,0 +1,11 @@
+hunk: applied 1 hunk, verify failed, rolled back 0 files, 1 file left alone
+
+$ printf 'x\n' > a.txt; printf 'FAIL\n'; false
+FAIL
+(last 1 of 1 lines)
+
+a.txt was not restored.
+  Something rewrote it after hunk did, and restoring could
+  discard that work. hunk wrote bd52020371c0; the file is now 73cb3858a687.
+  --verify-may-format says the verify command is expected to rewrite files.
+  hunk did not write its original bytes back; they are in version control.

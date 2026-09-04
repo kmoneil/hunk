@@ -1,0 +1,6 @@
+hunk: applied 1 hunk, verify failed, rolled back 1 file
+
+$ printf 'FAIL one\nFAIL two\n'; false
+FAIL one
+FAIL two
+(last 2 of 2 lines)

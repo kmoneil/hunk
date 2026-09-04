@@ -41,6 +41,10 @@ type Verify struct {
 	Applied     int
 	RolledBack  int
 	NotRestored []NotRestored
+
+	// Kept means --keep-on-fail left the changes in place. The exit is still 3
+	// (§4): the code reports what the verify said, not what was done about it.
+	Kept bool
 }
 
 // A NotRestored is a file rollback left alone because something rewrote it
@@ -166,6 +170,11 @@ func (r *Report) writeSuccess(w io.Writer) {
 	fmt.Fprintf(w, "%s, %s, +%d -%d",
 		count(len(res.Files), "file"), count(res.Hunks, "hunk"), res.Added(), res.Removed())
 	switch {
+	case r.DryRun && r.Verify != nil:
+		// §4: --dry-run writes nothing and runs no verify. Both are said,
+		// because a caller who passed --verify and sees only "nothing written"
+		// has no reason not to assume the verify passed.
+		fmt.Fprint(w, " (dry run: nothing written, verify not run)")
 	case r.DryRun:
 		fmt.Fprint(w, " (dry run: nothing written)")
 	case r.Verify != nil && r.Verify.Ran:
@@ -216,10 +225,13 @@ func (r *Report) writeValidationFailure(w io.Writer) {
 func (r *Report) writeVerifyFailure(w io.Writer) {
 	v := r.Verify
 	fmt.Fprintf(w, "hunk: applied %s, verify failed", count(v.Applied, "hunk"))
-	if len(v.NotRestored) > 0 {
+	switch {
+	case v.Kept:
+		fmt.Fprint(w, ", changes left in place for inspection (--keep-on-fail)\n")
+	case len(v.NotRestored) > 0:
 		fmt.Fprintf(w, ", rolled back %s, %s left alone\n",
 			count(v.RolledBack, "file"), count(len(v.NotRestored), "file"))
-	} else {
+	default:
 		fmt.Fprintf(w, ", rolled back %s\n", count(v.RolledBack, "file"))
 	}
 	fmt.Fprintf(w, "\n$ %s\n", v.Command)
@@ -230,8 +242,11 @@ func (r *Report) writeVerifyFailure(w io.Writer) {
 		fmt.Fprintf(w, "(last %d of %d lines)\n", len(v.Tail), v.TotalLines)
 	}
 	for _, n := range v.NotRestored {
-		fmt.Fprintf(w, "\n%s was not restored: %s\n", n.Path, n.Reason)
-		fmt.Fprintln(w, "its original bytes are gone; recover it from version control")
+		fmt.Fprintf(w, "\n%s was not restored.\n", n.Path)
+		for _, line := range strings.Split(n.Reason, "\n") {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
+		fmt.Fprintln(w, "  hunk did not write its original bytes back; they are in version control.")
 	}
 }
 
@@ -291,6 +306,7 @@ type jsonVerify struct {
 	Command     string        `json:"command,omitempty"`
 	Output      []string      `json:"output,omitempty"`
 	RolledBack  int           `json:"rolled_back,omitempty"`
+	Kept        bool          `json:"kept,omitempty"`
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
 }
 
@@ -336,7 +352,7 @@ func (r *Report) JSON(w io.Writer) error {
 	}
 	if v := r.Verify; v != nil {
 		jv := &jsonVerify{Ran: v.Ran, OK: v.OK, Seconds: v.Seconds, Command: v.Command,
-			Output: v.Tail, RolledBack: v.RolledBack}
+			Output: v.Tail, RolledBack: v.RolledBack, Kept: v.Kept}
 		for _, n := range v.NotRestored {
 			jv.NotRestored = append(jv.NotRestored, jsonRestore{n.Path, n.Reason})
 		}

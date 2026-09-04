@@ -309,29 +309,23 @@ func TestFlags(t *testing.T) {
 	})
 }
 
-// Accepting a flag and not doing what it says is the failure this tool exists
-// to refuse. The verify family belongs to a phase that is not built.
-func TestVerifyFamilyIsRefusedRatherThanIgnored(t *testing.T) {
-	patch := "@@ file a.go\n@@ old\none\n@@ new\nONE\n"
-	for _, args := range [][]string{
-		{"--verify", "true"},
-		{"--verify-may-format"},
-		{"--verify-lines", "10"},
-		{"--keep-on-fail"},
-	} {
-		t.Run(args[0], func(t *testing.T) {
-			root := cliTree(t, map[string]string{"a.go": "one\n"})
-			before := snapshot(t, root)
-			code, _, errOut := runCLI(t, root, args, patch)
-			if code != exitUsage {
-				t.Errorf("exit %d, want 1", code)
-			}
-			if !strings.Contains(errOut, "not implemented") || !strings.Contains(errOut, args[0]) {
-				t.Errorf("err = %q", errOut)
-			}
-			assertUnchanged(t, root, before)
-		})
+// The verify family was refused here until verify-and-rollback landed; that
+// test pinned a deliberately temporary contract and went red the moment the
+// contract changed, which is what it was for. The flags' behaviour now lives in
+// verify_test.go, and what remains here is the interaction that is still the
+// CLI's: a flag that would do nothing is refused rather than accepted.
+func TestFlagsThatWouldDoNothingAreRefused(t *testing.T) {
+	root := cliTree(t, map[string]string{"a.go": "one\n"})
+	before := snapshot(t, root)
+	code, _, errOut := runCLI(t, root, []string{"--keep-on-fail"},
+		"@@ file a.go\n@@ old\none\n@@ new\nONE\n")
+	if code != exitUsage {
+		t.Errorf("exit %d, want 1", code)
 	}
+	if !strings.Contains(errOut, "does nothing without --verify") {
+		t.Errorf("err = %q", errOut)
+	}
+	assertUnchanged(t, root, before)
 }
 
 func TestUsageErrors(t *testing.T) {

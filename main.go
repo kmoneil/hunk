@@ -172,18 +172,25 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	// The verify family belongs to a phase that is not built. Accepting a flag
-	// and not doing what it says is the failure this tool exists to refuse, so
-	// it is refused here instead.
+	// --verify-may-format only ever acts during a rollback, and --keep-on-fail
+	// means no rollback happens. Together it is not contradictory, it is inert,
+	// and a flag that silently does nothing is what this tool refuses
+	// everywhere else.
+	if *keepOnFail && *verifyFormat {
+		fmt.Fprintln(stderr, "hunk: --keep-on-fail and --verify-may-format cannot both be set; "+
+			"--verify-may-format only acts while rolling back, and --keep-on-fail means not rolling back")
+		return exitUsage
+	}
+	if *verifyLines < 1 {
+		fmt.Fprintf(stderr, "hunk: --verify-lines must be at least 1, not %d\n", *verifyLines)
+		return exitUsage
+	}
 	for name, set := range map[string]bool{
-		"--verify":            *verify != "",
 		"--verify-may-format": *verifyFormat,
-		"--verify-lines":      *verifyLines != 40,
 		"--keep-on-fail":      *keepOnFail,
 	} {
-		if set {
-			fmt.Fprintf(stderr, "hunk: %s is not implemented yet, and accepting it "+
-				"without running the rollback would be worse than refusing it\n", name)
+		if set && *verify == "" {
+			fmt.Fprintf(stderr, "hunk: %s does nothing without --verify\n", name)
 			return exitUsage
 		}
 	}
@@ -238,7 +245,22 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		res, err = txn.Run(p)
 	}
 
-	rep := NewReport(res, err, nil, *dryRun, len(p.Hunks))
+	var v *Verify
+	if err == nil && *verify != "" {
+		if *dryRun {
+			// §4: --dry-run writes nothing and runs no verify. The report says
+			// so rather than leaving the caller to assume it passed.
+			v = &Verify{Command: *verify}
+		} else {
+			v, err = runVerify(txn, tree, *verify, *verifyLines, *keepOnFail, *verifyFormat)
+			if err != nil {
+				fmt.Fprintf(stderr, "hunk: %v\n", err)
+				return exitIO
+			}
+		}
+	}
+
+	rep := NewReport(res, err, v, *dryRun, len(p.Hunks))
 	if *asJSON {
 		// --json wins over --quiet: a caller that asked for machine output
 		// asked for it on every path. It is alone on stdout.
@@ -250,6 +272,27 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	rep.Text(stdout, stderr, *quiet)
 	return rep.Exit
+}
+
+// runVerify is phases 6 and 7: run the command, and put the tree back if it
+// failed (§6.1, §6.3).
+func runVerify(txn *Txn, tree *Tree, command string, lines int, keep, mayFormat bool) (*Verify, error) {
+	v, err := RunVerify(command, tree.Root(), lines)
+	if err != nil {
+		return nil, err
+	}
+	if v.OK {
+		return v, nil
+	}
+	v.Applied = txn.Applied()
+	if keep {
+		// §4: --keep-on-fail leaves the changes and still exits 3. The code
+		// reports what the verify said, not what was done about it.
+		v.Kept = true
+		return v, nil
+	}
+	v.RolledBack, v.NotRestored = txn.Rollback(mayFormat)
+	return v, nil
 }
 
 // readPatch reads the patch from -f or from stdin.
