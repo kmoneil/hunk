@@ -3,7 +3,7 @@
 GO  ?= go
 BIN := hunk
 
-.PHONY: all build fmt fmt-check vet test gates deps-gate check corpus corpus-test hooks clean
+.PHONY: all build fmt fmt-check vet test gates deps-gate check corpus corpus-test skill-grade hooks clean
 
 all: check
 
@@ -13,8 +13,11 @@ build:
 fmt:
 	$(GO) fmt ./...
 
+# The eval fixtures under skills/*-workspace/ include deliberately unformatted
+# Go, because one eval case is about a verify command that reformats. They are
+# not this module's source and gofmt has no business walking them.
 fmt-check:
-	@out=$$(gofmt -l .); \
+	@out=$$(gofmt -l . | grep -v '^skills/[^/]*-workspace/' || true); \
 	if [ -n "$$out" ]; then \
 		echo "not gofmt'd:"; echo "$$out"; exit 1; \
 	fi
@@ -43,6 +46,11 @@ deps-gate:
 	fi
 
 check: fmt-check vet gates test corpus-test
+
+# Grade the skill eval runs in skills/hunk-workspace/. Does not launch the runs
+# (those are agent invocations); it scores the trees they left behind.
+skill-grade:
+	python3 skills/hunk/evals/grade.py
 
 # scripts/corpus is its own module: it is not part of the binary and must not
 # appear in hunk's coverage, its dependency gate, or its import graph. Its tests

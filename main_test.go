@@ -536,3 +536,45 @@ func TestCLIEdges(t *testing.T) {
 		}
 	})
 }
+
+// The skill ships a worked example, and an example that does not apply is worse
+// than no example: it teaches the shape and then fails on first use. `hunk
+// format`'s example is pinned by TestFormatExampleParses; this pins the
+// skill's, end to end through the binary rather than only through the parser.
+func TestSkillExampleApplies(t *testing.T) {
+	skill, err := os.ReadFile(filepath.Join("skills", "hunk", "SKILL.md"))
+	if err != nil {
+		t.Skip("no skill shipped:", err)
+	}
+	const open, close = "hunk --verify 'go test ./...' <<'HUNK'\n", "\nHUNK\n"
+	i := strings.Index(string(skill), open)
+	if i < 0 {
+		t.Fatal("the skill no longer shows a worked example, or its opening changed")
+	}
+	rest := string(skill)[i+len(open):]
+	j := strings.Index(rest, close)
+	if j < 0 {
+		t.Fatal("the skill's example is unterminated")
+	}
+	patch := rest[:j+1]
+
+	root := cliTree(t, map[string]string{
+		"internal/cli/root.go": "func main() {\n\tbind.mustHaveBoundEveryGlobal()\n" +
+			"\tGlobalProject\n\tGlobalProject\n}\n",
+	})
+	code, out, errOut := runCLI(t, root, nil, patch)
+	if code != exitOK {
+		t.Fatalf("the example in the skill does not apply: exit %d\n%s%s\n--- patch ---\n%s",
+			code, out, errOut, patch)
+	}
+	got := readFile(t, root, "internal/cli/root.go")
+	if !strings.Contains(got, "bind.mustHaveBoundEveryScope()") {
+		t.Errorf("the replace did not land:\n%s", got)
+	}
+	if strings.Count(got, "GlobalProject, GlobalScope") != 2 {
+		t.Errorf("the x2 hunk did not replace both:\n%s", got)
+	}
+	if !strings.HasSuffix(readFile(t, root, "internal/cli/scope.go"), "\n") {
+		t.Error("the created file has no final newline")
+	}
+}

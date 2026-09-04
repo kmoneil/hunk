@@ -9,6 +9,11 @@ _bench/
 # Build output.
 /hunk
 
+# Skill eval runs: 36 fixture repos and their transcripts, regenerated per
+# iteration. The method is tracked (skills/hunk/evals/), the runs are not,
+# exactly as _reports/ holds the corpus measurement's output.
+skills/*-workspace/
+
 # OS / editor
 .DS_Store
 *.swp

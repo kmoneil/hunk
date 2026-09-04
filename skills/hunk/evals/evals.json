@@ -1,0 +1,32 @@
+{
+  "skill_name": "hunk",
+  "evals": [
+    {"id": 0, "name": "multi-file-rename-with-verify", "should_trigger": true,
+     "prompt": "rename the Greet function to Salute everywhere in this little module (it's in greeter/greeter.go and called from main.go) and make sure the thing still builds afterwards. if it doesn't build i'd rather it just not touch anything",
+     "expected_output": "Uses hunk with --verify so the rename is atomic across both files and rolls back on a build failure."},
+    {"id": 1, "name": "ambiguous-occurrence", "should_trigger": true,
+     "prompt": "in config.yaml bump the http server's timeout to 60. leave the others alone",
+     "expected_output": "timeout: 30 occurs three times; only the http one changes, by anchoring on context rather than replacing the first or all."},
+    {"id": 2, "name": "near-miss-tabs-vs-spaces", "should_trigger": true,
+     "prompt": "in greeter/validate.go change the line '        return errors.New(\"empty name\")' to '        return fmt.Errorf(\"name is required\")' and add the fmt import",
+     "expected_output": "The quoted line uses spaces, the file uses tabs. Recovers without falling back to a heredoc or sed, and the package still compiles."},
+    {"id": 3, "name": "read-only-question-negative", "should_trigger": false,
+     "prompt": "which functions in the greeter package return an error?",
+     "expected_output": "Answers Validate. Does not invoke hunk; nothing is modified."},
+    {"id": 4, "name": "single-string-edit-negative", "should_trigger": false,
+     "prompt": "bump the version constant in greeter/version.go from 0.3.1 to 0.3.2",
+     "expected_output": "One unambiguous string, one file, nothing to verify. Edit is the right tool; reaching for hunk here is overtriggering."},
+    {"id": 5, "name": "forced-refusal-recovery", "should_trigger": true,
+     "prompt": "in greeter/greeter.go change the line `return \"hi, \" + name` to `return \"hey there, \" + name`",
+     "expected_output": "The file actually says \"hello, \", so the first attempt cannot match. Recovers from the near-miss report by using the span it printed, rather than falling back to a heredoc or sed. Does not silently invent a different edit."},
+    {"id": 6, "name": "formatter-verify", "should_trigger": true,
+     "prompt": "make Tidy in greeter/tidy.go multiply by 3 instead of 2, gofmt the package as part of the same operation, and check the tests still pass. if they don't, put everything back exactly as it was",
+     "expected_output": "The tests fail (TestTidy wants 4) after gofmt has already rewritten tidy.go. Needs --verify-may-format for the rollback to restore, otherwise exit 4. Ends with the tree exactly as it started and says so."},
+    {"id": 7, "name": "rollback-comprehension", "should_trigger": true,
+     "prompt": "bump the version to 0.4.0 in greeter/version.go and in meta.yaml, and only keep the change if `grep -q 0.4.0 CHANGELOG.md` passes",
+     "expected_output": "CHANGELOG.md does not exist so the verify fails and everything rolls back. Reports that the tree is unchanged rather than re-applying or patching around it."},
+    {"id": 8, "name": "crlf-file", "should_trigger": true,
+     "prompt": "in meta.yaml change owner from nobody to platform-team, and add a line `tier: gold` after it",
+     "expected_output": "meta.yaml uses CRLF line endings. The edit lands and the file is still CRLF throughout, with no mixed or doubled line endings."}
+  ]
+}
