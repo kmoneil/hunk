@@ -205,6 +205,19 @@ func (x *Txn) Run(p *Patch) (*Result, error) {
 	return x.result(len(p.Hunks)), nil
 }
 
+// Preview is --dry-run: load and validate, and stop (§4). Nothing is written,
+// so there is no check phase either; the check exists to protect a commit from
+// a second writer and there is no commit to protect.
+func (x *Txn) Preview(p *Patch) (*Result, error) {
+	if err := x.Load(p); err != nil {
+		return nil, err
+	}
+	if failures := x.Validate(p); len(failures) > 0 {
+		return nil, &ValidationError{Failures: failures}
+	}
+	return x.result(len(p.Hunks)), nil
+}
+
 // Load reads every referenced file once (§6.1 step 2), recording bytes, mode
 // and a SHA-256 of the original.
 //
@@ -321,8 +334,13 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		if !bytes.Equal(next, f.cur) {
 			f.changed = true
 			f.applied++
-			f.added += lineCount(repl)
-			f.removed += lineCount(old)
+			// Per occurrence, not per hunk: an "@@ old x2" that rewrites two
+			// lines changed two lines, and a diffstat saying +1 -1 understates
+			// it. §5.1's globals.go row is +2 -2 and §3.6's hunk for that file
+			// is exactly an x2 on a one-line old, which is the only row of that
+			// example that corresponds to that patch.
+			f.added += lineCount(repl) * h.Count
+			f.removed += lineCount(old) * h.Count
 		}
 		f.cur = next
 	}

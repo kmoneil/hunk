@@ -1,0 +1,3 @@
+M internal/cli/root.go         +4 -2
+M internal/registry/globals.go +2 -2
+2 files, 3 hunks, +6 -4

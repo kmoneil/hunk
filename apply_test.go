@@ -762,3 +762,16 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 		}
 	})
 }
+
+// An "@@ old x2" that rewrites two lines changed two lines. Counting per hunk
+// would say +1 -1 and understate it; §5.1's globals.go row is +2 -2 for exactly
+// this shape.
+func TestDiffstatCountsPerOccurrence(t *testing.T) {
+	tree, _ := fixture(t, map[string]string{"a.go": "P\nq\nP\nr\nP\n"})
+	r, err := run(t, tree, "@@ file a.go\n@@ old x3\nP\n@@ new\nZ\nY\n", Options{})
+	must(t, err)
+	if r.Files[0].Added != 6 || r.Files[0].Removed != 3 {
+		t.Errorf("diffstat = +%d -%d, want +6 -3 (three occurrences, one line each becoming two)",
+			r.Files[0].Added, r.Files[0].Removed)
+	}
+}

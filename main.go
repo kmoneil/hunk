@@ -10,8 +10,11 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 )
 
 // Exit codes are a closed set (§4.1). Every exit path in the program maps to
@@ -40,15 +43,241 @@ const (
 	exitChanged        = 6
 )
 
+// usage is what --help prints. §9 requires it to be "complete enough to use the
+// tool from cold", and three of its sentences are things the spec explicitly
+// commits it to, each with a test:
+//
+//   - §6.2's batch-atomicity limit, "because a tool that overstates its
+//     guarantees is worse than one that has none".
+//   - §6.3's --verify-may-format entry, which states the flag and the reason
+//     together rather than only the behaviour.
+//   - §11's figure for why --verify is optional.
+const usage = `hunk applies literal text edits, in batches, as one transaction.
+
+  hunk [flags]                 patch on stdin
+  hunk [flags] -f patch.txt    patch from a file
+  hunk format                  print the grammar and one worked example
+
+Nothing is written until every hunk in the batch is known to match exactly as
+many times as it claimed, and until every target is known to be unchanged since
+it was read. A hunk whose text is not there fails the whole batch and the tree
+is untouched.
+
+FLAGS
+
+  --verify CMD          Shell command run after a successful apply. Non-zero
+                        rolls everything back. Optional: 66% of the measured
+                        calls this tool was designed from bundled one, and
+                        requiring it would be obnoxious for documentation edits.
+  --verify-may-format   On verify failure, restore original bytes even for files
+                        the verify command rewrote. Set this when --verify
+                        formats. Without it, a file that changed after hunk
+                        wrote it is left alone and the exit is 4, because
+                        silently reverting another writer's work is the one
+                        behaviour that would make this tool dangerous. With it,
+                        you are asserting nothing else writes the tree during
+                        the verify.
+  --verify-lines N      Tail of the verify output printed on failure. (40)
+  --keep-on-fail        Leave the applied changes in place when verify fails,
+                        for inspection. Still exits 3.
+  --dry-run             Validate and print the diffstat. Write nothing.
+  --root DIR            Resolve relative paths and run --verify here. (cwd)
+  --marker STR          Directive prefix. (@@)
+  -f FILE               Read the patch from a file instead of stdin.
+  --json                Emit the result as one JSON object on stdout.
+  --quiet               Print nothing on success. Failures are still reported.
+  --context N           Max lines of file text echoed in a near-miss report. (20)
+  --eol auto|strict     auto converts payload line endings to the file's
+                        dominant ending before matching and on write. (auto)
+  --allow-outside-root  Permit paths that resolve outside --root.
+
+EXIT CODES
+
+  0  applied, and verify passed if given            tree changed
+  1  usage or parse error                           tree untouched
+  2  a hunk did not match                           tree untouched
+  3  verify failed, rolled back                     tree untouched
+  4  verify failed and rollback was incomplete      tree inconsistent
+  5  I/O error                                      see the message
+  6  a file changed on disk between load and commit tree untouched
+
+Exit 2 is the one to expect routinely and act on without alarm: fix the patch
+and resend. The report prints the bytes that are actually in the file, so the
+fix is usually a paste rather than a re-read.
+
+WHAT THIS DOES NOT PROMISE
+
+Replacing one file is atomic, via rename(2). The batch is not. A crash or a
+full disk part-way through leaves the files before it written, and the check
+that guards against a second writer narrows that window to microseconds without
+closing it. Both are repaired by the version control the tree is already under.
+
+Run "hunk format" for the patch grammar.
+`
+
 func main() {
-	// Flags and the patch pipeline are not wired yet. `hunk format` is, because
-	// §2 goal 8 makes it the way an agent learns the format from cold, and it
-	// is a property of the parser rather than of the CLI: the example it prints
-	// is parsed by a test, so the help text cannot drift from the grammar.
-	if len(os.Args) == 2 && os.Args[1] == "format" {
-		fmt.Print(formatDoc)
-		os.Exit(exitOK)
+	os.Exit(cli(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+// cli is main with its edges injected, so the exit-code walk can drive it
+// in-process and assert the tree state each code implies.
+func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "format" {
+		if len(args) > 1 {
+			fmt.Fprintf(stderr, "hunk: format takes no arguments\n")
+			return exitUsage
+		}
+		fmt.Fprint(stdout, formatDoc)
+		return exitOK
 	}
-	fmt.Fprintln(os.Stderr, "hunk: only `hunk format` works so far. See SPEC.md and _plans/progress.md.")
-	os.Exit(exitUsage)
+
+	fs := flag.NewFlagSet("hunk", flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // the errors are written below, once, to stderr
+	fs.Usage = func() {}
+
+	var (
+		verify       = fs.String("verify", "", "")
+		verifyFormat = fs.Bool("verify-may-format", false, "")
+		verifyLines  = fs.Int("verify-lines", 40, "")
+		keepOnFail   = fs.Bool("keep-on-fail", false, "")
+		dryRun       = fs.Bool("dry-run", false, "")
+		root         = fs.String("root", "", "")
+		marker       = fs.String("marker", DefaultMarker, "")
+		patchFile    = fs.String("f", "", "")
+		asJSON       = fs.Bool("json", false, "")
+		quiet        = fs.Bool("quiet", false, "")
+		context      = fs.Int("context", DefaultContext, "")
+		eol          = fs.String("eol", "auto", "")
+		allowOutside = fs.Bool("allow-outside-root", false, "")
+		help         = fs.Bool("help", false, "")
+		h            = fs.Bool("h", false, "")
+	)
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(stderr, "hunk: %v\nRun \"hunk --help\" for the flags.\n", err)
+		return exitUsage
+	}
+	if *help || *h {
+		fmt.Fprint(stdout, usage)
+		return exitOK
+	}
+	if fs.NArg() > 0 {
+		// "format" is a subcommand and has to come first, which is what §4's
+		// synopsis says. Saying that beats "unexpected argument".
+		if fs.Arg(0) == "format" {
+			fmt.Fprintln(stderr, "hunk: format is a subcommand and takes no flags; run \"hunk format\"")
+		} else {
+			fmt.Fprintf(stderr, "hunk: unexpected argument %q; the patch comes from stdin or -f\n", fs.Arg(0))
+		}
+		return exitUsage
+	}
+
+	// The verify family belongs to a phase that is not built. Accepting a flag
+	// and not doing what it says is the failure this tool exists to refuse, so
+	// it is refused here instead.
+	for name, set := range map[string]bool{
+		"--verify":            *verify != "",
+		"--verify-may-format": *verifyFormat,
+		"--verify-lines":      *verifyLines != 40,
+		"--keep-on-fail":      *keepOnFail,
+	} {
+		if set {
+			fmt.Fprintf(stderr, "hunk: %s is not implemented yet, and accepting it "+
+				"without running the rollback would be worse than refusing it\n", name)
+			return exitUsage
+		}
+	}
+
+	opt := Options{Context: *context}
+	switch *eol {
+	case "auto":
+		opt.EOL = EOLAuto
+	case "strict":
+		opt.EOL = EOLStrict
+	default:
+		fmt.Fprintf(stderr, "hunk: --eol must be auto or strict, not %q\n", *eol)
+		return exitUsage
+	}
+	if *marker == "" {
+		fmt.Fprintln(stderr, "hunk: --marker must not be empty")
+		return exitUsage
+	}
+	if *context < 1 {
+		fmt.Fprintf(stderr, "hunk: --context must be at least 1, not %d\n", *context)
+		return exitUsage
+	}
+
+	src, err := readPatch(*patchFile, stdin)
+	if err != nil {
+		fmt.Fprintf(stderr, "hunk: %v\n", err)
+		return exitUsage
+	}
+
+	p, err := Parse(src, *marker)
+	if err != nil {
+		fmt.Fprintf(stderr, "hunk: %v\n", err)
+		return exitUsage
+	}
+
+	dir := *root
+	if dir == "" {
+		dir = "."
+	}
+	tree, err := OpenTree(dir, *allowOutside)
+	if err != nil {
+		fmt.Fprintf(stderr, "hunk: %v\n", err)
+		return exitIO
+	}
+	defer tree.Close()
+
+	txn := NewTxn(tree, opt)
+	var res *Result
+	if *dryRun {
+		res, err = txn.Preview(p)
+	} else {
+		res, err = txn.Run(p)
+	}
+
+	rep := NewReport(res, err, nil, *dryRun, len(p.Hunks))
+	if *asJSON {
+		// --json wins over --quiet: a caller that asked for machine output
+		// asked for it on every path. It is alone on stdout.
+		if err := rep.JSON(stdout); err != nil {
+			fmt.Fprintf(stderr, "hunk: %v\n", err)
+			return exitIO
+		}
+		return rep.Exit
+	}
+	rep.Text(stdout, stderr, *quiet)
+	return rep.Exit
+}
+
+// readPatch reads the patch from -f or from stdin.
+//
+// -f is relative to the working directory, not to --root: it is the caller's
+// file, while --root describes the tree being edited.
+func readPatch(file string, stdin io.Reader) ([]byte, error) {
+	if file != "" {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	}
+	// A terminal on stdin with no -f means somebody typed "hunk" and is now
+	// waiting for a program that is waiting for them. Say so instead.
+	if f, ok := stdin.(*os.File); ok {
+		if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+			return nil, fmt.Errorf("no patch: give one on stdin or with -f. " +
+				"Run \"hunk format\" for the grammar")
+		}
+	}
+	b, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, err
+	}
+	if len(strings.TrimSpace(string(b))) == 0 {
+		return nil, fmt.Errorf("the patch is empty. Run \"hunk format\" for the grammar")
+	}
+	return b, nil
 }
