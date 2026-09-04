@@ -313,7 +313,10 @@ func TestNormalizations(t *testing.T) {
 	}{
 		{"stripTrailing leaves a carriage return alone", stripTrailing, "a  \nb\t", "a\nb"},
 		{"stripCR removes a trailing one per line", stripCR, "a\r\nb\r", "a\nb"},
-		{"flattenIndent touches leading whitespace only", flattenIndent, "\t\ta b\t c", " a b\t c"},
+		{"flattenIndent removes leading whitespace and nothing else", flattenIndent, "\t\ta b\t c", "a b\t c"},
+		// The case §7.1's "to one space" could not express: indented against
+		// not indented, which is the commonest shape of all.
+		{"flattenIndent equates indented with unindented", flattenIndent, "\tx", "x"},
 		{"collapseSpace flattens every run", collapseSpace, "a\t \t\nb", "a b"},
 		// Written with escapes on purpose: a literal no-break space in a test is
 		// a character nobody can count, which is the whole reason this
@@ -635,4 +638,25 @@ func TestDetailNamesTheLineThatDiffers(t *testing.T) {
 			t.Errorf("got %q, want no sentence", got)
 		}
 	})
+}
+
+// The commonest shape in the corpus: an old with a tab where the file line has
+// no indentation at all. §7.1's "tabs and space runs both to one space" cannot
+// equate those, so it fell through to the vaguer "whitespace differs".
+func TestIndentationAgainstNoIndentation(t *testing.T) {
+	for _, c := range []struct{ name, file, old string }{
+		{"a tab where the file has none", "\"registry\"\n", "\t\"registry\""},
+		// Multi-line on purpose: a single unindented old is a byte-substring of
+		// the same line indented, so it would match and never reach a
+		// diagnosis. Matching is on bytes, not on lines.
+		{"none where the file has a tab", "keep\n\t\"registry\"\n", "keep\n\"registry\""},
+		{"spaces where the file has none", "x\n", "    x"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := diagnose(t, c.file, c.old, Options{})
+			if d.Cause != "indentation" {
+				t.Errorf("cause = %q, want indentation\n%s", d.Cause, d.Render("  "))
+			}
+		})
+	}
 }

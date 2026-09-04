@@ -1,0 +1,2 @@
+M a.go +2 -1
+1 file, 1 hunk, +2 -1 (dry run: nothing written)

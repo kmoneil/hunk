@@ -1,0 +1,6 @@
+hunk: applied 4 hunks, verify failed, rolled back 3 files
+
+$ go build ./... && go test ./internal/cli/
+--- internal/cli/root.go:41:2: undefined: scope
+--- FAIL github.com/kmoneil/jr/internal/cli [build failed]
+(last 2 of 2 lines)

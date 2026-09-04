@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "exit": 3,
+  "hunks": 4,
+  "verify": {
+    "ran": true,
+    "ok": false,
+    "seconds": 0,
+    "command": "go build ./... && go test ./internal/cli/",
+    "output": [
+      "--- internal/cli/root.go:41:2: undefined: scope",
+      "--- FAIL github.com/kmoneil/jr/internal/cli [build failed]"
+    ],
+    "rolled_back": 3
+  }
+}

@@ -1,0 +1,17 @@
+hunk: 2 of 3 hunks did not match, 1 skipped; nothing was written
+
+hunk 1  internal/cli/root.go  (patch line 2)
+  expected 1 occurrence, found 0
+
+  the text is there with different leading whitespace, at line 1:
+      1 | "registry"
+  your old used a tab; the file uses no indentation
+
+hunk 2  internal/cli/root.go  (patch line 6)
+  skipped: same file as hunk 1, which did not match
+
+hunk 3  internal/registry/globals.go  (patch line 11)
+  expected 2 occurrences, found 3
+  at lines 1, 3, 5
+
+  add surrounding context to old, or say "@@ old x3"

@@ -312,18 +312,21 @@ func stripTrailing(b []byte) []byte {
 	return bytes.Join(lines, lf)
 }
 
-// flattenIndent reduces each line's leading whitespace run to one space,
-// leaving the rest of the line alone (§7.1: "leading only").
+// flattenIndent removes each line's leading whitespace, leaving the rest of the
+// line alone (§7.1: "leading only").
+//
+// §7.1 says "tabs and space runs both to one space", which cannot equate a line
+// that is indented with one that is not: a run becomes one space and an absent
+// run stays absent. That drops the most common shape of all, an old with a tab
+// where the file has none, through to row 5, which reports the vaguer
+// "whitespace differs" instead of naming the indentation. Removing the run
+// instead is strictly more inclusive, and the rest of the line must still match
+// exactly, so the message stays accurate. Found by reading the report goldens.
 func flattenIndent(b []byte) []byte {
 	lines := bytes.Split(b, lf)
 	out := make([][]byte, len(lines))
 	for i, l := range lines {
-		n := len(l) - len(bytes.TrimLeft(l, " \t"))
-		if n == 0 {
-			out[i] = l
-			continue
-		}
-		out[i] = append([]byte(" "), l[n:]...)
+		out[i] = bytes.TrimLeft(l, " \t")
 	}
 	return bytes.Join(out, lf)
 }

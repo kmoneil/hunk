@@ -1,0 +1,8 @@
+hunk: applied 2 hunks, verify failed, rolled back 1 file, 1 file left alone
+
+$ make fmt && go test ./...
+FAIL github.com/kmoneil/jr [build failed]
+(last 1 of 1 lines)
+
+internal/cli/root.go was not restored: it changed after hunk wrote it, so restoring would discard somebody else's work; --verify-may-format says the verify command is expected to rewrite files
+its original bytes are gone; recover it from version control

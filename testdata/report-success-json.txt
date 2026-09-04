@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "exit": 0,
+  "files": [
+    {
+      "path": "internal/cli/root.go",
+      "op": "modify",
+      "added": 2,
+      "removed": 1
+    },
+    {
+      "path": "internal/registry/globals.go",
+      "op": "modify",
+      "added": 2,
+      "removed": 1
+    }
+  ],
+  "hunks": 2
+}

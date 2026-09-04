@@ -1,0 +1,21 @@
+{
+  "ok": false,
+  "exit": 4,
+  "hunks": 2,
+  "verify": {
+    "ran": true,
+    "ok": false,
+    "seconds": 0,
+    "command": "make fmt && go test ./...",
+    "output": [
+      "FAIL github.com/kmoneil/jr [build failed]"
+    ],
+    "rolled_back": 1,
+    "not_restored": [
+      {
+        "path": "internal/cli/root.go",
+        "reason": "it changed after hunk wrote it, so restoring would discard somebody else's work; --verify-may-format says the verify command is expected to rewrite files"
+      }
+    ]
+  }
+}

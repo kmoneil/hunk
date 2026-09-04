@@ -1,0 +1,7 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  a.go  (patch line 2)
+  expected 1 occurrence, found 0
+
+  no anchor found: not one line of your old appears in the file,
+  even ignoring whitespace. The text is not there.
