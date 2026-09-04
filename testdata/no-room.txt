@@ -1,0 +1,4 @@
+  line 3 of your old is at line 1, and the 2 lines above it
+  in your old would fall above the top of the file:
+      1 | gamma
+  drop them from your old, or anchor it further down.

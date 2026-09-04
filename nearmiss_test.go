@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"os"
 	"path/filepath"
@@ -95,6 +96,14 @@ func TestDiagnoseGoldens(t *testing.T) {
 			name: "no-anchor",
 			file: "alpha\nbeta\n",
 			old:  "nothing like this is here",
+		},
+		{
+			// The text is there, at line 1, and old's two leading lines have
+			// nowhere to go above it. Reported as "the text is not there"
+			// until 2026-09-04, about a file whose first line is one of old's.
+			name: "no-room",
+			file: "gamma\nzzz\n",
+			old:  "\n\ngamma\ndelta",
 		},
 		{
 			// --eol auto translates this away, so reaching it means strict.
@@ -266,6 +275,17 @@ func TestCostBounds(t *testing.T) {
 		}
 	})
 
+	// The search offers every line of old as an anchor, so the guard against a
+	// file of repeated lines is that two anchors pointing at one span are one
+	// candidate. Without it this is 40 times larger.
+	t.Run("candidate spans are bounded by the file, not by the file times old", func(t *testing.T) {
+		file := splitLines([]byte(strings.Repeat("}\n", 200)))
+		old := splitLines([]byte(strings.Repeat("}\n", 40) + "zzz"))
+		if starts, _ := candidateSpans(old, file); len(starts) > len(file) {
+			t.Errorf("%d candidate spans for a %d-line file", len(starts), len(file))
+		}
+	})
+
 	t.Run("a too-many list is capped at ten with a count", func(t *testing.T) {
 		d := DiagnoseTooMany([]byte("P"), []byte(strings.Repeat("P\n", 14)))
 		if len(d.Lines) != tooManyLimit || d.MoreLines != 4 || d.Found != 14 {
@@ -378,6 +398,11 @@ func FuzzDiagnose(f *testing.F) {
 		}
 		if len(d.Span) > 20 {
 			t.Errorf("span of %d lines exceeds the context cap", len(d.Span))
+		}
+		// The one claim in the report that is about the whole file rather than
+		// about one span, and the one that was false.
+		if d.Kind == DiagNoAnchor {
+			assertNoLineInCommon(t, old, file)
 		}
 		// A reported span must actually be in the file, or the report is
 		// inventing bytes for the agent to paste.
@@ -566,13 +591,225 @@ func TestCandidateTooCloseToTheTopIsSkipped(t *testing.T) {
 	}
 }
 
-// Every candidate too near the top for its span to start above line one, and
-// nothing to fall back to. The report has to say the text is not there rather
-// than clamp the span and name a cause it did not find.
-func TestEveryCandidateTooCloseToTheTop(t *testing.T) {
+// The field report that produced the anchor search, reduced to its shape: an
+// old of two lines, the first of which is also the longest and appears in the
+// file only inside a longer line, the second of which is in the file verbatim.
+// §7.1 step 1 tried the first line, then tried the longest, which was the first
+// line again, and gave up. The second line was never offered to the search and
+// the report said the text was not there.
+func TestAnchorSearchTriesEveryLineOfOld(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		file  string
+		old   string
+		kind  DiagKind
+		cause string
+		line  int
+	}{
+		{
+			name: "the anchor is old's second line, and its shortest",
+			file: "// a wrapped comment that mentions ErrNotFound mid-line and runs on\n" +
+				"func f() error {\n\treturn nil\n}\n",
+			old:  "ErrNotFound mid-line and runs on, a fragment that is not a line\n\treturn nil",
+			kind: DiagClosest,
+			line: 2,
+		},
+		{
+			name: "the anchor is old's third line, tried second because it is the longest",
+			file: "alpha\nbeta\nGAMMA\ndelta\n",
+			old:  "xxxxxxxxxxxxxxxx\nyyyy\nGAMMA\nzzz",
+			kind: DiagClosest,
+			line: 1,
+		},
+		{
+			name: "the anchor is old's last line, tried last because it is the shortest",
+			file: "if x {\n\treturn 1\n}\n",
+			old:  "if y {\n\treturn 1 or something considerably longer\n}",
+			kind: DiagClosest,
+			line: 1,
+		},
+		{
+			// The guard on the change: §7.1's first two attempts still go
+			// first, so an old that anchored before anchors on the same line.
+			name:  "the first non-blank line still wins when it matches",
+			file:  "func f() {\n    return nil\n}\n",
+			old:   "func f() {\n\treturn nil\n}",
+			kind:  DiagNamed,
+			cause: "indentation",
+			line:  1,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := diagnose(t, c.file, c.old, Options{})
+			if d.Kind != c.kind || d.Cause != c.cause {
+				t.Fatalf("kind=%v cause=%q, want %v %q\n%s", d.Kind, d.Cause, c.kind, c.cause, d.Render("  "))
+			}
+			if d.Line != c.line {
+				t.Errorf("span starts at line %d, want %d\n%s", d.Line, c.line, d.Render("  "))
+			}
+			if len(d.Span) == 0 {
+				t.Error("anchored and printed no span, which is the whole point of anchoring")
+			}
+		})
+	}
+}
+
+// §7.1 step 1's order, tested where it is decided rather than through a report.
+//
+// The order is a cost heuristic and is almost invisible in the output: a named
+// cause can only ever be found through old's first non-blank line, because any
+// pair of lines equal under one of §7.1's rows is equal under anchorKey, and
+// step 4's tie breaks on position in the file rather than on search order. What
+// it does change is how many spans are compared before the answer is found, and
+// which match a no-room report names.
+func TestAnchorOrder(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		old  string
+		want []int
+	}{
+		{"the first line first, then the longest of the rest", "aa\nbb\ncccc", []int{0, 2, 1}},
+		{"the first line keeps its place even when it is the shortest", "a\nbbbb\nccc", []int{0, 1, 2}},
+		{"a tie goes to the earlier line, so the order is total", "aa\nbb\ncc", []int{0, 1, 2}},
+		{"blank lines are not anchors", "\naa\n\nbbb", []int{1, 3}},
+		{"leading whitespace is not length", "\t\taaaa\nbbb", []int{0, 1}},
+		{"an all-blank old has no anchor at all", "\n\n", nil},
+		{"one line is already ordered", "only", []int{0}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := anchorOrder(splitLines([]byte(c.old)))
+			if len(got) != len(c.want) {
+				t.Fatalf("order = %v, want %v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("order = %v, want %v", got, c.want)
+				}
+			}
+		})
+	}
+}
+
+// Two anchors pointing at one span are one candidate. Without that, an old of
+// N lines against a file of repeated lines compares the same spans N times, and
+// §7.2 is a cost bound rather than a suggestion.
+func TestCandidateSpansAreDistinct(t *testing.T) {
+	starts, high := candidateSpans(splitLines([]byte("aaa\nbbb")), splitLines([]byte("aaa\nbbb\naaa\nbbb\n")))
+	want := []int{0, 2}
+	if len(starts) != len(want) {
+		t.Fatalf("starts = %v, want %v: both anchors point at both spans", starts, want)
+	}
+	for i := range starts {
+		if starts[i] != want[i] {
+			t.Fatalf("starts = %v, want %v", starts, want)
+		}
+	}
+	if high.file != -1 || high.old != -1 {
+		t.Errorf("high = %+v, want no rejected match: every span fits", high)
+	}
+}
+
+// The text is there, but old overhangs the top of the file, so §7.1 step 2
+// skips every span it implies and there is nothing to compare.
+//
+// This printed "no anchor found: not one line of your old appears in the file"
+// until 2026-09-04, about a file whose first line is one of old's. The golden
+// moved deliberately: the old message was false, and this is the sentence that
+// is true.
+func TestTheTextIsThereButOldOverhangsTheTop(t *testing.T) {
 	d := Diagnose([]byte("\n\ngamma\ndelta"), []byte("gamma\nzzz\n"), DefaultContext)
-	if d.Kind != DiagNoAnchor {
-		t.Errorf("kind = %v, want DiagNoAnchor\n%s", d.Kind, d.Render("  "))
+	if d.Kind != DiagNoRoom {
+		t.Fatalf("kind = %v, want DiagNoRoom\n%s", d.Kind, d.Render("  "))
+	}
+	if d.Line != 1 || d.DiffLine != 3 {
+		t.Errorf("line=%d diffLine=%d, want old's line 3 found at file line 1", d.Line, d.DiffLine)
+	}
+	if len(d.Span) != 1 || string(d.Span[0]) != "gamma" {
+		t.Errorf("span = %q, want the one line that did match", d.Span)
+	}
+	got := d.Render("  ")
+	for _, want := range []string{"line 3 of your old is at line 1", "2 lines above it", "1 | gamma"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the report does not say %q:\n%s", want, got)
+		}
+	}
+}
+
+// §7.1 step 4 breaks a tie on "earliest", which has to mean earliest in the
+// file. Within one anchor the candidates ascend and the rule costs nothing;
+// across anchors it does, and without it the answer depends on which line of
+// old happened to anchor the span.
+func TestClosestSpanTieIsEarliestInTheFile(t *testing.T) {
+	d := diagnose(t, "XXX\nqqqqqq\nZZZ\nppp\nYYY\n", "ppp\nqqqqqq", Options{})
+	if d.Kind != DiagClosest {
+		t.Fatalf("kind = %v\n%s", d.Kind, d.Render("  "))
+	}
+	if d.Line != 1 {
+		t.Errorf("span starts at line %d, want 1: the anchor found second sits earlier in the file", d.Line)
+	}
+}
+
+// The DiagNoAnchor message quantifies over every line of old, so the search has
+// to as well. Asserting the sentence rather than the code path is what keeps
+// this true through a rewrite of the search.
+func TestNoAnchorMeansEveryLineWasChecked(t *testing.T) {
+	for _, c := range []struct{ name, old, file string }{
+		{"nothing in common", "zzz", "abc\n"},
+		{"an empty file", "abc", ""},
+		{"several lines, and none of them there", "aaa\nbbb\nccc", "xxx\nyyy\n"},
+		{"a line that is there mid-line only", "ErrNotFound is here", "// x ErrNotFound is here y\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := Diagnose([]byte(c.old), []byte(c.file), DefaultContext)
+			if d.Kind != DiagNoAnchor {
+				t.Fatalf("kind = %v, want DiagNoAnchor\n%s", d.Kind, d.Render("  "))
+			}
+			assertNoLineInCommon(t, c.old, c.file)
+		})
+	}
+}
+
+// The search offers every line of old as an anchor rather than two, so the cost
+// claim in §7.2 is worth a number rather than an argument. The degenerate shape
+// is the one that would blow up without de-duplication: an old of repeated
+// lines against a file of the same line, where every anchor matches everywhere.
+func BenchmarkDiagnose(b *testing.B) {
+	var file, old strings.Builder
+	for i := 0; i < 500; i++ {
+		file.WriteString("\tif err != nil {\n\t\treturn err\n\t}\n")
+	}
+	for i := 0; i < 30; i++ {
+		old.WriteString("    if err != nil {\n        return err\n    }\n")
+	}
+	shapes := []struct {
+		name string
+		old  []byte
+		file []byte
+	}{
+		{"a 3-line old in a 1500-line file", []byte("func f() {\n\treturn nil\n}"), []byte(file.String())},
+		{"a 90-line old of lines the file repeats 500 times", []byte(old.String()), []byte(file.String())},
+	}
+	for _, s := range shapes {
+		b.Run(s.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				Diagnose(s.old, s.file, DefaultContext)
+			}
+		})
+	}
+}
+
+// assertNoLineInCommon is the DiagNoAnchor message written as an assertion.
+func assertNoLineInCommon(t *testing.T, old, file string) {
+	t.Helper()
+	for _, o := range splitLines([]byte(old)) {
+		if len(bytes.TrimSpace(o)) == 0 {
+			continue
+		}
+		for i, f := range splitLines([]byte(file)) {
+			if anchorKey(o) == anchorKey(f) {
+				t.Errorf("the report says not one line of old is in the file, but %q is at line %d", o, i+1)
+			}
+		}
 	}
 }
 

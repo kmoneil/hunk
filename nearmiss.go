@@ -13,10 +13,11 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 )
 
-// DiagKind is which of §7's three shapes a diagnosis is.
+// DiagKind is which of §7's shapes a diagnosis is.
 type DiagKind int
 
 const (
@@ -28,6 +29,12 @@ const (
 	// DiagNoAnchor: not one line of old appears in the file, even ignoring
 	// whitespace. The text is not there and no span would help.
 	DiagNoAnchor
+	// DiagNoRoom: a line of old is in the file, but every place it sits is so
+	// near the top that old's earlier lines would begin above line one. §7.1
+	// step 2 skips such a span rather than clamping it, so there is nothing to
+	// compare; saying "the text is not there" about it would be false, which is
+	// what this kind exists to stop.
+	DiagNoRoom
 	// DiagTooMany: old occurs, just not the claimed number of times.
 	DiagTooMany
 )
@@ -56,7 +63,9 @@ type Diagnosis struct {
 	Span [][]byte
 
 	// DiffLine, Yours, Theirs and Column describe the first line that differs
-	// (DiagClosest only). DiffLine is 1-based within old.
+	// (DiagClosest only). DiffLine is 1-based within old, and DiagNoRoom
+	// borrows it for the line of old that matched: same meaning, a line number
+	// into old, and it is what says how far old overhangs the top of the file.
 	DiffLine int
 	Yours    []byte
 	Theirs   []byte
@@ -90,19 +99,22 @@ func Diagnose(old, file []byte, maxContext int) *Diagnosis {
 		return &Diagnosis{Kind: DiagNoAnchor}
 	}
 
-	anchorAt, starts := anchors(oldLines, fileLines)
+	starts, high := candidateSpans(oldLines, fileLines)
 	if len(starts) == 0 {
-		return &Diagnosis{Kind: DiagNoAnchor}
+		if high.file < 0 {
+			return &Diagnosis{Kind: DiagNoAnchor}
+		}
+		// The one line that did match is the whole report: it is where the
+		// agent has to look, and its number is what says how far old overhangs
+		// the top of the file.
+		return &Diagnosis{Kind: DiagNoRoom, Line: high.file + 1, DiffLine: high.old + 1,
+			Span: capSpan(spanAt(fileLines, high.file, 1), maxContext)}
 	}
 
-	// §7.1 step 2, corrected: the span starts where old would start, which is
-	// anchorAt lines above the matched line. Identical when the anchor is old's
-	// first line, and wrong otherwise, which is the case step 1 exists for.
-	for _, at := range starts {
-		start := at - anchorAt
-		if start < 0 {
-			continue
-		}
+	// §7.1 step 3: the first normalization that makes a candidate span equal to
+	// old wins, and the candidates are ordered by anchor, most distinctive
+	// first.
+	for _, start := range starts {
 		span := spanAt(fileLines, start, len(oldLines))
 		if d := explain(oldLines, span, file); d != nil {
 			d.Line = start + 1
@@ -112,20 +124,16 @@ func Diagnose(old, file []byte, maxContext int) *Diagnosis {
 	}
 
 	// §7.1 step 4, the floor. Fewest differing lines, earliest on a tie so a
-	// golden has one answer.
+	// golden has one answer. The tie breaks on position in the file rather than
+	// on which line of old anchored the span, so the report does not depend on
+	// the search order.
 	best, bestStart, bestDiff := [][]byte(nil), 0, -1
-	for _, at := range starts {
-		start := at - anchorAt
-		if start < 0 {
-			continue
-		}
+	for _, start := range starts {
 		span := spanAt(fileLines, start, len(oldLines))
-		if n := differingLines(oldLines, span); bestDiff < 0 || n < bestDiff {
+		n := differingLines(oldLines, span)
+		if bestDiff < 0 || n < bestDiff || (n == bestDiff && start < bestStart) {
 			best, bestStart, bestDiff = span, start, n
 		}
-	}
-	if best == nil {
-		return &Diagnosis{Kind: DiagNoAnchor}
 	}
 	d := &Diagnosis{Kind: DiagClosest, Line: bestStart + 1, Span: capSpan(best, maxContext)}
 	d.DiffLine, d.Yours, d.Theirs, d.Column = firstDifference(oldLines, best)
@@ -159,32 +167,99 @@ func DiagnoseTooMany(old, file []byte) *Diagnosis {
 	return d
 }
 
-// anchors implements §7.1 step 1. It returns the index within old of the line
-// used as the anchor, and every file line whose stripped form equals it.
-func anchors(oldLines, fileLines [][]byte) (int, []int) {
-	first := -1
+// candidateSpans implements §7.1 steps 1 and 2. It returns the file line
+// indices where old would begin, in the order they are worth trying.
+//
+// §7.1 step 1 offered two lines of old as anchors, the first non-blank one and
+// the longest, and then step 5 printed "not one line of your old appears in the
+// file, even ignoring whitespace". Those two do not agree, and the field found
+// the gap between them: an old of two lines, the first of which was the longest
+// and appeared in the file only mid-line, the second of which was in the file
+// verbatim. The first line matched nothing, the longest line was the first line
+// again, and the second line was never offered to the search at all. The report
+// said the text was not there about a file that contained half of it.
+//
+// Every line of old is an anchor candidate now, so the sentence is something
+// the tool has checked rather than something it assumes. §7.1's two lines are
+// still tried first and in its order, so an old that anchors today anchors on
+// the same line afterwards; only "no anchor found" can move.
+// It also returns the first match it had to reject for want of room above it,
+// so that a search which finds nothing usable can still say what it saw. Both
+// fields are -1 when every anchor matched nothing at all.
+func candidateSpans(oldLines, fileLines [][]byte) ([]int, anchorMatch) {
+	index := anchorIndex(fileLines)
+	var out []int
+	high := anchorMatch{file: -1, old: -1}
+	seen := make(map[int]bool)
+	for _, i := range anchorOrder(oldLines) {
+		for _, at := range index[anchorKey(oldLines[i])] {
+			// §7.1 step 2: the span starts where old would start, which is i
+			// lines above the matched line. Identical when the anchor is old's
+			// first line and wrong otherwise, which is the case the ordering
+			// exists for. A span that would begin above line one is skipped
+			// rather than clamped, because a clamped span compares the wrong
+			// text.
+			start := at - i
+			if start < 0 {
+				if high.file < 0 {
+					high = anchorMatch{file: at, old: i}
+				}
+				continue
+			}
+			// Two anchors pointing at one span are one candidate: explain is a
+			// pure function of the span, so asking it twice cannot say anything
+			// new. This is also what bounds the search by the length of the
+			// file rather than by that times the length of old (§7.2).
+			if seen[start] {
+				continue
+			}
+			seen[start] = true
+			out = append(out, start)
+		}
+	}
+	return out, high
+}
+
+// An anchorMatch is a line of old found at a line of the file, both 0-based.
+type anchorMatch struct{ file, old int }
+
+// anchorOrder is which lines of old to offer as anchors, best first: §7.1's
+// first non-blank line, then §7.1's longest line, then the rest by decreasing
+// length, earliest on a tie so the order is total.
+//
+// Length is the proxy for distinctiveness, because a long line is less likely
+// to match a line it does not belong to. A blank line would match every blank
+// line in the file, so blank lines are not anchors at all, which is also what
+// keeps anchorKey's key non-empty.
+func anchorOrder(oldLines [][]byte) []int {
+	var order []int
 	for i, l := range oldLines {
 		if len(bytes.TrimSpace(l)) > 0 {
-			first = i
-			break
+			order = append(order, i)
 		}
 	}
-	if first < 0 {
-		return 0, nil // old is entirely blank: no anchor and no fallback
+	if len(order) == 0 {
+		return nil // old is entirely blank: no anchor and no fallback
 	}
-	if at := matchingLines(fileLines, oldLines[first]); len(at) > 0 {
-		return first, at
+	rest := order[1:]
+	sort.SliceStable(rest, func(a, b int) bool {
+		return len(bytes.TrimSpace(oldLines[rest[a]])) >
+			len(bytes.TrimSpace(oldLines[rest[b]]))
+	})
+	return order
+}
+
+// anchorIndex groups the file's lines by anchorKey, so that an anchor attempt
+// is a lookup rather than a pass over the file. Two attempts could afford a
+// pass each; one per line of old could not, and building this costs one pass,
+// which is fewer than the two it replaces.
+func anchorIndex(fileLines [][]byte) map[string][]int {
+	index := make(map[string][]int, len(fileLines))
+	for i, l := range fileLines {
+		k := anchorKey(l)
+		index[k] = append(index[k], i)
 	}
-	longest := first
-	for i := range oldLines {
-		if len(bytes.TrimSpace(oldLines[i])) > len(bytes.TrimSpace(oldLines[longest])) {
-			longest = i
-		}
-	}
-	if longest == first {
-		return first, nil
-	}
-	return longest, matchingLines(fileLines, oldLines[longest])
+	return index
 }
 
 // anchorKey is how two lines are compared when looking for candidates.
@@ -202,20 +277,6 @@ func anchors(oldLines, fileLines [][]byte) (int, []int) {
 // there" about a file containing it.
 func anchorKey(line []byte) string {
 	return string(collapseSpace(foldLookalikes(line)))
-}
-
-// matchingLines is only called with a line anchors already found non-blank, so
-// the key cannot be empty and there is no guard against matching every blank
-// line in the file.
-func matchingLines(fileLines [][]byte, want []byte) []int {
-	w := anchorKey(want)
-	var at []int
-	for i, l := range fileLines {
-		if anchorKey(l) == w {
-			at = append(at, i)
-		}
-	}
-	return at
 }
 
 func spanAt(fileLines [][]byte, start, n int) [][]byte {
@@ -579,6 +640,19 @@ func whitespaceCause(cause string) bool {
 	return false
 }
 
+// causeName is the JSON "cause" of §5.2. DiagNamed carries the normalization
+// that explained the miss; the two kinds that are their own explanation carry a
+// name for the shape instead, because an empty cause tells a reader nothing.
+func (d *Diagnosis) causeName() string {
+	switch d.Kind {
+	case DiagNoAnchor:
+		return "no anchor"
+	case DiagNoRoom:
+		return "no room"
+	}
+	return d.Cause
+}
+
 // Render writes the near-miss block of §5.2's report, indented under its hunk
 // heading. report.go composes the rest around it.
 func (d *Diagnosis) Render(indent string) string {
@@ -620,6 +694,16 @@ func (d *Diagnosis) Render(indent string) string {
 		// suggestion is the actionable half.
 		fmt.Fprintf(&b, "\n%sadd surrounding context to old, or say \"@@ old x%d\"\n",
 			indent, d.Found)
+		return b.String()
+
+	case DiagNoRoom:
+		fmt.Fprintf(&b, "%sline %d of your old is at line %d, and the %s above it\n",
+			indent, d.DiffLine, d.Line, plural(d.DiffLine-1, "line"))
+		fmt.Fprintf(&b, "%sin your old would fall above the top of the file:\n", indent)
+		for i, l := range d.Span {
+			gutter(d.Line+i, l)
+		}
+		fmt.Fprintf(&b, "%sdrop them from your old, or anchor it further down.\n", indent)
 		return b.String()
 
 	case DiagNamed:

@@ -405,10 +405,10 @@ func (r *Report) JSON(w io.Writer) error {
 			if d.Kind == DiagTooMany {
 				jf.Lines = d.Lines
 			} else if d.Kind != DiagNoAnchor {
-				jf.NearMiss = &jsonNear{Cause: d.Cause, Line: d.Line,
+				jf.NearMiss = &jsonNear{Cause: d.causeName(), Line: d.Line,
 					Span: string(joinLines(d.Span)), Detail: d.Detail, Shifted: d.Shifted}
 			} else {
-				jf.NearMiss = &jsonNear{Cause: "no anchor"}
+				jf.NearMiss = &jsonNear{Cause: d.causeName()}
 			}
 		}
 		out.Failures = append(out.Failures, jf)

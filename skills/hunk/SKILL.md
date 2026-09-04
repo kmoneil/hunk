@@ -28,7 +28,8 @@ success.
 | `expected 1 occurrence, found 0` with a span printed | Re-read the file | The report printed the file's actual bytes. Paste that span into `old` and resend |
 | `expected 1 occurrence, found 5` with line numbers | Pick one and hope | Add surrounding context to `old` until it is unique, or say `@@ old x5` if you mean all five |
 | `the text is there with different leading whitespace` | Retype it by hand | The gutter shows the real line. Copy it, tabs and all |
-| `no anchor found` | Try a shorter `old` | The text genuinely is not in that file. Check the path, or that an earlier hunk did not already change it |
+| `no anchor found` | Try a shorter `old` | Every line of your `old` was compared with every line of the file, whitespace ignored, and not one of them is there. Check the path, or that an earlier hunk did not already change it |
+| `would fall above the top of the file` | Re-read the file | Your `old` overhangs the top. The line it did find is printed with its number; drop the lines above it from your `old` |
 | `skipped: same file as hunk N` | Fix this hunk | It was never evaluated. Fix hunk N; this one may then be fine |
 | exit 3, `verify failed, rolled back` | Re-apply and hope | The tree is back to how it was. The verify output is below the line; fix the patch |
 | exit 4, `was not restored` | Ignore it | The tree is inconsistent. Read which file and why, then repair it before doing anything else |
@@ -92,6 +93,21 @@ later hunks *against that file* and they are reported skipped, not failed.
 **4. `@@ file` stays in effect** until the next path-bearing directive, so
 several `@@ old`/`@@ new` pairs can follow one `@@ file`.
 
+## Composing a large batch: `--dry-run`
+
+`--dry-run` matches every hunk and writes nothing:
+
+```
+$ hunk --dry-run -f patch.txt
+M internal/cli/root.go +3 -1
+1 file, 2 hunks, +3 -1 (dry run: nothing written)
+```
+
+It runs the whole validation phase, so a near miss is reported in full and the
+exit is still 2 when a hunk does not match. A twelve-hunk batch can be made
+right before a byte is written. It does **not** run `--verify`, because there is
+nothing applied to verify.
+
 ## When to reach for it, and when not
 
 `hunk` earns its keep when an edit has something to go wrong: several changes
@@ -110,6 +126,8 @@ mirror of the habit this replaces, and it costs the same thing: round trips.
 | You are about to write `python3 - <<'PY'` to edit a file | `hunk`, always |
 | Several replacements, or several files, that must land together | `hunk` |
 | An edit that must be undone if the tests fail | `hunk --verify '...'` |
+| More than one file of a compiled language in one batch | `hunk --verify 'go build ./...'` |
+| A batch big enough that you want to see it match first | `hunk --dry-run`, then the same patch without it |
 | The text might occur more than once | `hunk`, which refuses rather than guessing |
 | One unambiguous string, one file, nothing to verify | `Edit`. Not this tool |
 | Reading, searching, renaming, moving | Not this tool |
@@ -129,6 +147,20 @@ so a program never has to parse the text.
 `--verify CMD` runs after a successful apply, in `--root`, via `sh -c`. If it
 exits non-zero, **every file goes back** and the exit is 3. You do not need a
 backup and you do not need a cleanup call.
+
+**Reach for it without being asked when a batch touches more than one file of a
+compiled language.** `--verify 'go build ./...'` is the case in point: every
+hunk can match, every file can be plausible on its own, and the batch still not
+build, because the thing that broke is between the files. A helper renamed in
+one file and called in another is the shape, and it is exactly what a
+multi-file edit is for. The flag costs nothing when it passes and saves a
+broken tree when it does not.
+
+**Prefer the repository's own gate** (`make check`, `npm test`) over a command
+you compose. `--verify` decides on the exit code, and some tools report a
+problem and exit 0 anyway: `gofmt -l .` prints every unformatted file and
+succeeds. A verify that cannot fail is worse than none, because it says the
+tree is good.
 
 One flag to know: if your verify command **rewrites files** (`gofmt -w`,
 `prettier --write`, `make fmt`), pass `--verify-may-format`. Without it, a file

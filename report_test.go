@@ -67,6 +67,16 @@ func TestReportGoldens(t *testing.T) {
 		golden(t, "report-no-anchor-json", js)
 	})
 
+	// The other half of that: the text is there, and old overhangs the top of
+	// the file. It carries a cause of its own rather than a null one, because
+	// §5.2 promises the JSON says everything the text says.
+	t.Run("no room above the match", func(t *testing.T) {
+		text, js, _ := render(t, map[string]string{"a.go": "gamma\nzzz\n"},
+			"@@ file a.go\n@@ old\n\n\ngamma\ndelta\n@@ new\nX\n", Options{})
+		golden(t, "report-no-room", text)
+		golden(t, "report-no-room-json", js)
+	})
+
 	t.Run("a path refusal", func(t *testing.T) {
 		text, js, rep := render(t, map[string]string{"a.go": "x\n"},
 			"@@ file ../out.go\n@@ old\nx\n@@ new\ny\n", Options{})
