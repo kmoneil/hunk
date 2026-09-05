@@ -27,3 +27,6 @@ __pycache__/
 CLAUDE.md
 GEMINI.md
 .claude/
+
+# The corpus tool, if it is ever built rather than go-run.
+/scripts/corpus/corpus

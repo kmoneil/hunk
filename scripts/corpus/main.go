@@ -52,8 +52,35 @@ type Stats struct {
 	FailedAttempts  int `json:"failed_attempts"`
 
 	// For the second run, once hunk is in use.
-	HunkCalls int         `json:"hunk_calls"`
-	HunkExits map[int]int `json:"hunk_exit_codes,omitempty"`
+	//
+	// HunkCalls keeps its meaning, every invocation including the probes, so
+	// the baseline's "hunk calls 1" stays true. HunkApplications is the
+	// denominator of the rates: an exit-2 rate over a count that includes
+	// --help is not a rate.
+	HunkCalls        int         `json:"hunk_calls"`
+	HunkApplications int         `json:"hunk_applications"`
+	HunkProbes       int         `json:"hunk_probes"`
+	HunkUnclassified int         `json:"hunk_unclassified"`
+	HunkExits        map[int]int `json:"hunk_exit_codes,omitempty"`
+
+	// §12: "the fraction of exit-2s followed by a success on the next call.
+	// That fraction is the near-miss report's score." Exit2Followed is the
+	// denominator: an exit 2 whose next application this file could classify.
+	// A pair whose second half is unclassified counts in neither, because
+	// calling it a failure to recover would score §7 against a gap in this
+	// classifier.
+	Exit2Followed  int `json:"exit2_with_a_classified_next_call"`
+	Exit2Recovered int `json:"exit2_followed_by_exit0"`
+}
+
+// Exit2RecoveryRate is §7's score: of the refusals whose next application is
+// known, how many were followed by one that applied. §12: "If it is low, §7 is
+// not doing its job."
+func (s Stats) Exit2RecoveryRate() float64 {
+	if s.Exit2Followed == 0 {
+		return 0
+	}
+	return float64(s.Exit2Recovered) / float64(s.Exit2Followed)
 }
 
 // CallsPerSuccessfulEdit is §12's headline comparison, and the number the whole
@@ -187,13 +214,18 @@ func (s *Stats) session(path, project string) error {
 				_ = json.Unmarshal(c.Input, &in)
 				calls = append(calls, call{id: c.ID, name: c.Name, command: in.Command})
 			case "tool_result":
-				results[c.ToolUseID] += string(c.Content)
+				results[c.ToolUseID] += resultText(c.Content)
 			}
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
+
+	// hunkExits is every hunk application's exit in call order, for §12's
+	// recovery fraction. Probes are not in it: an agent running --help between
+	// a refusal and its fix has not failed to recover.
+	var hunkExits []int
 
 	// firstFail is the index of the first failed attempt still open for a path.
 	firstFail := map[string]int{}
@@ -208,9 +240,20 @@ func (s *Stats) session(path, project string) error {
 			continue
 		}
 		s.BashCalls++
-		if strings.HasPrefix(strings.TrimSpace(c.command), "hunk ") ||
-			strings.Contains(c.command, "| hunk ") {
+		if IsHunkCall(c.command) {
 			s.HunkCalls++
+			switch code := HunkExit(c.command, results[c.id]); code {
+			case ExitProbe:
+				s.HunkProbes++
+			case ExitUnclassified:
+				s.HunkApplications++
+				s.HunkUnclassified++
+				hunkExits = append(hunkExits, ExitUnclassified)
+			default:
+				s.HunkApplications++
+				s.HunkExits[code]++
+				hunkExits = append(hunkExits, code)
+			}
 		}
 		if !IsHeredocEdit(c.command) {
 			continue
@@ -266,7 +309,51 @@ func (s *Stats) session(path, project string) error {
 			delete(firstFail, key)
 		}
 	}
+
+	// §12's recovery fraction, within a session and in call order. A refusal
+	// with no application after it is not a failure to recover, it is the end
+	// of the session, so it is in neither the numerator nor the denominator.
+	for i, code := range hunkExits {
+		if code != ExitNoMatch || i+1 >= len(hunkExits) {
+			continue
+		}
+		if hunkExits[i+1] == ExitUnclassified {
+			continue
+		}
+		s.Exit2Followed++
+		if hunkExits[i+1] == ExitOK {
+			s.Exit2Recovered++
+		}
+	}
 	return nil
+}
+
+// resultText is a tool_result's content as the text an agent saw. The field is
+// either a JSON string or a list of blocks, so the raw bytes will not do: they
+// carry the quotes and leave the newlines escaped, and no rule that anchors to
+// the start of a line can read them.
+//
+// Failed() has read the raw form since this file was written and gets away with
+// it because its patterns are substrings with no anchors. HunkExit's are
+// anchored, because a verify command's own output shares the same result, and
+// on raw bytes every one of them silently matched nothing: five applications
+// classified, five unclassified. Found by running it.
+func resultText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &blocks) == nil {
+		var b strings.Builder
+		for _, x := range blocks {
+			b.WriteString(x.Text)
+		}
+		return b.String()
+	}
+	return string(raw) // a shape this tool does not know is better than nothing
 }
 
 // Report is §1's table, then the figures §12 needs and §1 does not have.
@@ -301,15 +388,22 @@ func (s *Stats) Report() string {
 	fmt.Fprintf(&b, "  failed attempts         %9d\n", s.FailedAttempts)
 	fmt.Fprintf(&b, "  calls per successful edit  %6.2f\n", s.CallsPerSuccessfulEdit())
 	fmt.Fprintf(&b, "  hunk calls              %9d\n", s.HunkCalls)
-	if len(s.HunkExits) > 0 {
+	if s.HunkCalls > 0 {
+		fmt.Fprintf(&b, "    applications          %7d\n", s.HunkApplications)
+		fmt.Fprintf(&b, "    probes                %7d\n", s.HunkProbes)
 		var codes []int
 		for c := range s.HunkExits {
 			codes = append(codes, c)
 		}
 		sort.Ints(codes)
 		for _, c := range codes {
-			fmt.Fprintf(&b, "    exit %d                %7d\n", c, s.HunkExits[c])
+			fmt.Fprintf(&b, "      exit %d              %7d\n", c, s.HunkExits[c])
 		}
+		// Printed even at zero. A silent zero is what hid an unwritten map
+		// behind an omitempty for a day.
+		fmt.Fprintf(&b, "      unclassified        %7d\n", s.HunkUnclassified)
+		fmt.Fprintf(&b, "  exit-2 recovery            %6.2f   %d of %d\n",
+			s.Exit2RecoveryRate(), s.Exit2Recovered, s.Exit2Followed)
 	}
 
 	if len(s.Projects) > 0 {
