@@ -230,16 +230,17 @@ deliberate change to a contract, not a test that needs regenerating.
 
 All six directives work, with thirteen flags.
 
-Linux and macOS are tested: CI runs the suite on both, and a merge is blocked
-unless it passes on both along with the dependency, network, vulnerability and
-binary-size gates.
+Linux, macOS and Windows are tested. CI runs the suite on all three and a merge
+is blocked unless it passes on every one, along with the dependency, network,
+vulnerability and binary-size gates.
 
-**Windows is not supported**, and that is a narrower claim than it sounds. The
-tool may well work there; the tests cannot currently say, because they assert
-POSIX file modes and force their negative cases with `chmod`, neither of which
-means anything on Windows. The suite runs there anyway, unrequired, so the gap
-stays visible rather than being excluded and forgotten. It is
-[issue #1](https://github.com/kmoneil/hunk/issues/1).
+Windows carries one caveat, said out loud because a green check should not
+claim more than it checked. The file-mode assertions and the tests that force a
+failure by removing permission are skipped there: Windows has no POSIX
+permission bits, and `chmod` does not make a directory unreadable, so those
+tests would be asserting the platform rather than the tool. Everything else
+runs, which is the transaction, the matching, the diagnosis, the near-miss
+report and the rollback bookkeeping.
 
 It has one user and a version number that says so.
 

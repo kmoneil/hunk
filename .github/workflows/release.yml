@@ -54,20 +54,25 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # linux and darwin only, and that is a claim rather than an omission:
-      # those are the platforms ci.yml runs the suite on. A Windows binary
-      # published here would be the one artifact nothing had executed, and this
-      # tool's whole surface is filesystem semantics. Windows users can
-      # `go install`, which builds from source and says so.
+      # Every platform ci.yml runs the suite on, which is now all three. A
+      # binary is published for a platform the tests have executed on and for
+      # no others, because this tool's whole surface is filesystem semantics
+      # and an untested binary of it is worse than no binary.
+      #
+      # The Windows caveat is in the README rather than repeated here: the mode
+      # and permission-failure tests are skipped there, so what is published is
+      # a binary whose transaction and matching are tested and whose mode
+      # plumbing is not.
       #
       # CGO off so each is a static binary, which is what the README promises.
       - name: build
         run: |
           mkdir -p dist
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os=${target%/*}; arch=${target#*/}
+            ext=""; [ "$os" = windows ] && ext=".exe"
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
-              go build -trimpath -o "dist/hunk-$os-$arch" .
+              go build -trimpath -o "dist/hunk-$os-$arch$ext" .
           done
           cd dist && sha256sum hunk-* > SHA256SUMS && cat SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
