@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // §8.1: "The exact bytes of every failure message, because those messages are
@@ -353,6 +354,138 @@ func TestNormalizations(t *testing.T) {
 	}
 }
 
+// foldReference is the rune-by-rune fold that foldLookalikes's ASCII fast path
+// has to agree with. It is the function that was there before the fast path,
+// kept here as the differential: range-over-string rewrites each invalid byte
+// to U+FFFD, so the two must agree about malformed input as well as about
+// lookalikes.
+func foldReference(b []byte) []byte {
+	var out bytes.Buffer
+	for _, r := range string(b) {
+		if to, ok := lookalikes[r]; ok {
+			out.WriteRune(to)
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.Bytes()
+}
+
+func TestFoldLookalikesAgreesWithTheRuneByRuneFold(t *testing.T) {
+	for _, c := range []struct{ name, in string }{
+		{"empty", ""},
+		{"pure ascii takes the fast path", "func f() error {\n\treturn nil\n}"},
+		{"every lookalike", " ‘’“”–—−  "},
+		{"non-ascii that is not a lookalike is left alone", "café 日本語"},
+		{"one lookalike among ascii", "say “hello” now"},
+		{"the last ascii byte, just under the threshold", "\x7f\x00\x01"},
+		{"invalid utf-8 is rewritten the same way by both", "a\xffb\x80c"},
+		// A lone 0x80 is the first byte the fast path must refuse. With the
+		// comparison one off it is treated as ASCII and returned as itself,
+		// where the rune-by-rune fold turns it into U+FFFD. Every other case
+		// above carries a byte well clear of the boundary and a mutant that
+		// moved the threshold by one survived all of them.
+		{"a lone 0x80, the first byte over the threshold", "a\x80b"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, want := foldLookalikes([]byte(c.in)), foldReference([]byte(c.in))
+			if !bytes.Equal(got, want) {
+				t.Errorf("fold(%q) = %q, the rune-by-rune fold gives %q", c.in, got, want)
+			}
+		})
+	}
+}
+
+// The fast path returns its input untouched, which is only correct because
+// every entry in the table is U+00A0 or above. Nothing in the compiler
+// establishes that, and an entry added below U+0080 would make the fast path
+// silently wrong for exactly the inputs it exists to speed up.
+func TestEveryLookalikeIsNonASCII(t *testing.T) {
+	for from := range lookalikes {
+		if from < utf8.RuneSelf {
+			t.Errorf("U+%04X is ASCII, so foldLookalikes's fast path would skip it", from)
+		}
+	}
+}
+
+// An oldForm shares one copy of old's join and of each normalized form across
+// every span comparison, and foldLookalikes now returns its input unchanged for
+// ASCII, so a normalization that wrote through its argument would corrupt every
+// later comparison rather than only its own. The compiler does not stop one.
+func TestNormalizationsDoNotMutateTheirInput(t *testing.T) {
+	const src = "  a b \t\r\n\tc  \r\n — x\n"
+	for _, n := range normalizations() {
+		t.Run(n.cause, func(t *testing.T) {
+			in := []byte(src)
+			n.apply(in)
+			if string(in) != src {
+				t.Errorf("%s rewrote its argument to %q, want %q", n.cause, in, src)
+			}
+		})
+	}
+}
+
+// The hoist that makes the old side of a span comparison cost once per
+// Diagnose rather than once per candidate (§7.2). It is enforced by the shape,
+// since explain reads o.normed and no code remains that can normalize old
+// inside the loop; what still needs asserting is that what was precomputed is
+// what the loop would otherwise have computed.
+func TestOldFormPrecomputesEveryNormalization(t *testing.T) {
+	lines := splitLines([]byte("  func f() {\n\treturn “x”  \r\n}"))
+	o := newOldForm(lines)
+	if want := bytes.Join(lines, lf); !bytes.Equal(o.joined, want) {
+		t.Errorf("joined = %q, want %q", o.joined, want)
+	}
+	if len(o.norms) == 0 || len(o.normed) != len(o.norms) {
+		t.Fatalf("%d precomputed forms for %d normalizations", len(o.normed), len(o.norms))
+	}
+	for i, n := range o.norms {
+		if want := n.apply(o.joined); !bytes.Equal(o.normed[i], want) {
+			t.Errorf("%s: precomputed %q, want %q", n.cause, o.normed[i], want)
+		}
+	}
+}
+
+// The hoist in newOldForm is a cost property, and cost properties decay
+// silently: undoing it changes no output, so every other test in this file
+// passes with old normalized inside the span loop again. A mutant that did
+// exactly that survived the whole suite, which is why this exists.
+//
+// Diagnose compares one span per candidate, and the work that depends on old
+// rather than on the span is done once for the whole search, so the
+// allocations charged to each candidate must not carry old's five
+// normalizations as well as the span's. Measured at 13.6 per candidate with
+// the hoist and 28.8 without, so 20 separates them with room on both sides.
+//
+// It is a budget rather than a measurement. If a change moves it, decide
+// whether the change is worth it; do not edit the number to match.
+func TestAllocationsPerCandidateSpanStayBudgeted(t *testing.T) {
+	const budget = 20
+	file := []byte(strings.Repeat("}\n", 800))
+	old := []byte(strings.Repeat("}\n", 40) + "zzz")
+	starts, _ := candidateSpans(splitLines(old), splitLines(file))
+	if len(starts) == 0 {
+		t.Fatal("no candidate spans, so the budget would divide by zero")
+	}
+	per := testing.AllocsPerRun(20, func() { Diagnose(old, file, 20) }) / float64(len(starts))
+	if per > budget {
+		t.Errorf("%.1f allocations per candidate span over %d candidates, budget is %d: "+
+			"old is being normalized inside the span loop again (§7.2)", per, len(starts), budget)
+	}
+}
+
+func FuzzFoldLookalikes(f *testing.F) {
+	f.Add("")
+	f.Add("plain ascii source")
+	f.Add("“quoted” and an em dash — here")
+	f.Add("a\xffb")
+	f.Fuzz(func(t *testing.T, s string) {
+		if got, want := foldLookalikes([]byte(s)), foldReference([]byte(s)); !bytes.Equal(got, want) {
+			t.Errorf("fold(%q) = %q, want %q", s, got, want)
+		}
+	})
+}
+
 func TestDiagnoseDegenerateInputs(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -554,10 +687,10 @@ func TestRenderingHelpers(t *testing.T) {
 	// somewhere else and naming a cause here would be inventing one.
 	t.Run("explain declines an exact match", func(t *testing.T) {
 		same := [][]byte{[]byte("a")}
-		if d := explain(same, same, []byte("a\n")); d != nil {
+		if d := newOldForm(same).explain(same, []byte("a\n")); d != nil {
 			t.Errorf("got %+v, want nil", d)
 		}
-		if d := explain(same, [][]byte{[]byte("a"), []byte("b")}, nil); d != nil {
+		if d := newOldForm(same).explain([][]byte{[]byte("a"), []byte("b")}, nil); d != nil {
 			t.Errorf("a length mismatch should not be explained: %+v", d)
 		}
 	})

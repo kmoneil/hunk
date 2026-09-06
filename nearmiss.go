@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // DiagKind is which of §7's shapes a diagnosis is.
@@ -114,9 +115,10 @@ func Diagnose(old, file []byte, maxContext int) *Diagnosis {
 	// §7.1 step 3: the first normalization that makes a candidate span equal to
 	// old wins, and the candidates are ordered by anchor, most distinctive
 	// first.
+	form := newOldForm(oldLines)
 	for _, start := range starts {
 		span := spanAt(fileLines, start, len(oldLines))
-		if d := explain(oldLines, span, file); d != nil {
+		if d := form.explain(span, file); d != nil {
 			d.Line = start + 1
 			d.Span = capSpan(span, maxContext)
 			return d
@@ -336,24 +338,54 @@ func normalizations() []normalization {
 	}
 }
 
+// An oldForm is old prepared for comparison: its lines, their join, and that
+// join under each normalization.
+//
+// Diagnose compares one span per candidate and there can be one candidate per
+// line of the file, so anything computed from old inside that loop is paid for
+// once per line of the file. An earlier explain rebuilt the join, allocated a
+// fresh normalizations() slice, and applied all five normalizations to old on
+// every span, which was half the work of a search whose cost is already the
+// file times the length of old (§7.2). Hoisting it here is enforced by the
+// shape rather than by care: there is no longer any code that can normalize
+// old inside the span loop.
+//
+// joined and normed are shared across every comparison, so no normalization may
+// write through its argument. None does, and TestNormalizationsDoNotMutateTheirInput
+// is the assertion rather than this sentence.
+type oldForm struct {
+	lines  [][]byte
+	joined []byte
+	norms  []normalization
+	normed [][]byte
+}
+
+func newOldForm(oldLines [][]byte) *oldForm {
+	o := &oldForm{lines: oldLines, joined: bytes.Join(oldLines, lf), norms: normalizations()}
+	o.normed = make([][]byte, len(o.norms))
+	for i, n := range o.norms {
+		o.normed[i] = n.apply(o.joined)
+	}
+	return o
+}
+
 // explain runs §7.1 step 3, stopping at the first normalization that makes the
 // span equal to old.
-func explain(oldLines, span [][]byte, file []byte) *Diagnosis {
-	if len(oldLines) != len(span) {
+func (o *oldForm) explain(span [][]byte, file []byte) *Diagnosis {
+	if len(o.lines) != len(span) {
 		return nil
 	}
-	o := bytes.Join(oldLines, lf)
 	s := bytes.Join(span, lf)
-	if bytes.Equal(o, s) {
+	if bytes.Equal(o.joined, s) {
 		return nil // it matches here; the miss is elsewhere
 	}
-	for _, n := range normalizations() {
-		if bytes.Equal(n.apply(o), n.apply(s)) {
+	for i, n := range o.norms {
+		if bytes.Equal(o.normed[i], n.apply(s)) {
 			return &Diagnosis{
 				Kind:     DiagNamed,
 				Cause:    n.cause,
 				Headline: n.headline,
-				Detail:   n.detail(oldLines, span, file),
+				Detail:   n.detail(o.lines, span, file),
 			}
 		}
 	}
@@ -424,7 +456,22 @@ var lookalikes = map[rune]rune{
 	'\u2212': '-', // minus sign
 }
 
+// Every entry in the table is U+00A0 or above, so a lookalike always encodes
+// with its high bit set and no ASCII byte can be one. Source is overwhelmingly
+// ASCII, and this runs once per file line in anchorKey and once per candidate
+// span in explain, so the scan that proves there is nothing to fold is worth
+// more than the decode and rebuild it saves. It was 47% of explain and the
+// whole of the map lookup that was 17% of BenchmarkDiagnose.
+//
+// On that path it returns b itself rather than a copy. Nothing writes through
+// the result: anchorKey passes it to collapseSpace, which allocates, and the
+// normalizations only compare. An oldForm shares one copy of each normalized
+// form across every span comparison, so a caller that did write through it
+// would corrupt every later comparison rather than just its own.
 func foldLookalikes(b []byte) []byte {
+	if isASCII(b) {
+		return b
+	}
 	var out bytes.Buffer
 	for _, r := range string(b) {
 		if to, ok := lookalikes[r]; ok {
@@ -434,6 +481,15 @@ func foldLookalikes(b []byte) []byte {
 		out.WriteRune(r)
 	}
 	return out.Bytes()
+}
+
+func isASCII(b []byte) bool {
+	for _, c := range b {
+		if c >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 func detailTrailing(oldLines, span [][]byte, _ []byte) string {
