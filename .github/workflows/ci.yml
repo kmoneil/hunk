@@ -1,0 +1,180 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # go.mod pins a patch version and this does not, so the runner fetches
+  # whatever 1.26.x the module asks for. That indirection is load-bearing here:
+  # the go directive is at 1.26.8 because GO-2026-4970 was a root escape via
+  # symlink in os.Root, which is precisely the mechanism paths.go uses to
+  # confine every write to --root. Pinning the patch in two places would let
+  # one of them drift below the fix.
+  GO_VERSION: "1.26"
+
+jobs:
+  check:
+    name: format, vet, lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # Every tool is installed at the version the Makefile declares, read from
+      # the Makefile rather than written here as well. Two places that agree
+      # are two places until the day somebody moves one.
+      - name: gofumpt
+        run: |
+          go install mvdan.cc/gofumpt@$(make -s print-GOFUMPT_VERSION)
+          make fmt-check
+      - name: vet
+        run: make vet
+      - name: golangci-lint version
+        id: golangci
+        run: echo "version=$(make -s print-GOLANGCI_LINT_VERSION)" >> "$GITHUB_OUTPUT"
+      # The action rather than `go install`, which would build the linter from
+      # source on every pull request. The action fetches a released binary and
+      # caches it.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ steps.golangci.outputs.version }}
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Three operating systems, because this tool's whole job is filesystem
+        # work and the parts most likely to diverge are the parts it relies on:
+        # os.Root confinement, symlink resolution, file modes, O_EXCL temp
+        # creation and rename(2). The suite tests those against a real
+        # filesystem rather than a mock, on purpose, which is exactly what
+        # makes running it somewhere else worth the minutes.
+        #
+        # macOS and Windows are not required checks yet. The README said they
+        # were untested and this is how that stops being true; whichever of
+        # them goes green becomes required, and whichever does not gets an
+        # issue rather than a quiet exclusion.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # go test directly rather than through make: the runners do not all have
+      # a usable make, and the Makefile's shell recipes assume a POSIX one.
+      - name: test
+        run: go test -race -count=1 -timeout=300s ./...
+
+  gates:
+    name: dependency and network gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # Its own job because these are the claims the README makes that a reader
+      # cannot check, and they are held by a grep and two tests rather than by
+      # the compiler. "Standard library only" survives exactly as long as
+      # nobody runs `go get`.
+      - name: go.mod declares no requirements and go.sum is empty
+        run: make gates
+      - name: the import graph reaches no network package, and the parser no files
+        run: go test -run='TestNoNetworkDependency|TestParserHasNoFileAccess' -v .
+
+  corpus:
+    name: corpus module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # A separate module on purpose: it is not part of the binary and must not
+      # appear in hunk's import graph or its dependency gate. It holds the
+      # classifier the published adoption figures rest on, and that classifier
+      # has been wrong twice, both times after its numbers had been reported.
+      - name: test
+        run: cd scripts/corpus && go vet ./... && go test -count=1 ./...
+
+  vuln:
+    name: vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # There are no dependencies, so everything this can find is in the
+      # standard library the module builds against. That is the reason to run
+      # it, not a reason to skip it, and this repository has the receipt: the
+      # first run found a live root escape in os.Root.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@$(make -s print-GOVULNCHECK_VERSION)
+          make vuln
+
+  size:
+    name: size budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # A tripwire rather than a target. An embed, a dependency or a large
+      # generated table would move this and nothing else in the gate would say
+      # anything.
+      - name: the binary stays under budget
+        run: make size
+
+  # The fuzz sweep does not run on a pull request.
+  #
+  # The regression half already runs inside `test`: `go test` replays every
+  # seed and every crasher ever committed under testdata/fuzz, deterministically
+  # and with no fuzzing budget. That is what stops a fixed bug coming back and
+  # it is the half worth blocking a merge on.
+  #
+  # What is left is discovery, and discovery scales with cumulative CPU against
+  # a corpus that persists, not with the length of any one run. It runs here
+  # after a merge, and properly in fuzz-nightly.yml.
+  fuzz:
+    name: fuzz
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: locate the fuzz cache
+        id: gocache
+        run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+      # Go keeps the generated corpus in $GOCACHE/fuzz. Without this every run
+      # starts from the seeds alone and spends its budget re-deriving the same
+      # shallow coverage. The key rotates per run so a run that finds new inputs
+      # saves them; restore-keys falls back to the most recent corpus, which is
+      # whatever the nightly left behind.
+      - name: restore the fuzz corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - name: sweep every target
+        run: make fuzz FUZZTIME=20s
+      - name: upload any crashers
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: crashers
+          path: "**/testdata/fuzz/"
+          if-no-files-found: warn

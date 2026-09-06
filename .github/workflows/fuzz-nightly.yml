@@ -1,0 +1,139 @@
+# The fuzz search, kept off the pull-request path on purpose.
+#
+# ci.yml runs 20 seconds a target after a merge, which exercises the machinery
+# against the code that just changed. This is where discovery actually happens:
+# 10 minutes a target, every night, against a corpus that carries over from the
+# run before, because coverage compounds with cumulative CPU time and not with
+# the length of any one run.
+#
+# It is scheduled rather than required for the same reason it is long. A find
+# here is usually about code the last pull request never touched, and a
+# nondeterministic red on somebody's unrelated merge teaches people to press
+# re-run, which is how a real crasher gets waved through. So a find opens an
+# issue and keeps the input; it does not block a queue.
+#
+# This project has the receipt for why the sweep is worth running: an empty
+# needle made bytes.Index return 0 forever and the scan never advance, and it
+# was a fuzz seed that hung the whole suite rather than a reader who noticed.
+name: fuzz-nightly
+
+on:
+  schedule:
+    # 07:23 UTC. Off the hour because every cron in the world runs on it, and a
+    # queued runner is a shorter fuzz run.
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: time budget per target
+        required: false
+        default: 10m
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  targets:
+    name: list the fuzz targets
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # Discovered rather than listed, and by the Makefile rather than here.
+      # A hand-written list goes stale the moment somebody adds a target, and
+      # the ones it skipped look exactly like ones that passed.
+      - name: list
+        id: list
+        run: |
+          targets=$(make -s fuzz-targets | jq -R . | jq -sc .)
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "$targets"
+
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    needs: targets
+    runs-on: ubuntu-latest
+    strategy:
+      # No fail-fast: each target is an independent hunt, and killing the
+      # others because one found something throws away the night.
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: locate the fuzz cache
+        id: gocache
+        run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+      # The same key prefix ci.yml uses, deliberately. This runs on the default
+      # branch, and a cache written there is readable from every pull request,
+      # so what the night finds is what tomorrow's short runs start from.
+      - name: restore the fuzz corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - name: fuzz
+        run: make fuzz FUZZTARGET=${{ matrix.target }} FUZZTIME=${{ inputs.fuzztime || '10m' }}
+      # The input Go wrote is the whole value of the run. It gets committed by
+      # hand as an f.Add seed alongside the fix, so it has to survive the
+      # runner: an artifact, and an issue that says where to find it.
+      - name: upload the crasher
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: crasher-${{ matrix.target }}
+          path: testdata/fuzz/
+          if-no-files-found: warn
+
+  report:
+    name: report a find
+    needs: fuzz
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # One issue per run rather than one per target, because a crasher in a
+      # shared helper lights up several at once and several issues describing
+      # one bug is worse than one issue naming them all.
+      - name: open an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "fuzz: the nightly sweep found something" \
+            --body "$(printf '%s\n' \
+              "The nightly fuzz sweep failed on ${{ github.sha }}." \
+              "" \
+              "Run: $RUN" \
+              "" \
+              "The failing input is attached to that run as an artifact. Commit it" \
+              "under testdata/fuzz **and** add it as an \`f.Add\` seed in the same" \
+              "change, so the regression is visible in the test source and not only" \
+              "in a corpus file." \
+              "" \
+              "A panic is the obvious find and not the only one. These targets also" \
+              "assert properties, and a property failure matters more: that a batch" \
+              "is all-or-nothing, that a resolved path stays inside the root, that" \
+              "\\\"no anchor found\\\" is only said when no line of old is anywhere in" \
+              "the file, and that the ASCII fold agrees with the rune-by-rune one." \
+              "A wrong refusal and a missing refusal are both defects here." \
+              "" \
+              "If the target is FuzzResolveStaysInsideTheRoot, treat it as a" \
+              "containment failure until proven otherwise and check govulncheck" \
+              "before assuming the bug is ours: GO-2026-4970 was a root escape in" \
+              "os.Root itself.")"

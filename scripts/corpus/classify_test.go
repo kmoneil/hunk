@@ -188,8 +188,10 @@ func fixtureCorpus(t *testing.T) string {
 		return string(b) + "\n"
 	}
 	use := func(id, name, cmd string) map[string]any {
-		return map[string]any{"type": "tool_use", "id": id, "name": name,
-			"input": map[string]any{"command": cmd}}
+		return map[string]any{
+			"type": "tool_use", "id": id, "name": name,
+			"input": map[string]any{"command": cmd},
+		}
 	}
 	res := func(id, out string) map[string]any {
 		return map[string]any{"type": "tool_result", "tool_use_id": id, "content": out}
@@ -314,11 +316,15 @@ func TestHunkExit(t *testing.T) {
 		{"nor is an exit code too large to be one", "hunk --json -f p", "{\n  \"exit\": 99999999999999999999,\n}\n", ExitUnclassified},
 		// is_error would have said "success" for this one, which is why it is
 		// not consulted: the shell's status is the echo's, not hunk's.
-		{"the exit is read from the text, not from the shell's status",
-			"hunk -f p; echo \"exit=$?\"", "hunk: 1 hunk did not match; nothing was written\nexit=2\n", 2},
+		{
+			"the exit is read from the text, not from the shell's status",
+			"hunk -f p; echo \"exit=$?\"", "hunk: 1 hunk did not match; nothing was written\nexit=2\n", 2,
+		},
 		// The verify's own output is agent-written text in the same result.
-		{"a verify that prints the word rolled back does not become exit 3",
-			"hunk -f p", "M a.go +1 -1\n1 file, 1 hunk, +1 -1, verify ok\n  note: applied 4 hunks, verify failed\n", 0},
+		{
+			"a verify that prints the word rolled back does not become exit 3",
+			"hunk -f p", "M a.go +1 -1\n1 file, 1 hunk, +1 -1, verify ok\n  note: applied 4 hunks, verify failed\n", 0,
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := HunkExit(c.cmd, c.result); got != c.want {
@@ -464,8 +470,10 @@ func TestResultText(t *testing.T) {
 		raw  string
 		want string
 	}{
-		{"a plain string, with its escapes undone", `"hunk: 1 hunk did not match\nnothing was written"`,
-			"hunk: 1 hunk did not match\nnothing was written"},
+		{
+			"a plain string, with its escapes undone", `"hunk: 1 hunk did not match\nnothing was written"`,
+			"hunk: 1 hunk did not match\nnothing was written",
+		},
 		{"a list of blocks, joined", `[{"type":"text","text":"a\n"},{"type":"text","text":"b"}]`, "a\nb"},
 		{"an empty list", `[]`, ""},
 		{"null", `null`, ""},
@@ -545,8 +553,10 @@ func fixtureHunkCorpus(t *testing.T) string {
 		return string(b) + "\n"
 	}
 	use := func(id, cmd string) map[string]any {
-		return map[string]any{"type": "tool_use", "id": id, "name": "Bash",
-			"input": map[string]any{"command": cmd}}
+		return map[string]any{
+			"type": "tool_use", "id": id, "name": "Bash",
+			"input": map[string]any{"command": cmd},
+		}
 	}
 	res := func(id, out string) map[string]any {
 		return map[string]any{"type": "tool_result", "tool_use_id": id, "content": out}

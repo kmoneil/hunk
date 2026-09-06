@@ -1,0 +1,51 @@
+#!/bin/sh
+# Pre-commit gate. Install with: make hooks
+#
+# Never bypass this with --no-verify. If a check is wrong, fix the check.
+#
+# The order is cheapest-first, so a formatting slip fails in under a second
+# rather than after the suite. The dependency gate sits early for the same
+# reason and because it is the one this project would be embarrassed to break:
+# "standard library only" is a promise the compiler does not keep, and a stray
+# `go get` writes go.mod without anyone deciding to.
+set -e
+
+echo "pre-commit: gofumpt"
+unformatted=$(gofumpt -l . 2>/dev/null | grep -v '^skills/[^/]*-workspace/' || true)
+if [ -n "$unformatted" ]; then
+	echo "not formatted:"
+	printf '%s\n' "$unformatted" | sed 's/^/  /'
+	echo "run: make fmt"
+	exit 1
+fi
+
+echo "pre-commit: go vet"
+go vet ./...
+
+echo "pre-commit: golangci-lint"
+golangci-lint config verify
+golangci-lint run ./...
+
+echo "pre-commit: dependency gate"
+make -s gates
+
+# The suite is where this project's real assertions live, and two of them are
+# structural rather than behavioural: TestNoNetworkDependency walks the
+# transitive import graph, and TestParserHasNoFileAccess does the same for the
+# parser. Both fail on an import nobody meant to add, which is a thing you want
+# to hear about before the commit rather than after the push.
+#
+# It also replays every fuzz seed and every committed crasher, deterministically
+# and with no fuzzing budget. That is the regression half of fuzzing and it is
+# nearly free; discovery runs in CI.
+echo "pre-commit: go test"
+go test -count=1 -timeout=180s ./...
+
+# Its own line because it is a separate module on purpose: scripts/corpus is not
+# part of the binary and must not appear in hunk's import graph or its
+# dependency gate. It still holds the classifier the published adoption figures
+# rest on, and that classifier has been wrong twice.
+echo "pre-commit: corpus module"
+(cd scripts/corpus && go vet ./... && go test -count=1 ./...)
+
+echo "pre-commit: ok"

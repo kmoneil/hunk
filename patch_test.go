@@ -17,8 +17,10 @@ func hunkEqual(a, b Hunk) bool {
 // rep builds an expected replace hunk. new is spelled repl because new is a
 // builtin.
 func rep(path string, line, count int, old, repl string) Hunk {
-	return Hunk{Op: OpReplace, Path: path, Line: line, Count: count,
-		Old: []byte(old), New: []byte(repl)}
+	return Hunk{
+		Op: OpReplace, Path: path, Line: line, Count: count,
+		Old: []byte(old), New: []byte(repl),
+	}
 }
 
 func body(op Op, path string, line int, b string) Hunk {

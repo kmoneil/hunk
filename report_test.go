@@ -426,18 +426,40 @@ func TestTheTrivialPatchNote(t *testing.T) {
 		args  []string
 		want  bool
 	}{
-		{"one replacement, one file, no verify", map[string]string{"v.go": "0.3.1\n"},
-			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n", nil, true},
-		{"a verify was riding on it", map[string]string{"v.go": "0.3.1\n"},
-			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n", []string{"--verify", "true"}, false},
-		{"two occurrences, which no single Edit does safely", map[string]string{"a.txt": "x\nx\n"},
-			"@@ file a.txt\n@@ old x2\nx\n@@ new\ny\n", nil, false},
-		{"two hunks", map[string]string{"a.txt": "one\ntwo\n"},
-			"@@ file a.txt\n@@ old\none\n@@ new\nONE\n@@ old\ntwo\n@@ new\nTWO\n", nil, false},
-		{"two files", map[string]string{"a.txt": "x\n", "b.txt": "y\n"},
-			"@@ file a.txt\n@@ old\nx\n@@ new\nX\n@@ file b.txt\n@@ old\ny\n@@ new\nY\n", nil, false},
-		{"a dry run is not an apply", map[string]string{"v.go": "0.3.1\n"},
-			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n", []string{"--dry-run"}, false},
+		{
+			"one replacement, one file, no verify",
+			map[string]string{"v.go": "0.3.1\n"},
+			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n", nil, true,
+		},
+		{
+			"a verify was riding on it",
+			map[string]string{"v.go": "0.3.1\n"},
+			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n",
+			[]string{"--verify", "true"},
+			false,
+		},
+		{
+			"two occurrences, which no single Edit does safely",
+			map[string]string{"a.txt": "x\nx\n"},
+			"@@ file a.txt\n@@ old x2\nx\n@@ new\ny\n", nil, false,
+		},
+		{
+			"two hunks",
+			map[string]string{"a.txt": "one\ntwo\n"},
+			"@@ file a.txt\n@@ old\none\n@@ new\nONE\n@@ old\ntwo\n@@ new\nTWO\n", nil, false,
+		},
+		{
+			"two files",
+			map[string]string{"a.txt": "x\n", "b.txt": "y\n"},
+			"@@ file a.txt\n@@ old\nx\n@@ new\nX\n@@ file b.txt\n@@ old\ny\n@@ new\nY\n", nil, false,
+		},
+		{
+			"a dry run is not an apply",
+			map[string]string{"v.go": "0.3.1\n"},
+			"@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.2\n",
+			[]string{"--dry-run"},
+			false,
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := cliTree(t, c.files)

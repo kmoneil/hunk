@@ -107,8 +107,10 @@ func ExitCode(err error) int {
 
 // NewReport assembles what the renderers take.
 func NewReport(res *Result, err error, v *Verify, dryRun bool, hunks int) *Report {
-	r := &Report{Result: res, Verify: v, Err: err, DryRun: dryRun, Hunks: hunks,
-		Exit: ExitCode(err)}
+	r := &Report{
+		Result: res, Verify: v, Err: err, DryRun: dryRun, Hunks: hunks,
+		Exit: ExitCode(err),
+	}
 	var ve *ValidationError
 	if errors.As(err, &ve) {
 		r.Failures = ve.Failures
@@ -387,16 +389,20 @@ func (r *Report) JSON(w io.Writer) error {
 		}
 	}
 	if v := r.Verify; v != nil {
-		jv := &jsonVerify{Ran: v.Ran, OK: v.OK, Seconds: v.Seconds, Command: v.Command,
-			Output: v.Tail, RolledBack: v.RolledBack, Kept: v.Kept}
+		jv := &jsonVerify{
+			Ran: v.Ran, OK: v.OK, Seconds: v.Seconds, Command: v.Command,
+			Output: v.Tail, RolledBack: v.RolledBack, Kept: v.Kept,
+		}
 		for _, n := range v.NotRestored {
 			jv.NotRestored = append(jv.NotRestored, jsonRestore{n.Path, n.Reason})
 		}
 		out.Verify = jv
 	}
 	for _, f := range r.Failures {
-		jf := jsonFailure{Hunk: f.Hunk, Path: f.Path, PatchLine: f.PatchLine,
-			Expected: f.Expected, SkippedAfter: f.SkippedAfter, Refusal: f.Refusal}
+		jf := jsonFailure{
+			Hunk: f.Hunk, Path: f.Path, PatchLine: f.PatchLine,
+			Expected: f.Expected, SkippedAfter: f.SkippedAfter, Refusal: f.Refusal,
+		}
 		if !f.Skipped() && f.Refusal == "" {
 			found := f.Found
 			jf.Found = &found
@@ -405,8 +411,10 @@ func (r *Report) JSON(w io.Writer) error {
 			if d.Kind == DiagTooMany {
 				jf.Lines = d.Lines
 			} else if d.Kind != DiagNoAnchor {
-				jf.NearMiss = &jsonNear{Cause: d.causeName(), Line: d.Line,
-					Span: string(joinLines(d.Span)), Detail: d.Detail, Shifted: d.Shifted}
+				jf.NearMiss = &jsonNear{
+					Cause: d.causeName(), Line: d.Line,
+					Span: string(joinLines(d.Span)), Detail: d.Detail, Shifted: d.Shifted,
+				}
 			} else {
 				jf.NearMiss = &jsonNear{Cause: d.causeName()}
 			}

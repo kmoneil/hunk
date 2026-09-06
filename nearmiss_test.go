@@ -175,9 +175,11 @@ func TestThePrintedSpanCanBePastedBack(t *testing.T) {
 		{"an em dash", "a — b\n", "a - b"},
 		// §5.2's own fallback example: a multi-line old whose first line
 		// anchors and whose third line has the typo.
-		{"a typo, where no normalization explains it",
+		{
+			"a typo, where no normalization explains it",
 			"func f() {\n\tif s == nil {\n\t\treturn s.project, nil\n\t}\n",
-			"func f() {\n\tif s == nil {\n\t\treturn s.projet, nil\n\t}"},
+			"func f() {\n\tif s == nil {\n\t\treturn s.projet, nil\n\t}",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -342,9 +344,11 @@ func TestNormalizations(t *testing.T) {
 		// Written with escapes on purpose: a literal no-break space in a test is
 		// a character nobody can count, which is the whole reason this
 		// normalization exists.
-		{"foldLookalikes folds the whole table", foldLookalikes,
+		{
+			"foldLookalikes folds the whole table", foldLookalikes,
 			"\u00a0\u2018\u2019\u201c\u201d\u2013\u2014\u2212\u2007\u202f",
-			" ''\"\"---  "},
+			" ''\"\"---  ",
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := string(c.fn([]byte(c.in))); got != c.equal {

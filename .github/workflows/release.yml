@@ -1,0 +1,111 @@
+# A tag is the release. For a Go module it is worse than irreversible: the
+# module proxy fetches the tag once and serves that content forever, so a bad
+# v0.2.0 cannot be replaced, only superseded by v0.2.1.
+#
+# So this re-runs the full gate on the tagged commit rather than trusting that
+# it was green on main. The commit that gets tagged is usually one somebody
+# tested; the commit that gets *published* is whatever the tag points at.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # A manual run, so this file can be exercised without spending a version
+  # number to find out whether it works. A dispatch releases nothing: `publish`
+  # is guarded on the ref being a v* tag, so on a dispatch that job never
+  # starts, no release is created, and nothing reaches the module proxy, which
+  # only ever sees tags.
+  workflow_dispatch:
+
+# Read at the workflow level, write on the one job that publishes. Every job
+# inherits a workflow-level permission, so a token is scoped where it is used
+# or it is scoped everywhere.
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  gate:
+    name: the full gate, on the tagged commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: install the pinned tools
+        run: |
+          go install mvdan.cc/gofumpt@$(make -s print-GOFUMPT_VERSION)
+          go install golang.org/x/vuln/cmd/govulncheck@$(make -s print-GOVULNCHECK_VERSION)
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(make -s print-GOLANGCI_LINT_VERSION)
+      # Everything except the fuzz sweep, whose verdict is a matter of luck and
+      # timing and should not decide whether a release happens.
+      - name: gate
+        run: make fmt-check vet lint gates test corpus-test vuln size
+
+  build:
+    name: build the binaries
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # linux and darwin only, and that is a claim rather than an omission:
+      # those are the platforms ci.yml runs the suite on. A Windows binary
+      # published here would be the one artifact nothing had executed, and this
+      # tool's whole surface is filesystem semantics. Windows users can
+      # `go install`, which builds from source and says so.
+      #
+      # CGO off so each is a static binary, which is what the README promises.
+      - name: build
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+              go build -trimpath -o "dist/hunk-$os-$arch" .
+          done
+          cd dist && sha256sum hunk-* > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: binaries
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    # Where a manual run stops. Guarded at the job and not at the step, so the
+    # job never starts rather than starting and skipping its last thing: a
+    # write token that is never minted cannot be misused by anything running
+    # beside it.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # The only job that writes anything, and the only one running a
+    # third-party action.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: binaries
+          path: dist
+      # `prerelease` defaults to false and the action does not infer it, so a
+      # v0.2.0-rc.1 would publish as an ordinary release and GitHub would mark
+      # it the latest one, which is the version a reader is told to use. A
+      # hyphen is exactly what separates a semver prerelease from a release, so
+      # that is the test.
+      - name: create the GitHub release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/hunk-*
+            dist/SHA256SUMS

@@ -290,8 +290,10 @@ func requireState(f *file, h Hunk, root string) *PathRefusal {
 	present := (f.existed || f.created) && !f.deleted
 	if h.Op == OpCreate {
 		if present {
-			return &PathRefusal{Path: h.Path, Root: root,
-				Reason: "it already exists; delete it first in the same batch to replace it wholesale"}
+			return &PathRefusal{
+				Path: h.Path, Root: root,
+				Reason: "it already exists; delete it first in the same batch to replace it wholesale",
+			}
 		}
 		return nil
 	}
@@ -299,11 +301,15 @@ func requireState(f *file, h Hunk, root string) *PathRefusal {
 		return nil
 	}
 	if f.deleted {
-		return &PathRefusal{Path: h.Path, Root: root,
-			Reason: "an earlier hunk in this batch deleted it"}
+		return &PathRefusal{
+			Path: h.Path, Root: root,
+			Reason: "an earlier hunk in this batch deleted it",
+		}
 	}
-	return &PathRefusal{Path: h.Path, Root: root,
-		Reason: "no such file; only " + DefaultMarker + " create makes one"}
+	return &PathRefusal{
+		Path: h.Path, Root: root,
+		Reason: "no such file; only " + DefaultMarker + " create makes one",
+	}
 }
 
 func (x *Txn) load(h Hunk) (*file, error) {
@@ -320,8 +326,10 @@ func (x *Txn) load(h Hunk) (*file, error) {
 	fi, err := x.tree.Stat(tg)
 	switch {
 	case err == nil && fi.IsDir():
-		return nil, &PathRefusal{Path: h.Path, Root: x.tree.Root(),
-			Reason: "it is a directory, not a file"}
+		return nil, &PathRefusal{
+			Path: h.Path, Root: x.tree.Root(),
+			Reason: "it is a directory, not a file",
+		}
 	case err == nil:
 		b, readErr := x.tree.ReadFile(tg)
 		if readErr != nil {
@@ -368,8 +376,10 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			// Load's classification is per hunk, because the same path can be
 			// legally absent for one hunk and present for the next.
 			f.failedAt = n
-			failures = append(failures, Failure{Hunk: n, Path: h.Path, PatchLine: h.Line,
-				Refusal: err.Reason})
+			failures = append(failures, Failure{
+				Hunk: n, Path: h.Path, PatchLine: h.Line,
+				Refusal: err.Reason,
+			})
 			continue
 		}
 		if f.failedAt != 0 {
@@ -640,7 +650,8 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored)
 			}
 			if err := x.tree.Remove(f.target); err != nil {
 				notRestored = append(notRestored, NotRestored{
-					Path: f.target.Orig(), Reason: "It could not be removed: " + err.Error()})
+					Path: f.target.Orig(), Reason: "It could not be removed: " + err.Error(),
+				})
 				continue
 			}
 			// Deepest first, stopping at the first that is not empty.
@@ -668,7 +679,8 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored)
 			}
 			if err := x.tree.WriteAtomic(f.target, f.orig, f.mode); err != nil {
 				notRestored = append(notRestored, NotRestored{
-					Path: f.target.Orig(), Reason: "It could not be written: " + err.Error()})
+					Path: f.target.Orig(), Reason: "It could not be written: " + err.Error(),
+				})
 				continue
 			}
 			restored++

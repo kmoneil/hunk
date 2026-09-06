@@ -235,7 +235,9 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "hunk: %v\n", err)
 		return exitIO
 	}
-	defer tree.Close()
+	// The root descriptor goes away with the process either way, and a close
+	// error here has nothing left to report it to.
+	defer func() { _ = tree.Close() }()
 
 	txn := NewTxn(tree, opt)
 	var res *Result

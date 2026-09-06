@@ -83,7 +83,10 @@ func OpenTree(root string, allowOutside bool) (*Tree, error) {
 	if err != nil {
 		return nil, err
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+	// Deliberately named apart from the err above: a failure to resolve is not
+	// an error here, it means the root is not a symlink and abs already stands.
+	// Shadowing err said the same thing less clearly and govet flagged it.
+	if resolved, linkErr := filepath.EvalSymlinks(abs); linkErr == nil {
 		abs = resolved
 	}
 	t := &Tree{root: abs}
@@ -141,15 +144,19 @@ func (t *Tree) toName(p string) (string, error) {
 		// §6.5: absolute paths are allowed only under the root.
 		rel, err := filepath.Rel(t.root, filepath.Clean(p))
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "", &PathRefusal{Path: p, Root: t.root,
-				Reason: "an absolute path is allowed only under the root"}
+			return "", &PathRefusal{
+				Path: p, Root: t.root,
+				Reason: "an absolute path is allowed only under the root",
+			}
 		}
 		return rel, nil
 	}
 	clean := filepath.Clean(p)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", &PathRefusal{Path: p, Root: t.root, Resolved: clean,
-			Reason: "the path climbs out of the root"}
+		return "", &PathRefusal{
+			Path: p, Root: t.root, Resolved: clean,
+			Reason: "the path climbs out of the root",
+		}
 	}
 	return clean, nil
 }
@@ -168,8 +175,10 @@ func (t *Tree) followFinalLink(orig, name string) (string, bool, error) {
 	via := false
 	for hop := 0; ; hop++ {
 		if hop >= maxLinkHops {
-			return "", false, &PathRefusal{Path: orig, Root: t.root, Resolved: name,
-				Reason: "too many symlinks; the chain loops or is absurd"}
+			return "", false, &PathRefusal{
+				Path: orig, Root: t.root, Resolved: name,
+				Reason: "too many symlinks; the chain loops or is absurd",
+			}
 		}
 		fi, err := t.lstat(name)
 		if err != nil {
@@ -189,8 +198,10 @@ func (t *Tree) followFinalLink(orig, name string) (string, bool, error) {
 		}
 		dest, err := t.readlink(name)
 		if err != nil {
-			return "", false, &PathRefusal{Path: orig, Root: t.root, Resolved: name,
-				Reason: "the symlink could not be read: " + err.Error()}
+			return "", false, &PathRefusal{
+				Path: orig, Root: t.root, Resolved: name,
+				Reason: "the symlink could not be read: " + err.Error(),
+			}
 		}
 		via = true
 		next, err := t.relinkTarget(orig, name, dest)
@@ -214,16 +225,20 @@ func (t *Tree) relinkTarget(orig, link, dest string) (string, error) {
 		// The case os.Root refuses outright even when it stays inside.
 		rel, err := filepath.Rel(t.root, filepath.Clean(dest))
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "", &PathRefusal{Path: orig, Root: t.root, Resolved: dest,
-				Reason: "it is a symlink out of the root"}
+			return "", &PathRefusal{
+				Path: orig, Root: t.root, Resolved: dest,
+				Reason: "it is a symlink out of the root",
+			}
 		}
 		return rel, nil
 	}
 	joined := filepath.Join(filepath.Dir(link), dest)
 	if joined == ".." || strings.HasPrefix(joined, ".."+string(filepath.Separator)) {
-		return "", &PathRefusal{Path: orig, Root: t.root,
+		return "", &PathRefusal{
+			Path: orig, Root: t.root,
 			Resolved: filepath.Join(t.root, filepath.Dir(link), dest),
-			Reason:   "it is a symlink out of the root"}
+			Reason:   "it is a symlink out of the root",
+		}
 	}
 	return joined, nil
 }
@@ -236,10 +251,12 @@ func (t *Tree) refusalFor(orig, name string, err error) *PathRefusal {
 		return nil
 	}
 	if strings.Contains(err.Error(), "escapes from parent") {
-		return &PathRefusal{Path: orig, Root: t.root, Resolved: name,
+		return &PathRefusal{
+			Path: orig, Root: t.root, Resolved: name,
 			Reason: "it leaves the root, through a symlink or a parent reference; " +
 				"an absolute symlink in a parent directory is refused even when its target is inside, " +
-				"and --allow-outside-root lifts both"}
+				"and --allow-outside-root lifts both",
+		}
 	}
 	return nil
 }
@@ -355,7 +372,7 @@ func (t *Tree) WriteAtomic(tg Target, data []byte, mode fs.FileMode) (err error)
 	// returns ErrClosed and is harmless.
 	defer func() {
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			t.removeName(tmp)
 		}
 	}()
@@ -403,10 +420,13 @@ func (t *Tree) rename(from, to string) error {
 	return t.r.Rename(from, to)
 }
 
+// removeName deletes the temp file a failed write left behind. Best effort on
+// purpose: the write is already returning its own error, and a cleanup failure
+// stacked on top of it is not the one worth reporting.
 func (t *Tree) removeName(name string) {
 	if t.r == nil {
-		os.Remove(name)
+		_ = os.Remove(name)
 		return
 	}
-	t.r.Remove(name)
+	_ = t.r.Remove(name)
 }

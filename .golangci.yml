@@ -1,0 +1,57 @@
+# golangci-lint v2 schema. The key names matter more than they look: an unknown
+# top-level key is ignored rather than rejected by `golangci-lint run`, so a v1
+# name under `version: "2"` silently disables whatever it was configuring. That
+# happened in a sibling repository and nothing said so, which is why `make lint`
+# runs `golangci-lint config verify` before it runs anything else.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: false
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - unused
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        # Reordering fields for padding would fight the struct comments, which
+        # group fields by what they mean. Nothing here is allocated in numbers
+        # where the padding is measurable.
+        - fieldalignment
+    errcheck:
+      # A report is rendered into a bytes.Buffer or an os.File the caller
+      # already owns, and there is nothing useful to do with the error from a
+      # single Fprintf in the middle of one: the write either lands or the
+      # caller's writer is already broken. Checking all 51 of them would put
+      # error handling into the code whose exact output is a goldened contract,
+      # for no behaviour change.
+      #
+      # This is an exclusion for the print family only. Every other unchecked
+      # error, and in particular every one on the write path in paths.go, is
+      # still a finding.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*strings.Builder).WriteString
+        - (*bytes.Buffer).WriteString
+  exclusions:
+    paths:
+      # Gitignored working directories. They hold no Go this module builds.
+      - _plans
+      - _tmp
+      - _reviews
+      - _reports
+      # Eval fixtures include deliberately unformatted and deliberately broken
+      # Go, because one eval case is about a verify command that reformats.
+      - skills
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -108,8 +108,10 @@ func Diagnose(old, file []byte, maxContext int) *Diagnosis {
 		// The one line that did match is the whole report: it is where the
 		// agent has to look, and its number is what says how far old overhangs
 		// the top of the file.
-		return &Diagnosis{Kind: DiagNoRoom, Line: high.file + 1, DiffLine: high.old + 1,
-			Span: capSpan(spanAt(fileLines, high.file, 1), maxContext)}
+		return &Diagnosis{
+			Kind: DiagNoRoom, Line: high.file + 1, DiffLine: high.old + 1,
+			Span: capSpan(spanAt(fileLines, high.file, 1), maxContext),
+		}
 	}
 
 	// §7.1 step 3: the first normalization that makes a candidate span equal to
