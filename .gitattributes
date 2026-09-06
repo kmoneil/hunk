@@ -1,0 +1,21 @@
+# Line endings, and why this file has to exist.
+#
+# The failure messages are this tool's product and they are held byte-for-byte
+# by goldens in testdata/. On a Windows checkout with the default core.autocrlf,
+# git rewrites those goldens to CRLF on the way out, the tool still renders LF,
+# and fourteen golden tests fail with "that is a contract change, not a diff to
+# regenerate" about a contract nobody touched. The tests are right and the
+# checkout is wrong.
+* text=auto eol=lf
+
+# testdata/ is exempt from translation in both directions, not merely pinned to
+# LF. One golden is deliberately CRLF: line-endings-under-strict.txt is the
+# fixture for the diagnostic that tells an agent its payload is LF and the file
+# is not. Normalising it would delete the thing it tests.
+#
+# -text is stronger than eol=lf here on purpose. It says these bytes are never
+# git's business, which is exactly the claim a golden makes.
+testdata/** -text
+
+# Shipped as executable and run by git itself. Nothing should rewrite them.
+.githooks/** text eol=lf

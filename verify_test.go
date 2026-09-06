@@ -91,7 +91,15 @@ func TestVerifyAndRollback(t *testing.T) {
 	// formatter rewrites the file, then the tests fail. Under the default this
 	// is exit 4, which is exactly what §11.2 is a decision about.
 	t.Run("a formatting verify that then fails", func(t *testing.T) {
-		const fmtThenFail = "sed -i 's/ONE/One/' a.txt; false"
+		// A plain redirect rather than `sed -i`, which is not portable and was
+		// wrong here in the direction that looks like a pass. GNU sed takes an
+		// optional attached suffix, BSD sed a separate required one, so on
+		// macOS `sed -i 's/ONE/One/' a.txt` reads the script as the suffix and
+		// "a.txt" as the script, fails, and rewrites nothing. The verify then
+		// failed without having formatted, rollback restored correctly, and the
+		// test saw exit 3 where it wanted 4. It looked like the tool not
+		// detecting a rewrite; it was the fixture never making one.
+		const fmtThenFail = "printf 'One\\n' > a.txt; false"
 		root := cliTree(t, map[string]string{"a.txt": "one\n"})
 		code, _, _ := runCLI(t, root, []string{"--verify", fmtThenFail}, vPatch)
 		if code != exitRollbackFailed {
