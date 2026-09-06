@@ -38,9 +38,7 @@ func TestCreateDeleteAppendPrepend(t *testing.T) {
 		must(t, run2(t, tree, "@@ create s.sh\n#!/bin/sh\n\n"))
 		fi, err := os.Stat(filepath.Join(root, "s.sh"))
 		must(t, err)
-		if fi.Mode().Perm() != createMode {
-			t.Errorf("mode %v, want %v", fi.Mode().Perm(), createMode)
-		}
+		assertMode(t, fi.Mode(), createMode)
 	})
 
 	t.Run("create makes missing directories", func(t *testing.T) {
@@ -427,6 +425,7 @@ func TestSpecWorkedExampleAppliesInFull(t *testing.T) {
 // an injected error.
 func TestNewOpFailurePaths(t *testing.T) {
 	t.Run("a delete that cannot be performed", func(t *testing.T) {
+		needsPOSIXPerms(t)
 		root := cliTree(t, map[string]string{"sub/a.txt": "x\n"})
 		sub := filepath.Join(root, "sub")
 		must(t, os.Chmod(sub, 0o555))
@@ -443,6 +442,7 @@ func TestNewOpFailurePaths(t *testing.T) {
 	// Distinct from the case above: this one gets past load and validate and
 	// fails in commit, which is the only phase that makes directories.
 	t.Run("a create whose directory cannot be made", func(t *testing.T) {
+		needsPOSIXPerms(t)
 		root := cliTree(t, map[string]string{"sub/keep.txt": "x\n"})
 		sub := filepath.Join(root, "sub")
 		must(t, os.Chmod(sub, 0o555))
@@ -463,6 +463,7 @@ func TestNewOpFailurePaths(t *testing.T) {
 	})
 
 	t.Run("a create that rollback cannot remove", func(t *testing.T) {
+		needsPOSIXPerms(t)
 		root := cliTree(t, map[string]string{"sub/keep.txt": "x\n"})
 		code, _, errOut := runCLI(t, root,
 			[]string{"--verify", "chmod 555 sub; false"}, "@@ create sub/made.txt\nmade\n\n")
@@ -492,6 +493,7 @@ func TestNewOpFailurePaths(t *testing.T) {
 	})
 
 	t.Run("a delete that rollback cannot restore", func(t *testing.T) {
+		needsPOSIXPerms(t)
 		root := cliTree(t, map[string]string{"sub/a.txt": "x\n"})
 		code, _, errOut := runCLI(t, root,
 			[]string{"--verify", "chmod 555 sub; false"}, "@@ delete sub/a.txt\n")
