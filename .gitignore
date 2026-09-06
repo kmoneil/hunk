@@ -3,6 +3,12 @@ _plans/
 _tmp/
 _reviews/
 _reports/
+
+# The corpus measurement and the rollout record. Kept locally and not
+# published: they name other projects and their edit volumes, which is
+# nobody else's business. _plans/ is gitignored too, so these are the only
+# copies. Do not let them be the only copies of anything that matters.
+docs/
 # The benchmark's staging directory (scripts/bench.sh).
 _bench/
 
