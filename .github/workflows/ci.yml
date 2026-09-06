@@ -8,14 +8,18 @@ on:
 permissions:
   contents: read
 
-env:
-  # go.mod pins a patch version and this does not, so the runner fetches
-  # whatever 1.26.x the module asks for. That indirection is load-bearing here:
-  # the go directive is at 1.26.8 because GO-2026-4970 was a root escape via
-  # symlink in os.Root, which is precisely the mechanism paths.go uses to
-  # confine every write to --root. Pinning the patch in two places would let
-  # one of them drift below the fix.
-  GO_VERSION: "1.26"
+# Every job reads the Go version from go.mod through setup-go's
+# go-version-file, so it lives in exactly one place.
+#
+# This was `go-version: "1.26"` on the theory that a runner would then fetch
+# whatever patch the module asked for. It does not. setup-go installs the
+# newest 1.26.x it ships and sets GOTOOLCHAIN=local, so a go.mod asking for
+# 1.26.8 against an installed 1.26.7 failed six of the seven jobs at once, with
+# the same one-line error in each. The indirection is load-bearing here rather
+# than tidy: the go directive is at 1.26.8 for GO-2026-4970, a root escape via
+# symlink in os.Root, which is the exact mechanism paths.go uses to confine
+# every write to --root. A CI that quietly fell back to an older toolchain
+# would be testing the vulnerable one and reporting green.
 
 jobs:
   check:
@@ -25,7 +29,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
       # Every tool is installed at the version the Makefile declares, read from
       # the Makefile rather than written here as well. Two places that agree
       # are two places until the day somebody moves one.
@@ -67,7 +71,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
       # go test directly rather than through make: the runners do not all have
       # a usable make, and the Makefile's shell recipes assume a POSIX one.
       - name: test
@@ -80,7 +84,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
       # Its own job because these are the claims the README makes that a reader
       # cannot check, and they are held by a grep and two tests rather than by
       # the compiler. "Standard library only" survives exactly as long as
@@ -97,7 +101,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
       # A separate module on purpose: it is not part of the binary and must not
       # appear in hunk's import graph or its dependency gate. It holds the
       # classifier the published adoption figures rest on, and that classifier
@@ -112,7 +116,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
       # There are no dependencies, so everything this can find is in the
       # standard library the module builds against. That is the reason to run
       # it, not a reason to skip it, and this repository has the receipt: the
@@ -129,7 +133,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
       # A tripwire rather than a target. An embed, a dependency or a large
       # generated table would move this and nothing else in the gate would say
       # anything.
@@ -154,7 +158,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
       - name: locate the fuzz cache
         id: gocache
         run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"

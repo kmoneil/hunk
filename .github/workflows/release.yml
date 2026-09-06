@@ -24,8 +24,7 @@ on:
 permissions:
   contents: read
 
-env:
-  GO_VERSION: "1.26"
+# The Go version comes from go.mod. See the note in ci.yml.
 
 jobs:
   gate:
@@ -35,7 +34,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
       - name: install the pinned tools
         run: |
           go install mvdan.cc/gofumpt@$(make -s print-GOFUMPT_VERSION)
@@ -54,7 +53,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
       # linux and darwin only, and that is a claim rather than an omission:
       # those are the platforms ci.yml runs the suite on. A Windows binary
       # published here would be the one artifact nothing had executed, and this
