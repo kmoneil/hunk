@@ -1,5 +1,12 @@
 # hunk
 
+<p align="center">
+  <a href="https://github.com/kmoneil/hunk/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kmoneil/hunk/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="Licence" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
+  <a href="go.mod"><img alt="Go" src="https://img.shields.io/badge/go-1.26%2B-00ADD8"></a>
+  <a href="go.mod"><img alt="Dependencies" src="https://img.shields.io/badge/dependencies-0-brightgreen"></a>
+</p>
+
 A transactional multi-file text editor, built for coding agents rather than for
 people.
 
@@ -221,9 +228,20 @@ deliberate change to a contract, not a test that needs regenerating.
 
 ## Status
 
-All six directives work, with thirteen flags. Developed and used daily on
-Linux; it is a static Go binary with no platform-specific code, but macOS and
-Windows are untested. It has one user and a version number that says so.
+All six directives work, with thirteen flags.
+
+Linux and macOS are tested: CI runs the suite on both, and a merge is blocked
+unless it passes on both along with the dependency, network, vulnerability and
+binary-size gates.
+
+**Windows is not supported**, and that is a narrower claim than it sounds. The
+tool may well work there; the tests cannot currently say, because they assert
+POSIX file modes and force their negative cases with `chmod`, neither of which
+means anything on Windows. The suite runs there anyway, unrequired, so the gap
+stays visible rather than being excluded and forgotten. It is
+[issue #1](https://github.com/kmoneil/hunk/issues/1).
+
+It has one user and a version number that says so.
 
 ## License
 
