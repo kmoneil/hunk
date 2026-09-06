@@ -163,9 +163,7 @@ func TestApply(t *testing.T) {
 		must(t, err)
 		fi, err := os.Stat(filepath.Join(root, "s.sh"))
 		must(t, err)
-		if fi.Mode().Perm() != 0o755 {
-			t.Errorf("mode %v, want 0755", fi.Mode().Perm())
-		}
+		assertMode(t, fi.Mode(), 0o755)
 	})
 
 	t.Run("a symlinked target is written through", func(t *testing.T) {
@@ -629,6 +627,7 @@ func TestLoadErrorPaths(t *testing.T) {
 	})
 
 	t.Run("an unstattable parent is an I/O error too", func(t *testing.T) {
+		needsPOSIXPerms(t)
 		tree, root := fixture(t, map[string]string{"locked/a.go": "x\n"})
 		must(t, os.Chmod(filepath.Join(root, "locked"), 0o000))
 		t.Cleanup(func() { os.Chmod(filepath.Join(root, "locked"), 0o755) })
@@ -648,6 +647,7 @@ func TestLoadErrorPaths(t *testing.T) {
 // A read-only directory reaches it without any interleaving: load reads,
 // validate matches, check re-reads, and the temp file cannot be created.
 func TestCommitFailureSurfaces(t *testing.T) {
+	needsPOSIXPerms(t)
 	tree, root := fixture(t, map[string]string{"sub/a.go": "x\n"})
 	must(t, os.Chmod(filepath.Join(root, "sub"), 0o555))
 	t.Cleanup(func() { os.Chmod(filepath.Join(root, "sub"), 0o755) })

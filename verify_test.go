@@ -294,6 +294,7 @@ func TestVerifyCoverageEdges(t *testing.T) {
 
 	// Exit 4 also covers a file rollback could not write back.
 	t.Run("a file that cannot be restored is named", func(t *testing.T) {
+		needsPOSIXPerms(t)
 		root := cliTree(t, map[string]string{"sub/a.txt": "one\n"})
 		sub := filepath.Join(root, "sub")
 		code, _, errOut := runCLI(t, root,

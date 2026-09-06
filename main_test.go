@@ -338,7 +338,7 @@ func TestUsageErrors(t *testing.T) {
 		{"a bad --eol", "must be auto or strict", []string{"--eol", "sideways"}, ""},
 		{"an empty --marker", "must not be empty", []string{"--marker", ""}, ""},
 		{"a --context below one", "at least 1", []string{"--context", "0"}, ""},
-		{"a -f that does not exist", "no such file", []string{"-f", "/nonexistent/p.txt"}, ""},
+		{"a -f that does not exist", notExistPhrase(), []string{"-f", "/nonexistent/p.txt"}, ""},
 		{"an empty patch", "the patch is empty", nil, "   \n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

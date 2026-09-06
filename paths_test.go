@@ -79,8 +79,8 @@ func TestResolveConfined(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve(%q): %v", c.in, err)
 			}
-			if tg.name != c.wantName {
-				t.Errorf("name = %q, want %q", tg.name, c.wantName)
+			if tg.name != native(c.wantName) {
+				t.Errorf("name = %q, want %q", tg.name, native(c.wantName))
 			}
 			if tg.ViaSymlink() != c.wantLink {
 				t.Errorf("ViaSymlink = %v, want %v", tg.ViaSymlink(), c.wantLink)
@@ -148,7 +148,7 @@ func TestAbsoluteInRootSymlinkIsTheStdlibGap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hunk must still allow it (§6.5): %v", err)
 	}
-	if tg.name != "sub/in.txt" {
+	if tg.name != native("sub/in.txt") {
 		t.Errorf("resolved to %q, want sub/in.txt", tg.name)
 	}
 }
@@ -221,9 +221,7 @@ func TestWriteAtomic(t *testing.T) {
 		}
 		fi, err := os.Stat(filepath.Join(root, "top.txt"))
 		must(t, err)
-		if fi.Mode().Perm() != 0o640 {
-			t.Errorf("mode %v, want 0640", fi.Mode().Perm())
-		}
+		assertMode(t, fi.Mode(), 0o640)
 	})
 
 	// The case §6.5 is about, and the one a plain temp-and-rename gets wrong:
@@ -308,8 +306,8 @@ func TestMkdirAllAndRemove(t *testing.T) {
 		t.Fatalf("made %v, want %v", made, want)
 	}
 	for i := range want {
-		if made[i] != want[i] {
-			t.Errorf("made[%d] = %q, want %q", i, made[i], want[i])
+		if made[i] != native(want[i]) {
+			t.Errorf("made[%d] = %q, want %q", i, made[i], native(want[i]))
 		}
 	}
 
@@ -319,7 +317,7 @@ func TestMkdirAllAndRemove(t *testing.T) {
 	must(t, err)
 	made2, err := tree.MkdirAll(tg2)
 	must(t, err)
-	if len(made2) != 1 || made2[0] != "sub/deeper" {
+	if len(made2) != 1 || made2[0] != native("sub/deeper") {
 		t.Errorf("made %v, want just sub/deeper", made2)
 	}
 
@@ -345,9 +343,7 @@ func TestStatAndReadFile(t *testing.T) {
 	must(t, err)
 	fi, err := tree.Stat(tg)
 	must(t, err)
-	if fi.Mode().Perm() != 0o644 {
-		t.Errorf("mode %v", fi.Mode().Perm())
-	}
+	assertMode(t, fi.Mode(), 0o644)
 	b, err := tree.ReadFile(tg)
 	must(t, err)
 	if string(b) != "in\n" {
@@ -506,9 +502,7 @@ func TestUnconfinedWriteCycle(t *testing.T) {
 
 	fi, err := tree.Stat(tg)
 	must(t, err)
-	if fi.Mode().Perm() != 0o600 {
-		t.Errorf("mode %v, want 0600", fi.Mode().Perm())
-	}
+	assertMode(t, fi.Mode(), 0o600)
 	b, err := tree.ReadFile(tg)
 	must(t, err)
 	if string(b) != "unconfined\n" {
@@ -595,6 +589,7 @@ func TestUnconfinedFailurePaths(t *testing.T) {
 // reported as one. The distinction matters because the two refusals send an
 // agent to different places: one is a patch to fix, the other is a chmod.
 func TestUnreadableDirectoryIsNotAnEscape(t *testing.T) {
+	needsPOSIXPerms(t)
 	root := mktree(t)
 	locked := filepath.Join(root, "locked")
 	must(t, os.Mkdir(locked, 0o755))
@@ -617,7 +612,7 @@ func TestUnreadableDirectoryIsNotAnEscape(t *testing.T) {
 		}
 		t.Fatalf("Resolve: %v", err)
 	}
-	if tg.name != "locked/f.txt" {
+	if tg.name != native("locked/f.txt") {
 		t.Errorf("name = %q", tg.name)
 	}
 	if _, err := tree.ReadFile(tg); !errors.Is(err, fs.ErrPermission) {
@@ -652,7 +647,7 @@ func TestSymlinkChainDepthBound(t *testing.T) {
 		if err != nil {
 			t.Fatalf("a chain of %d links was refused: %v", maxLinkHops-12, err)
 		}
-		if tg.name != "sub/in.txt" {
+		if tg.name != native("sub/in.txt") {
 			t.Errorf("resolved to %q, want sub/in.txt", tg.name)
 		}
 	})
