@@ -1,5 +1,5 @@
   the text is there with different leading whitespace, at line 4:
       4 |     three
   your old used a tab; the file uses 4 spaces
-  line numbers count against the file as the hunk before this one left it,
+  line numbers count against the file as the hunk before this one would have left it,
   not as it is on disk: nothing was written.

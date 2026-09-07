@@ -788,7 +788,7 @@ func (d *Diagnosis) Render(indent string) string {
 		if d.Shifted > 1 {
 			which = fmt.Sprintf("the %d hunks before this one", d.Shifted)
 		}
-		fmt.Fprintf(&b, "%sline numbers count against the file as %s left it,\n", indent, which)
+		fmt.Fprintf(&b, "%sline numbers count against the file as %s would have left it,\n", indent, which)
 		fmt.Fprintf(&b, "%snot as it is on disk: nothing was written.\n", indent)
 	}
 	return b.String()

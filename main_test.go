@@ -578,3 +578,35 @@ func TestSkillExampleApplies(t *testing.T) {
 		t.Error("the created file has no final newline")
 	}
 }
+
+// The report is a page an agent reads, so the root has to be on the page and
+// not only in a struct. The shape is the one the field hit: a shell that had
+// moved into a subdirectory, so a path that is right for the repository is
+// wrong for the process, and every layer under the report was correct.
+func TestARefusalOnThePrintedPageNamesTheRoot(t *testing.T) {
+	root := cliTree(t, map[string]string{"sched/sched.zig": "a\nb\nc\n"})
+	patch := "@@ file runtime/sched/sched.zig\n@@ old\nb\n@@ new\nB\n"
+
+	code, _, errOut := runCLI(t, root, nil, patch)
+	if code != exitNoMatch {
+		t.Fatalf("exit %d, want %d: %s", code, exitNoMatch, errOut)
+	}
+	for _, want := range []string{"no such file", root} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr does not mention %q:\n%s", want, errOut)
+		}
+	}
+
+	// §5.2: --json carries everything the text does.
+	code, out, _ := runCLI(t, root, []string{"--json"}, patch)
+	if code != exitNoMatch {
+		t.Fatalf("exit %d with --json", code)
+	}
+	var v struct {
+		Failures []struct{ Refusal string } `json:"failures"`
+	}
+	must(t, json.Unmarshal([]byte(out), &v))
+	if len(v.Failures) != 1 || !strings.Contains(v.Failures[0].Refusal, root) {
+		t.Errorf("json refusals = %+v, want the root %q", v.Failures, root)
+	}
+}

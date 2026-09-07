@@ -378,7 +378,7 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			f.failedAt = n
 			failures = append(failures, Failure{
 				Hunk: n, Path: h.Path, PatchLine: h.Line,
-				Refusal: err.Reason,
+				Refusal: err.Detail(),
 			})
 			continue
 		}

@@ -664,3 +664,48 @@ func TestSymlinkChainDepthBound(t *testing.T) {
 		}
 	})
 }
+
+// A refusal reaches a reader two ways, and both have to say where the tool
+// looked. §5.2 prints the path on a line of its own and the reason under it, so
+// the report takes Detail; a refusal that aborts the load has no such line, so
+// the top-level error takes Error, which is Detail under the path.
+//
+// Raised by a field report: an agent whose shell had moved into a subdirectory
+// got "no such file; only @@ create makes one" and spent two round trips on its
+// patch, because Validate stored Reason, and Reason on its own knows nothing
+// about a root.
+func TestPathRefusalSaysWhereItLooked(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		ref  PathRefusal
+		want string
+	}{
+		{
+			name: "the reason and the root",
+			ref:  PathRefusal{Path: "a.go", Root: "/r", Reason: "no such file"},
+			want: "no such file; the root is /r",
+		},
+		{
+			name: "a resolved path that differs is named as well",
+			ref: PathRefusal{
+				Path: "link.go", Root: "/r", Resolved: "/elsewhere/a.go",
+				Reason: "it is a symlink out of the root",
+			},
+			want: "it is a symlink out of the root (it resolves to /elsewhere/a.go); the root is /r",
+		},
+		{
+			name: "a resolved path equal to the written one is not repeated",
+			ref:  PathRefusal{Path: "a.go", Root: "/r", Resolved: "a.go", Reason: "no such file"},
+			want: "no such file; the root is /r",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.ref.Detail(); got != c.want {
+				t.Errorf("Detail() = %q, want %q", got, c.want)
+			}
+			if got, want := c.ref.Error(), c.ref.Path+": "+c.want; got != want {
+				t.Errorf("Error() = %q, want %q", got, want)
+			}
+		})
+	}
+}

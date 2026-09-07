@@ -779,3 +779,31 @@ func TestDiffstatCountsPerOccurrence(t *testing.T) {
 			r.Files[0].Added, r.Files[0].Removed)
 	}
 }
+
+// §6.1 step 2's three refusals are the ones an agent reaches by writing an
+// ordinary patch, and until 2026-09-06 they were the only three that reached it
+// without the root, because Validate stored err.Reason and dropped what the
+// PathRefusal knew. The two that abort the load never lost it.
+func TestEveryRefusalNamesTheRootItLookedIn(t *testing.T) {
+	for _, c := range []struct{ name, patch, want string }{
+		{"a missing file", "@@ file gone.go\n@@ old\nx\n@@ new\ny\n", "no such file"},
+		{"a create over a file that is there", "@@ create a.go\nz\n\n", "already exists"},
+		{"a replace after a delete", "@@ delete a.go\n@@ old\nx\n@@ new\ny\n", "earlier hunk in this batch deleted it"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tree, root := fixture(t, map[string]string{"a.go": "x\n"})
+			_, err := run(t, tree, c.patch, Options{})
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("want *ValidationError, got %T: %v", err, err)
+			}
+			got := ve.Failures[len(ve.Failures)-1].Refusal
+			if !strings.Contains(got, c.want) {
+				t.Errorf("refusal = %q, want it to say %q", got, c.want)
+			}
+			if !strings.Contains(got, root) {
+				t.Errorf("refusal = %q, want it to name the root %q", got, root)
+			}
+		})
+	}
+}
