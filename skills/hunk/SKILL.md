@@ -73,6 +73,36 @@ quotes a hunk patch: a test fixture, a doc, this file. `--marker '%%'` changes
 the directive prefix for the whole patch and the `@@` lines become ordinary
 text.
 
+## The five directives
+
+`@@ old` / `@@ new` is the one you want most of the time. The other four exist,
+and an agent that has not seen this list reaches for `Write` or a shell instead:
+
+| Directive | What it does |
+| --- | --- |
+| `@@ file PATH` | Sets the file the `@@ old` hunks under it apply to |
+| `@@ old` / `@@ new` | Replaces literal text, exactly as many times as claimed |
+| `@@ create PATH` | Makes a file, payload is its whole content. Refuses if it exists |
+| `@@ delete PATH` | **Removes the whole file.** It is not a way to delete lines |
+| `@@ append PATH` | Adds the payload at the end of the file |
+| `@@ prepend PATH` | Adds it at the start |
+
+**To remove a block of lines, replace it with nothing:**
+
+```
+@@ file runtime/oneshot.zig
+@@ old
+    std.debug.print("probe A\n", .{});
+    std.debug.print("probe B\n", .{});
+
+@@ new
+```
+
+The blank line before `@@ new` is rule 1 below, and it is what carries the
+block's last newline out with it. `old` is still the exact bytes: `hunk` will
+not remove text it has not been shown, so if you no longer have what you
+inserted, read it back before you write the patch.
+
 ## The four rules that catch people
 
 **1. A payload never gains a trailing newline.** To match text that ends in a
@@ -129,7 +159,8 @@ mirror of the habit this replaces, and it costs the same thing: round trips.
 
 | Situation | Use |
 | --- | --- |
-| You are about to write `python3 - <<'PY'` to edit a file | `hunk`, always |
+| You are about to write `python3 - <<'PY'` that reads a file, replaces text and writes it back | `hunk`, always |
+| An edit that has to be **computed**: a block built from a list, one substitution looped over a set of files, a file split at an index | Python or the shell. `hunk` takes literal bytes in and literal bytes out, and has no expression language. Compute the patch if it helps, then pipe it in |
 | Several replacements, or several files, that must land together | `hunk` |
 | An edit that must be undone if the tests fail | `hunk --verify '...'` |
 | More than one file of a compiled language in one batch | `hunk --verify 'go build ./...'` |
@@ -159,8 +190,15 @@ compiled language.** `--verify 'go build ./...'` is the case in point: every
 hunk can match, every file can be plausible on its own, and the batch still not
 build, because the thing that broke is between the files. A helper renamed in
 one file and called in another is the shape, and it is exactly what a
-multi-file edit is for. The flag costs nothing when it passes and saves a
-broken tree when it does not.
+multi-file edit is for.
+
+**It is not free, and this file used to say it was.** What `--verify` costs is a
+second build: if compiling is your next call regardless, it compiles twice. What
+you buy for that is the rollback, so it earns its cost when being in a broken
+tree would be expensive, and earns least when you were about to run the same
+command yourself and read the error anyway. A cheap verify (`go vet ./...`, one
+package's tests) is the one to reach for reflexively; a five-minute one is a
+decision.
 
 **Prefer the repository's own gate** (`make check`, `npm test`) over a command
 you compose. `--verify` decides on the exit code, and some tools report a

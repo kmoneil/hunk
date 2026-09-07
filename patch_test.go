@@ -5,7 +5,10 @@ import (
 	"errors"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -327,6 +330,31 @@ func TestParserHasNoFileAccess(t *testing.T) {
 		}
 		if !allowed[path] {
 			t.Errorf("patch.go imports %q; the parser reads no files and needs no I/O", path)
+		}
+	}
+}
+
+// The skill is a file in this repository and directiveWords is code in it, so
+// "the skill documents every operation" is checkable rather than a habit. It
+// was not one: create, delete, append and prepend shipped on 2026-09-04 and
+// SKILL.md named none of them until 2026-09-06, when a field report said "there
+// is no @@ delete", which is what the skill had told it.
+//
+// "end" is skipped, and named here rather than filtered quietly: it terminates
+// a patch, every example in the skill is a heredoc whose own terminator does
+// that job, and leaving it undocumented is a decision rather than an omission.
+func TestTheSkillDocumentsEveryDirective(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("skills", "hunk", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read the skill: %v", err)
+	}
+	for word := range directiveWords {
+		if word == "end" {
+			continue
+		}
+		d := DefaultMarker + " " + word
+		if !strings.Contains(string(b), d) {
+			t.Errorf("SKILL.md never says %q; an operation an agent cannot see is one it will not use", d)
 		}
 	}
 }
