@@ -41,9 +41,19 @@ type PathRefusal struct {
 	Reason   string
 }
 
-func (e *PathRefusal) Error() string {
+func (e *PathRefusal) Error() string { return e.Path + ": " + e.Detail() }
+
+// Detail is the message without the leading path, for a report that has already
+// printed the path on a line of its own (§5.2).
+//
+// It carries the root, because the commonest way to reach a path refusal is a
+// process that is not in the directory it thinks it is in, and no reason on its
+// own can show that. Error is defined in terms of it so the two renderings
+// cannot drift: reading Reason directly is how the missing-file refusal came to
+// be the only one that would not say where the tool had looked.
+func (e *PathRefusal) Detail() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s: %s", e.Path, e.Reason)
+	b.WriteString(e.Reason)
 	if e.Resolved != "" && e.Resolved != e.Path {
 		fmt.Fprintf(&b, " (it resolves to %s)", e.Resolved)
 	}
