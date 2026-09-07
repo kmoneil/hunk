@@ -36,6 +36,7 @@ FLAGS
   --eol auto|strict     auto converts payload line endings to the file's
                         dominant ending before matching and on write. (auto)
   --allow-outside-root  Permit paths that resolve outside --root.
+  --version             Print the version and exit.
 
 EXIT CODES
 
