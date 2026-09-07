@@ -1,0 +1,28 @@
+1 sessions under <root>
+
+                            calls    replaces
+python-heredoc file edits       0           0
+  no uniqueness guard           0
+    of which also no            0   a count limit is not a guard
+    replace(..., 1) limit       0
+  bundled a verify command      0
+  hand-rolled backup            0
+bytes of those commands         0
+
+tool mix overall           Bash 5    Edit 0
+
+§12, which §1 does not have
+  edit episodes                   0
+  failed attempts                 0
+  calls per successful edit    0.00
+  hunk calls                      5
+    applications                5
+    probes                      0
+      exit 0                    5
+      unclassified              0
+  exit-2 recovery              0.00   0 of 0
+  trivial note printed            1   of 5 that applied
+  directives used           file 3 old 2 new 2 create 1 delete 1 append 1 prepend 0
+    patch from a file (-f)      1   directives unknown for those
+  flags used                --verify 2 --dry-run 1 --json 1 --marker 1
+  verify rewrites files           1   exit 4 needs one of these

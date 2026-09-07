@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -238,6 +239,10 @@ func TestIsHunkCall(t *testing.T) {
 		want bool
 	}{
 		{"a bare invocation", "hunk -f p.txt", true},
+		{"built in the tree and run from it", "./hunk -f p.txt", true},
+		{"from a sibling directory", "cd scripts && ../hunk -f p.txt", true},
+		{"an absolute path", "/usr/local/bin/hunk --dry-run -f p.txt", true},
+		{"a path that merely ends in the name", "cat /tmp/notes/hunk", false},
 		{"with flags", "hunk --verify 'make test' -f p.txt", true},
 		{"a heredoc patch", "hunk <<'HUNK'\n@@ file a.go\nHUNK", true},
 		{"after a separator", "cd /tmp && hunk -f p.txt", true},
@@ -650,5 +655,324 @@ func TestUnknownRecordsAreSkipped(t *testing.T) {
 	}
 	if s.BashCalls != 1 {
 		t.Errorf("bash calls = %d, want 1", s.BashCalls)
+	}
+}
+
+// The note's rate is the whole of the decision about it, so the rule is written
+// against hunk's own golden rather than a copy of the sentence: a reworded note
+// fails this measurement instead of quietly zeroing it.
+func TestPrintsTrivialNote(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", "cli-trivial-note.txt"))
+	if err != nil {
+		t.Fatalf("%v: the golden this rule is written against is gone", err)
+	}
+	if !PrintsTrivialNote(string(b)) {
+		t.Errorf("the golden does not match the rule:\n%s", b)
+	}
+	for _, c := range []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{"a plain apply", "M a.go +1 -1\n1 file, 1 hunk, +1 -1\n", false},
+		{
+			"the note", "1 file, 1 hunk, +1 -1\n" +
+				"note: one replacement in one file, with no --verify. Edit is cheaper than a patch for this.\n",
+			true,
+		},
+		{
+			"a create's note, which names Write instead",
+			"note: one replacement in one file, with no --verify. Write is cheaper than a patch for this.\n",
+			true,
+		},
+		// Anchored to the start of a line for the reason the exit rules are: a
+		// verify command's output is in the same tool result and this file has
+		// no control over it.
+		{"the same words indented, inside a verify's output", "$ go test ./...\n  note: one replacement in one file\n", false},
+		{"--json says trivial and prints no prose", `{"ok":true,"trivial":true}`, false},
+		{"nothing", "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := PrintsTrivialNote(c.out); got != c.want {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// Which operations a patch reached for. The zeros this produces are the finding
+// the rule exists for, so every way of producing a wrong zero is a case.
+func TestDirectives(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  string
+		want []string
+	}{
+		{
+			"a replace patch, in order of first appearance and deduplicated",
+			"hunk <<'H'\n@@ file a.go\n@@ old\nx\n@@ new\ny\n@@ old\np\n@@ new\nq\nH",
+			[]string{"file", "old", "new"},
+		},
+		{
+			"a create and a delete",
+			"hunk <<'H'\n@@ create new.go\npackage x\n\n@@ delete old.go\nH",
+			[]string{"create", "delete"},
+		},
+		{
+			"--marker moves the prefix, and the @@ lines under it are payload",
+			"hunk --marker '%%' <<'H'\n%% file doc.md\n%% old\n@@ create x.go\n%% new\n@@ delete x.go\nH",
+			[]string{"file", "old", "new"},
+		},
+		{
+			"--marker without quotes",
+			"hunk --marker %% <<'H'\n%% delete doc.md\nH",
+			[]string{"delete"},
+		},
+		{"a unified diff in a payload", "hunk <<'H'\n@@ -1,3 +1,4 @@\nH", nil},
+		{"no space after the marker", "hunk <<'H'\n@@old\nH", nil},
+		{"a word that is not a directive", "hunk <<'H'\n@@ foo bar\nH", nil},
+		{"not at column 0", "hunk <<'H'\n  @@ old\nH", nil},
+		{"the marker alone", "hunk <<'H'\n@@\nH", nil},
+		{"the patch is in a file, so there is nothing to see", "hunk -f p.txt", nil},
+		{"a tab after the directive", "hunk <<'H'\n@@\tdelete a.go\nH", []string{"delete"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Directives(c.cmd); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// Adoption is per flag per call, and the flags of the command on the other side
+// of a && are not hunk's.
+func TestHunkFlags(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  string
+		want []string
+	}{
+		{"flags on the invocation", "hunk --dry-run --json -f p.txt", []string{"--dry-run", "--json"}},
+		{
+			"another command's flags do not count",
+			"cd runtime && zig build --release=safe && hunk --root .. -f p.txt",
+			[]string{"--root"},
+		},
+		{
+			"a quoted verify argument is not a list of flags",
+			"hunk --verify 'gofmt -l --write-nothing .' -f p.txt",
+			[]string{"--verify"},
+		},
+		{"a payload that looks like flags", "hunk <<'H'\n@@ new\n--dry-run\nH", nil},
+		{"the same flag twice is one use", "hunk --json --json -f p", []string{"--json"}},
+		{
+			"a later line is a later command", "hunk --json -f p.txt\ngo build --tags x ./...",
+			[]string{"--json"},
+		},
+		// The shape that was counting git's flags as hunk's until the first
+		// real corpus run: three calls in this repository's own transcripts
+		// chained a status check onto the apply.
+		{
+			"a command chained after it on the same line",
+			"hunk -f p.patch && git status --porcelain && git add -A", nil,
+		},
+		{
+			"and one chained with a pipe", "./hunk --json -f p.txt | jq --raw-output .exit",
+			[]string{"--json"},
+		},
+		{"short flags are not counted, and are not adoption", "hunk -f p.txt", nil},
+		{"not a hunk call at all", "ls --color=auto", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := HunkFlags(c.cmd); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// A patch in a file is a hole in this measurement, and a hole has to be
+// reported rather than counted as a zero.
+func TestReadsPatchFromFile(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  string
+		want bool
+	}{
+		{"-f with a space", "hunk -f p.txt", true},
+		{"-f with an equals", "hunk -f=p.txt", true},
+		{"a heredoc", "hunk <<'H'\n@@ old\nH", false},
+		{"another command's -f", "grep -f pats.txt x && hunk <<'H'\n@@ old\nH", false},
+		{"no -f at all", "hunk --dry-run <<'H'\n@@ old\nH", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ReadsPatchFromFile(c.cmd); got != c.want {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// Exit 4 is only reachable when the verify rewrites what hunk wrote, so this
+// rule is the denominator of the open question about --verify-may-format's
+// default. A wrong true says the case has arisen when it has not.
+func TestVerifyRewritesFiles(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cmd  string
+		want bool
+	}{
+		{"make fmt", "hunk --verify 'make fmt' -f p.txt", true},
+		{"gofmt -w", `hunk --verify "gofmt -w ." -f p.txt`, true},
+		{"an equals and a quoted argument", "hunk --verify='cargo fmt' -f p.txt", true},
+		{"sed -i", "hunk --verify 'sed -i s/a/b/ x && go build ./...' -f p.txt", true},
+		{"prettier --write", "hunk --verify 'npx prettier --write src' -f p.txt", true},
+		// The one that must not fire: -l lists and does not rewrite, which is
+		// also the example the skill gives of a verify that cannot fail.
+		{"gofmt -l does not rewrite", "hunk --verify 'gofmt -l .' -f p.txt", false},
+		{"a build", "hunk --verify 'go build ./...' -f p.txt", false},
+		{"no verify", "hunk -f p.txt", false},
+		{"a formatting word in the patch, not in the verify", "hunk <<'H'\n@@ new\nmake fmt\nH", false},
+		// The two that a rule reading the whole command gets wrong. Added
+		// because a mutant that did exactly that survived the first suite:
+		// every negative case above happened to have no --verify at all, so
+		// the early return answered them and the rule under test never ran.
+		{
+			"the patch inserts a formatting command, the verify is a build",
+			"hunk --verify 'go build ./...' <<'H'\n@@ file Makefile\n@@ new\n\tgofmt -w .\nH", false,
+		},
+		{
+			"the shell formats before the call, the verify is a test run",
+			"make fmt && hunk --verify 'go test ./...' -f p.txt", false,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := VerifyRewritesFiles(c.cmd); got != c.want {
+				t.Errorf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// This module cannot import the tool, so its copy of the directive set can go
+// stale in silence, and a stale copy reports zero uses of an operation that
+// shipped after it. The tool's own map is the source of truth and it is right
+// there in the tree.
+func TestTheDirectiveSetMatchesTheTool(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "patch.go"))
+	if err != nil {
+		t.Fatalf("%v: the tool this measurement is about is gone", err)
+	}
+	block := regexp.MustCompile(`(?s)var directiveWords = map\[string\]bool\{(.*?)\}`).FindSubmatch(b)
+	if block == nil {
+		t.Fatal("patch.go has no directiveWords literal; this test is reading for a shape that moved")
+	}
+	want := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"(\w+)":\s*true`).FindAllSubmatch(block[1], -1) {
+		want[string(m[1])] = true
+	}
+	if len(want) == 0 {
+		t.Fatal("read the literal but found no words in it")
+	}
+	if !reflect.DeepEqual(want, hunkDirectives) {
+		t.Errorf("hunkDirectives = %v, the tool's is %v", hunkDirectives, want)
+	}
+}
+
+// Adoption over a session, kept apart from fixtureHunkCorpus because that one's
+// order encodes the recovery story and a call appended to it changes what the
+// refusal at its end means.
+func fixtureAdoptionCorpus(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "-workspace-demo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := func(blocks ...map[string]any) string {
+		b, err := json.Marshal(map[string]any{"message": map[string]any{"content": blocks}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b) + "\n"
+	}
+	var sb strings.Builder
+	add := func(id, cmd, out string) {
+		sb.WriteString(line(map[string]any{
+			"type": "tool_use", "id": id, "name": "Bash",
+			"input": map[string]any{"command": cmd},
+		}))
+		sb.WriteString(line(map[string]any{"type": "tool_result", "tool_use_id": id, "content": out}))
+	}
+	add("a0", "hunk <<'H'\n@@ file a.go\n@@ old\nx\n@@ new\ny\nH",
+		"M a.go +1 -1\n1 file, 1 hunk, +1 -1\n"+
+			"note: one replacement in one file, with no --verify. Edit is cheaper than a patch for this.\n")
+	add("a1", "cd sub && hunk --dry-run --json <<'H'\n@@ create new.go\npackage x\n\n@@ delete old.go\nH",
+		"A new.go +1 -0\nD old.go +0 -3\n2 files, 2 hunks, +1 -3 (dry run: nothing written)\n")
+	add("a2", "hunk --marker '%%' <<'H'\n%% file doc.md\n%% old\n@@ create x.go\n%% new\n@@ delete x.go\nH",
+		"M doc.md +1 -1\n1 file, 1 hunk, +1 -1\n")
+	add("a3", "hunk --verify 'make fmt' -f p.txt", "M a.go +1 -1\n1 file, 1 hunk, +1 -1\n")
+	add("a4", "hunk --verify 'go build ./...' <<'H'\n@@ file a.go\n@@ append b.go\nhi\n\nH",
+		"M a.go +1 -1\nA b.go +1 -0\n2 files, 2 hunks, +2 -1\n")
+	if err := os.WriteFile(filepath.Join(dir, "s.jsonl"), []byte(sb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func TestWalkCountsAdoption(t *testing.T) {
+	s, err := Walk(fixtureAdoptionCorpus(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"calls", s.HunkCalls, 5},
+		{"trivial notes", s.HunkTrivialNotes, 1},
+		{"patches in a file", s.HunkPatchFromFile, 1},
+		{"verifies that rewrite files", s.HunkFormattingVerify, 1},
+		{"file", s.HunkDirectives["file"], 3},
+		{"old", s.HunkDirectives["old"], 2},
+		{"new", s.HunkDirectives["new"], 2},
+		{"create", s.HunkDirectives["create"], 1},
+		{"delete", s.HunkDirectives["delete"], 1},
+		{"append", s.HunkDirectives["append"], 1},
+		{"prepend, which nobody used", s.HunkDirectives["prepend"], 0},
+		{"--verify", s.HunkFlagUse["--verify"], 2},
+		{"--dry-run", s.HunkFlagUse["--dry-run"], 1},
+		{"--json", s.HunkFlagUse["--json"], 1},
+		{"--marker", s.HunkFlagUse["--marker"], 1},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+}
+
+// The report is the thing anybody reads, and the zeros in its directive row are
+// the finding. A golden is how they stay in it.
+func TestAdoptionReportIsStable(t *testing.T) {
+	s, err := Walk(fixtureAdoptionCorpus(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Root = "<root>"
+	got := s.Report()
+	path := filepath.Join("testdata", "fixture-adoption-report.txt")
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (UPDATE_GOLDEN=1 go test ./... to create it, then read it)", err)
+	}
+	if got != string(want) {
+		t.Errorf("the report changed. That is a contract change: §12 compares two of these.\n--- want ---\n%s\n--- got ---\n%s", want, got)
 	}
 }
