@@ -126,6 +126,10 @@ Six directives:
 | `@@ append PATH` | append the payload |
 | `@@ prepend PATH` | prepend the payload |
 
+`@@ delete` removes the whole file. To remove a block of lines, replace it with
+an empty `@@ new`, which with rule 1 below takes the block's last newline with
+it.
+
 Three rules worth knowing before the first patch:
 
 1. **A payload never gains a trailing newline.** To match text that ends in a
