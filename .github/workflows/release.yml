@@ -65,14 +65,26 @@ jobs:
       # plumbing is not.
       #
       # CGO off so each is a static binary, which is what the README promises.
+      #
+      # The version is stamped in, because a module's version is a property of
+      # how it was fetched rather than of its source: `go install ...@v0.2.0`
+      # records v0.2.0 by itself, but `go build` of the same commit records a
+      # pseudo-version derived from the *previous* tag, so an unstamped artifact
+      # would name the wrong release rather than no release.
+      # Only a tag stamps. On a workflow_dispatch the value is empty, the binary
+      # falls back to the build info and says "(devel, <revision>)", and that is
+      # the truth about a build that releases nothing.
       - name: build
         run: |
           mkdir -p dist
+          stamp=""
+          case "$GITHUB_REF" in refs/tags/v*) stamp="$GITHUB_REF_NAME" ;; esac
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os=${target%/*}; arch=${target#*/}
             ext=""; [ "$os" = windows ] && ext=".exe"
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
-              go build -trimpath -o "dist/hunk-$os-$arch$ext" .
+              go build -trimpath -ldflags "-X main.version=$stamp" \
+                -o "dist/hunk-$os-$arch$ext" .
           done
           cd dist && sha256sum hunk-* > SHA256SUMS && cat SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

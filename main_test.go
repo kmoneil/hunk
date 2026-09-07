@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -64,6 +65,16 @@ func TestExitCodeWalk(t *testing.T) {
 			args:      []string{"--nope"},
 			stdin:     "@@ file a.go\n@@ old\none\n@@ new\nONE\n",
 			want:      exitUsage,
+			untouched: true,
+		},
+		{
+			// A valid patch on stdin that must not be applied: --version stops
+			// before the tree is opened, in the way --help does.
+			name:      "0, --version stops before anything is read",
+			files:     map[string]string{"a.go": "one\n"},
+			args:      []string{"--version"},
+			stdin:     "@@ file a.go\n@@ old\none\n@@ new\nONE\n",
+			want:      exitOK,
 			untouched: true,
 		},
 		{
@@ -389,7 +400,7 @@ func TestHelpCarriesWhatTheSpecCommitsItTo(t *testing.T) {
 	for _, f := range []string{
 		"--verify", "--verify-may-format", "--verify-lines", "--keep-on-fail",
 		"--dry-run", "--root", "--marker", "-f", "--json", "--quiet",
-		"--context", "--eol", "--allow-outside-root",
+		"--context", "--eol", "--allow-outside-root", "--version",
 	} {
 		if !strings.Contains(got, f) {
 			t.Errorf("--help does not mention %s", f)
@@ -608,5 +619,69 @@ func TestARefusalOnThePrintedPageNamesTheRoot(t *testing.T) {
 	must(t, json.Unmarshal([]byte(out), &v))
 	if len(v.Failures) != 1 || !strings.Contains(v.Failures[0].Refusal, root) {
 		t.Errorf("json refusals = %+v, want the root %q", v.Failures, root)
+	}
+}
+
+// --version is what an agent runs to find out whether the fix it has just read
+// about is in the binary it is holding, so the three ways this binary reaches
+// somebody are three cases rather than one.
+func TestVersionString(t *testing.T) {
+	info := func(v string) *debug.BuildInfo {
+		return &debug.BuildInfo{Main: debug.Module{Version: v}}
+	}
+	for _, c := range []struct {
+		name    string
+		stamped string
+		bi      *debug.BuildInfo
+		want    string
+	}{
+		{
+			name:    "the release workflow's stamp wins over the build info",
+			stamped: "v0.2.0",
+			bi:      info("v0.1.1-0.20260907131653-3e525bcc7aaa+dirty"),
+			want:    "v0.2.0",
+		},
+		{
+			name: "the module version go install recorded",
+			bi:   info("v0.1.0"),
+			want: "v0.1.0",
+		},
+		{
+			// What `make build` actually produces, copied from a real run
+			// rather than imagined: the toolchain synthesises this from the
+			// last tag, the commit time, the revision and the dirty state.
+			name: "the pseudo-version a local build reports",
+			bi:   info("v0.1.1-0.20260907131653-3e525bcc7aaa+dirty"),
+			want: "v0.1.1-0.20260907131653-3e525bcc7aaa+dirty",
+		},
+		{name: "go build -buildvcs=false, or a copy outside git", bi: info("(devel)"), want: "(devel)"},
+		{name: "a build info with no version at all", bi: info(""), want: "(devel)"},
+		{name: "no build information at all", bi: nil, want: "(unknown)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			was := version
+			version = c.stamped
+			t.Cleanup(func() { version = was })
+			if got := versionString(c.bi); got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// One line on stdout, nothing on stderr, and stdin untouched: failingReader
+// errors on any read, so a --version that fell through to the patch would fail
+// here rather than block a terminal.
+func TestTheVersionFlagPrintsAndStops(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := cli([]string{"--version"}, failingReader{}, &out, &errOut); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if errOut.Len() != 0 {
+		t.Errorf("stderr = %q, want nothing", errOut.String())
+	}
+	got := out.String()
+	if !strings.HasPrefix(got, "hunk ") || strings.Count(got, "\n") != 1 || !strings.HasSuffix(got, "\n") {
+		t.Errorf("stdout = %q, want one line naming the tool and its version", got)
 	}
 }

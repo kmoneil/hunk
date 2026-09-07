@@ -14,8 +14,48 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 )
+
+// version is the release this binary was built from, set by the release
+// workflow with -ldflags. Empty in every other build, where the toolchain's own
+// record is better evidence than a constant somebody has to remember to bump.
+var version string
+
+// versionString is what --version prints, given the build information the
+// toolchain recorded, or nil when there is none. Taking it as an argument
+// rather than reading it is what makes the cases below testable; the reading is
+// one line at the call site.
+//
+// The three ways this binary reaches somebody, each measured rather than
+// assumed:
+//
+//   - go install ...@v0.2.0, which the README documents and the field runs.
+//     The module version is exact: "v0.2.0".
+//   - a local build from a checkout, which reports a pseudo-version built from
+//     the last tag, the commit time, the revision and a dirty marker:
+//     "v0.1.1-0.20260907131653-3e525bcc7aaa+dirty". Precise, and not the
+//     release being cut, which is why an artifact has to be stamped.
+//   - go build -buildvcs=false, or a build from a copy that is not under
+//     version control, which reports "(devel)" and records no revision either.
+//
+// An earlier draft dug the revision out of bi.Settings for a "(devel, abc123)"
+// form. Running it found that case does not arise on a toolchain this module
+// can be built by: where a revision exists the pseudo-version already carries
+// it, and where it does not, there is nothing to dig for.
+func versionString(bi *debug.BuildInfo) string {
+	if version != "" {
+		return version
+	}
+	if bi == nil {
+		return "(unknown)"
+	}
+	if v := bi.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	return "(devel)"
+}
 
 // Exit codes are a closed set (§4.1). Every exit path in the program maps to
 // exactly one of them, which is why there is no log.Fatal anywhere below. The
@@ -90,6 +130,7 @@ FLAGS
   --eol auto|strict     auto converts payload line endings to the file's
                         dominant ending before matching and on write. (auto)
   --allow-outside-root  Permit paths that resolve outside --root.
+  --version             Print the version and exit.
 
 EXIT CODES
 
@@ -151,6 +192,7 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		allowOutside = fs.Bool("allow-outside-root", false, "")
 		help         = fs.Bool("help", false, "")
 		h            = fs.Bool("h", false, "")
+		showVersion  = fs.Bool("version", false, "")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -159,6 +201,13 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if *help || *h {
 		fmt.Fprint(stdout, usage)
+		return exitOK
+	}
+	// Before anything reads stdin, like --help: a caller asking which binary
+	// this is has not given it a patch.
+	if *showVersion {
+		bi, _ := debug.ReadBuildInfo()
+		fmt.Fprintf(stdout, "hunk %s\n", versionString(bi))
 		return exitOK
 	}
 	if fs.NArg() > 0 {
