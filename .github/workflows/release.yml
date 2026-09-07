@@ -67,13 +67,17 @@ jobs:
       # CGO off so each is a static binary, which is what the README promises.
       #
       # The version is stamped in, because a module's version is a property of
-      # how it was fetched rather than of its source: `go install ...@v0.2.0`
-      # records v0.2.0 by itself, but `go build` of the same commit records a
-      # pseudo-version derived from the *previous* tag, so an unstamped artifact
-      # would name the wrong release rather than no release.
-      # Only a tag stamps. On a workflow_dispatch the value is empty, the binary
-      # falls back to the build info and says "(devel, <revision>)", and that is
-      # the truth about a build that releases nothing.
+      # how it was fetched rather than of its source. `go install ...@v0.2.0`
+      # records v0.2.0 by itself; `go build` of the same commit records a
+      # pseudo-version, and in this job that is "v0.0.0-<time>-<revision>",
+      # because actions/checkout fetches one commit and no tags and the
+      # toolchain has no tag to base one on. So an unstamped artifact would name
+      # v0.0.0 rather than the release it is.
+      #
+      # Only a tag stamps. On a workflow_dispatch the value is empty and the
+      # binary reports that pseudo-version, which is the truth about a build
+      # that releases nothing. Both halves measured on run 34127523370 by
+      # downloading the artifact and running it, rather than assumed.
       - name: build
         run: |
           mkdir -p dist
