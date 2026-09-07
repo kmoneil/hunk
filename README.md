@@ -212,6 +212,9 @@ That puts the binary on your `PATH` and the skill in `~/.claude/skills/hunk`,
 which teaches an agent when to reach for the tool and, more importantly, what to
 do when it refuses.
 
+`hunk --version` says which one you have: the release when you installed one,
+and a pseudo-version naming the commit when you built from a clone.
+
 A static binary. No configuration file, no state directory, no network, and no
 dependency outside the Go standard library. The last two are gated rather than
 promised: one by a test that walks the transitive import graph, the other by a
