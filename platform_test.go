@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -82,3 +83,26 @@ func notExistPhrase() string {
 	}
 	return "no such file"
 }
+
+// slashPaths folds path separators in a golden that would otherwise differ by
+// platform.
+//
+// Unlike native() above, this one is about a string that does reach the reader.
+// PathRefusal.Resolved is filepath.Clean's output, so where a path genuinely
+// resolves somewhere else, the clause naming it renders natively: on Windows
+// "sub/../../outside.txt" resolves to "..\outside.txt" and the message says so.
+// That is where the path led rather than what the patch wrote, so a native
+// separator is defensible there and this stays a test fix. What it costs is
+// exactly this: one golden that cannot be compared across platforms unless the
+// separators are folded first.
+//
+// The neighbouring case was not defensible and is not handled here. A path that
+// resolved to itself with the slashes turned round printed a clause that said
+// nothing, because the check for a redundant clause was a string comparison
+// between a native path and a written one. Detail() folds separators before
+// deciding now. The Windows job found it against testdata/cli-path-refused.txt
+// on this card's first run, which is the argument for these goldens existing.
+//
+// Applied on every platform rather than only on Windows, so all three compare
+// the same bytes. Nothing else in these reports contains a backslash.
+func slashPaths(s string) string { return strings.ReplaceAll(s, `\`, "/") }

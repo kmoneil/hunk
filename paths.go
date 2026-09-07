@@ -54,7 +54,14 @@ func (e *PathRefusal) Error() string { return e.Path + ": " + e.Detail() }
 func (e *PathRefusal) Detail() string {
 	var b strings.Builder
 	b.WriteString(e.Reason)
-	if e.Resolved != "" && e.Resolved != e.Path {
+	// Compared with the separators folded, because the clause exists to say
+	// where a path led when that is somewhere else. filepath.Clean returns a
+	// native path, so on Windows "../outside.txt" resolves to "..\outside.txt"
+	// and a plain string comparison printed "(it resolves to ..\outside.txt)"
+	// about the path the caller had just written. ToSlash is identity on
+	// POSIX, where a backslash is an ordinary character in a filename and must
+	// keep telling two paths apart.
+	if e.Resolved != "" && filepath.ToSlash(e.Resolved) != filepath.ToSlash(e.Path) {
 		fmt.Fprintf(&b, " (it resolves to %s)", e.Resolved)
 	}
 	fmt.Fprintf(&b, "; the root is %s", e.Root)
