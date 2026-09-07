@@ -698,6 +698,20 @@ func TestPathRefusalSaysWhereItLooked(t *testing.T) {
 			ref:  PathRefusal{Path: "a.go", Root: "/r", Resolved: "a.go", Reason: "no such file"},
 			want: "no such file; the root is /r",
 		},
+		{
+			// The same case on Windows, where filepath.Clean hands back a
+			// native path: the clause would otherwise name the caller's own
+			// path back at it with the slashes turned round. Trivially true on
+			// POSIX, where native() is identity, and the end-to-end pin is
+			// testdata/cli-path-refused.txt on the Windows job, which is what
+			// caught it.
+			name: "a resolved path differing only in separator is not repeated",
+			ref: PathRefusal{
+				Path: "../outside.txt", Root: "/r", Resolved: native("../outside.txt"),
+				Reason: "the path climbs out of the root",
+			},
+			want: "the path climbs out of the root; the root is /r",
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := c.ref.Detail(); got != c.want {
@@ -706,6 +720,42 @@ func TestPathRefusalSaysWhereItLooked(t *testing.T) {
 			if got, want := c.ref.Error(), c.ref.Path+": "+c.want; got != want {
 				t.Errorf("Error() = %q, want %q", got, want)
 			}
+		})
+	}
+}
+
+// The page an agent reads when a path refusal aborts the load, pinned end to
+// end. Nothing did until now: the tests above cover Detail() and Error(), and
+// the measurement in scripts/corpus could not classify the printed form at all,
+// so a refusal reachable by writing one wrong path counted as "unclassified" in
+// §12's exit table.
+//
+// One golden per branch of the message rather than per reason. The reasons are
+// interchangeable text; the branch that names where the path led is a different
+// shape, and the cheapest way to reach it needs no symlink: a path that cleans
+// to something other than what the patch wrote.
+//
+// The root is an absolute temporary directory and is in the message by design,
+// so it is substituted for a placeholder. Everything else is compared byte for
+// byte.
+func TestAPathRefusalIsGolden(t *testing.T) {
+	for _, c := range []struct{ name, golden, path string }{
+		{"a path that climbs out of the root", "cli-path-refused", "../outside.txt"},
+		{
+			"one that resolves somewhere else first",
+			"cli-path-refused-resolves", "sub/../../outside.txt",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"sub/in.txt": "x\n"})
+			code, out, errOut := runCLI(t, root, nil, "@@ file "+c.path+"\n@@ old\nx\n@@ new\ny\n")
+			if code != exitNoMatch {
+				t.Fatalf("exit %d, want %d: %s", code, exitNoMatch, errOut)
+			}
+			if out != "" {
+				t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
+			}
+			golden(t, c.golden, slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
 		})
 	}
 }

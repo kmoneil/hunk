@@ -1,0 +1,1 @@
+hunk: sub/../../outside.txt: the path climbs out of the root (it resolves to ../outside.txt); the root is /the/root

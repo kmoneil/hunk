@@ -114,6 +114,13 @@ var (
 	reExitJSON    = regexp.MustCompile(`(?m)^\s*"exit":\s*(\d+)`)
 	reExitApplied = regexp.MustCompile(`(?m)^\d+ files?, \d+ hunks?, [-+]`)
 	reExitNoMatch = regexp.MustCompile(`(?m)^hunk: .*did not match.*nothing was written`)
+	// The other exit 2: a path refusal that aborts the load before any hunk is
+	// evaluated, so it has no per-hunk report to appear in. It shares the
+	// report's default branch with the I/O errors and with exit 6, and what
+	// makes it specific is the root, which the message has named since
+	// 2026-09-06. Goldened as cli-path-refused and cli-path-refused-resolves,
+	// one per branch of the message.
+	reExitPathRefused = regexp.MustCompile(`(?m)^hunk: \S+: .*; the root is `)
 	// Exits 3 and 4 differ by one clause, and that pair is what §11's open
 	// question about --verify-may-format turns on, so they are separate rules
 	// rather than one rule and a substring test.
@@ -267,7 +274,7 @@ func HunkExit(cmd, result string) int {
 		return 4
 	case reExitVerifyFailed.MatchString(result):
 		return 3
-	case reExitNoMatch.MatchString(result):
+	case reExitNoMatch.MatchString(result), reExitPathRefused.MatchString(result):
 		return ExitNoMatch
 	case reExitUsage.MatchString(result):
 		return 1
