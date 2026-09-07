@@ -71,6 +71,44 @@ type Stats struct {
 	// classifier.
 	Exit2Followed  int `json:"exit2_with_a_classified_next_call"`
 	Exit2Recovered int `json:"exit2_followed_by_exit0"`
+
+	// Adoption, which §12 names as the open risk and had no instrument for
+	// until 2026-09-07. Counted per call that used a thing at least once
+	// rather than per occurrence: the question is whether an agent reaches
+	// for it at all, not how many hunks a patch had.
+	HunkTrivialNotes  int            `json:"hunk_trivial_notes"`
+	HunkDirectives    map[string]int `json:"hunk_directives,omitempty"`
+	HunkFlagUse       map[string]int `json:"hunk_flags,omitempty"`
+	HunkPatchFromFile int            `json:"hunk_patch_from_file"`
+
+	// A verify that rewrites files is the only way to reach exit 4, so this is
+	// the number §11's second open question has been waiting on since
+	// 2026-09-05. Zero exit-4s over a corpus with none of these in it is not
+	// evidence that the default is right; it is evidence that the case has not
+	// arisen.
+	HunkFormattingVerify int `json:"hunk_verify_rewrites_files"`
+}
+
+// hunkAdoption records what one hunk call reached for. Counted over every
+// invocation including the probes: "hunk format" passing no flags and no
+// directives is a fact about adoption too, and excluding it would need a rule
+// about which calls are allowed to have none.
+func (s *Stats) hunkAdoption(cmd, result string) {
+	if PrintsTrivialNote(result) {
+		s.HunkTrivialNotes++
+	}
+	for _, d := range Directives(cmd) {
+		s.HunkDirectives[d]++
+	}
+	for _, f := range HunkFlags(cmd) {
+		s.HunkFlagUse[f]++
+	}
+	if ReadsPatchFromFile(cmd) {
+		s.HunkPatchFromFile++
+	}
+	if VerifyRewritesFiles(cmd) {
+		s.HunkFormattingVerify++
+	}
 }
 
 // Exit2RecoveryRate is §7's score: of the refusals whose next application is
@@ -139,10 +177,12 @@ type call struct {
 // Walk measures every transcript under root.
 func Walk(root string) (*Stats, error) {
 	s := &Stats{
-		Date:      "",
-		Root:      root,
-		Projects:  map[string]int{},
-		HunkExits: map[int]int{},
+		Date:           "",
+		Root:           root,
+		Projects:       map[string]int{},
+		HunkExits:      map[int]int{},
+		HunkDirectives: map[string]int{},
+		HunkFlagUse:    map[string]int{},
 	}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
@@ -242,6 +282,7 @@ func (s *Stats) session(path, project string) error {
 		s.BashCalls++
 		if IsHunkCall(c.command) {
 			s.HunkCalls++
+			s.hunkAdoption(c.command, results[c.id])
 			switch code := HunkExit(c.command, results[c.id]); code {
 			case ExitProbe:
 				s.HunkProbes++
@@ -404,6 +445,42 @@ func (s *Stats) Report() string {
 		fmt.Fprintf(&b, "      unclassified        %7d\n", s.HunkUnclassified)
 		fmt.Fprintf(&b, "  exit-2 recovery            %6.2f   %d of %d\n",
 			s.Exit2RecoveryRate(), s.Exit2Recovered, s.Exit2Followed)
+
+		// Adoption. The zeros are the point, so the directives are printed in
+		// the tool's own order rather than only the ones somebody used.
+		applied := s.HunkExits[ExitOK]
+		fmt.Fprintf(&b, "  trivial note printed    %9d   of %d that applied\n",
+			s.HunkTrivialNotes, applied)
+		fmt.Fprintf(&b, "  directives used          ")
+		for _, d := range []string{"file", "old", "new", "create", "delete", "append", "prepend"} {
+			fmt.Fprintf(&b, " %s %d", d, s.HunkDirectives[d])
+		}
+		fmt.Fprintln(&b)
+		if s.HunkPatchFromFile > 0 {
+			fmt.Fprintf(&b, "    patch from a file (-f)%7d   directives unknown for those\n",
+				s.HunkPatchFromFile)
+		}
+		fmt.Fprintf(&b, "  flags used               ")
+		type fu struct {
+			flag string
+			n    int
+		}
+		var flags []fu
+		for f, n := range s.HunkFlagUse {
+			flags = append(flags, fu{f, n})
+		}
+		sort.Slice(flags, func(i, j int) bool {
+			if flags[i].n != flags[j].n {
+				return flags[i].n > flags[j].n
+			}
+			return flags[i].flag < flags[j].flag
+		})
+		for _, f := range flags {
+			fmt.Fprintf(&b, " %s %d", f.flag, f.n)
+		}
+		fmt.Fprintln(&b)
+		fmt.Fprintf(&b, "  verify rewrites files   %9d   exit 4 needs one of these\n",
+			s.HunkFormattingVerify)
 	}
 
 	if len(s.Projects) > 0 {

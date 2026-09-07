@@ -87,12 +87,17 @@ var (
 	// literal "| hunk " as part of its own matching rule. Two earlier versions
 	// of the same bug: the eval grader matched \bhunk\b against a workspace
 	// path, and a tool_result matched §5.2's documentation of a diagnostic.
-	reHunkCall = regexp.MustCompile(`(?:^|[;&|(]|\n)\s*hunk(?:\s|$)`)
+	//
+	// A path prefix counts: ./hunk, ../hunk and an absolute path all run it,
+	// and requiring the bare name undercounted this repository's own calls by
+	// 65 of 397 on 2026-09-07. The anchor is what keeps that safe: the name has
+	// to be in command position, so "cat /tmp/notes/hunk" is still not a call.
+	reHunkCall = regexp.MustCompile(`(?:^|[;&|(]|\n)\s*(?:\S*/)?hunk(?:\s|$)`)
 
 	// The invocations that ask hunk what it is rather than to edit anything.
 	// An agent checking what is available is not an application, and counting
 	// it as one puts --help in the denominator of every rate in §12.
-	reHunkProbe = regexp.MustCompile(`(?:^|[;&|(]|\n)\s*hunk\s+(?:format|--help|-h|--version)\b`)
+	reHunkProbe = regexp.MustCompile(`(?:^|[;&|(]|\n)\s*(?:\S*/)?hunk\s+(?:format|--help|-h|--version)\b`)
 
 	// hunk's own report, exit by exit. Every one of these is goldened in
 	// testdata/, and classify_test.go reads the golden files rather than copies
@@ -119,7 +124,52 @@ var (
 	// errors are fixed strings in main.go. Exit 5 is not enumerable, because
 	// its text is whatever the OS said, so it is never guessed at.
 	reExitUsage = regexp.MustCompile(`(?m)^hunk: (?:patch line \d+:|--[a-z-]+ |unexpected argument|format (?:takes no arguments|is a subcommand))`)
+
+	// §5.1's note, and the only line hunk prints that a caller is routinely
+	// right to ignore. Anchored to the start of a line and matched on the half
+	// that does not vary: the tail names Edit, Write or rm by operation.
+	reTrivialNote = regexp.MustCompile(`(?m)^note: one replacement in one file`)
+
+	// --marker's argument, read from the raw command rather than the skeleton,
+	// because it is nearly always quoted and the skeleton is what removes
+	// quoted spans. A patch that changes the marker changes what a directive
+	// line looks like for the whole patch, so a rule assuming "@@" reports no
+	// directives at all for the calls that edit a file which quotes a patch,
+	// which is the case --marker exists for.
+	reMarkerFlag = regexp.MustCompile(`--marker(?:=|\s+)('[^']*'|"[^"]*"|\S+)`)
+
+	// -f PATCHFILE. The patch is then not in the transcript at all, so its
+	// directives are unknown rather than absent, and the difference has to
+	// reach the report.
+	reHunkPatchFile = regexp.MustCompile(`(?:^|\s)-f(?:=|\s+)\S`)
+
+	// A long flag on the invocation line.
+	reHunkFlag = regexp.MustCompile(`--[a-z][a-z-]+`)
+
+	// --verify's argument, from the raw command for the reason above.
+	reVerifyArg = regexp.MustCompile(`--verify(?:=|\s+)('[^']*'|"[^"]*"|\S+)`)
+
+	// A verify command that rewrites the files it checks. Exit 4 is only
+	// reachable when the verify is one of these, so a corpus with none in it
+	// cannot produce one, and its zero exit-4s says nothing at all about the
+	// default §11's second open question asks about.
+	reFormattingVerify = regexp.MustCompile(`\bgofmt\s[^|;&]*-w|\bgo\s+fmt\b|\bgoimports\s[^|;&]*-w|` +
+		`\bprettier\s[^|;&]*--write|\bmake\s+(?:fmt|format)\b|\bcargo\s+fmt\b|\bruff\s+format\b|` +
+		`\bblack\s|\bsed\s+-i|\bnpm\s+run\s+(?:fmt|format)\b|\bdprint\s+fmt\b|\bzig\s+fmt\b`)
 )
+
+// defaultMarker is the tool's, duplicated for the reason hunkDirectives is.
+const defaultMarker = "@@"
+
+// hunkDirectives mirrors the tool's own set, because scripts/corpus is a
+// separate module on purpose and cannot import it.
+// TestTheDirectiveSetMatchesTheTool reads patch.go and fails when the two
+// drift, which is the only thing standing between this table and a silent
+// zero for an operation that shipped after it was written.
+var hunkDirectives = map[string]bool{
+	"file": true, "old": true, "new": true, "create": true,
+	"delete": true, "append": true, "prepend": true, "end": true,
+}
 
 // Exit categories that are not exit codes. Negative, so they cannot collide
 // with one.
@@ -239,8 +289,11 @@ func IsHeredocEdit(cmd string) bool {
 func HasUniquenessGuard(cmd string) bool { return reGuard.MatchString(cmd) }
 
 // BundlesVerify reports whether the same shell call also runs a build or a test
-// suite. §1: 66% do, which is the figure --help quotes for why --verify exists
-// and is optional.
+// suite. §1: 58% do, which is the figure --help quotes for why --verify exists
+// and is optional. It said 66% until 2026-09-04, when re-deriving §1 found the
+// draft had counted a verify word appearing anywhere in the command, including
+// inside the python payload the edit was writing. This comment kept the
+// retracted figure alive until 2026-09-07, which is the last place it survived.
 func BundlesVerify(cmd string) bool {
 	// Only what comes after the heredoc's terminator counts. Looking after its
 	// opening instead counts a "go test" inside the python payload, which is a
@@ -296,3 +349,103 @@ func Paths(cmd string) []string {
 // the result rather than inferred, because an assertion that fired is the
 // signal §12's "calls per successful edit" is counting.
 func Failed(result string) bool { return reFailed.MatchString(result) }
+
+// PrintsTrivialNote reports whether hunk's output carried §5.1's note. It is
+// printed on a successful apply that bought nothing the tool offers, and it is
+// what the trivial-note decision is a rate of.
+//
+// --json carries the same verdict as "trivial": true and prints no prose. That
+// is deliberately not counted: the note's cost is that it is read, and a JSON
+// field is not read by anybody. The field used --json five times, so the two
+// rules would differ by about that much.
+func PrintsTrivialNote(result string) bool { return reTrivialNote.MatchString(result) }
+
+// Marker is the directive prefix a call used: --marker's argument, or "@@".
+func Marker(cmd string) string {
+	if m := reMarkerFlag.FindStringSubmatch(cmd); m != nil {
+		return strings.Trim(m[1], `'"`)
+	}
+	return defaultMarker
+}
+
+// hunkInvocation is the part of a command that runs hunk: from the invocation
+// to the end of its line. A flag on the other side of a && belongs to another
+// command, and a patch payload is not a flag at all.
+func hunkInvocation(cmd string) string {
+	sk := commandSkeleton(cmd)
+	loc := reHunkCall.FindStringIndex(sk)
+	if loc == nil {
+		return ""
+	}
+	line := sk[loc[0]:]
+	// Stop at the end of this command rather than the end of the line. A
+	// `hunk -f p.patch && git status --porcelain` is two commands, and
+	// --porcelain is not hunk's: the corpus had three of exactly that shape,
+	// and they put git's flags in the adoption table on their first run.
+	rest := loc[1] - loc[0]
+	if i := strings.IndexAny(line[rest:], "\n;&|"); i >= 0 {
+		line = line[:rest+i]
+	}
+	return line
+}
+
+// HunkFlags are the long flags a hunk invocation passed, in order of first
+// appearance and deduplicated. The adoption question is whether an agent
+// reaches for a flag at all, so a flag passed twice in one call is one use.
+func HunkFlags(cmd string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range reHunkFlag.FindAllString(hunkInvocation(cmd), -1) {
+		if !seen[f] {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// ReadsPatchFromFile reports whether -f gave the patch, which puts it outside
+// the transcript. Directives then returns nothing, and nothing has to mean
+// unknown rather than none.
+func ReadsPatchFromFile(cmd string) bool {
+	return reHunkPatchFile.MatchString(hunkInvocation(cmd))
+}
+
+// Directives are the operations a patch used, in order of first appearance and
+// deduplicated. The rule is the tool's own: the marker at column 0, then a
+// space or tab, then a word from the directive set.
+//
+// Deduplicated per call for the same reason as HunkFlags: this counts whether
+// an operation was reached for, not how many hunks a patch had.
+func Directives(cmd string) []string {
+	marker := Marker(cmd)
+	var out []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(cmd, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), marker)
+		if !ok || rest == "" || (rest[0] != ' ' && rest[0] != '\t') {
+			continue
+		}
+		w := strings.TrimLeft(rest, " \t")
+		if i := strings.IndexAny(w, " \t"); i >= 0 {
+			w = w[:i]
+		}
+		if !hunkDirectives[w] || seen[w] {
+			continue
+		}
+		seen[w] = true
+		out = append(out, w)
+	}
+	return out
+}
+
+// VerifyRewritesFiles reports whether --verify's command formats in place, and
+// so whether this call could have produced the exit 4 that §11's second open
+// question turns on.
+func VerifyRewritesFiles(cmd string) bool {
+	m := reVerifyArg.FindStringSubmatch(cmd)
+	if m == nil {
+		return false
+	}
+	return reFormattingVerify.MatchString(strings.Trim(m[1], `'"`))
+}
