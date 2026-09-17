@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -120,3 +122,43 @@ func slashPaths(s string) string { return strings.ReplaceAll(s, `\`, "/") }
 // links. The expectation is what the runner showed rather than a skip, so the
 // fallback stays tested on the one platform that takes it.
 func climbingPastTheTopResolves() bool { return runtime.GOOS != "windows" }
+
+// foldsCase reports whether the filesystem the test's temporary directories are
+// on folds case, by making a file and looking it up in the other case.
+//
+// It is not a concession but a fact the assertions need. What a batch does with
+// two spellings of one name has two right answers, and which is right depends
+// on the filesystem: macOS and Windows fold by default, as does this machine's
+// /workspace, which is the Mac's disk; Linux does not. Running the suite with
+// TMPDIR on a folding filesystem exercises the other answer.
+func foldsCase(tb testing.TB) bool {
+	tb.Helper()
+	return sameFileUnderTwoNames(tb, "probe.txt", "PROBE.TXT")
+}
+
+// foldsNormalization reports the same for the two Unicode normalizations of
+// one name. APFS folds them; NTFS and Linux do not.
+func foldsNormalization(tb testing.TB) bool {
+	tb.Helper()
+	return sameFileUnderTwoNames(tb, "\u00e9.txt", "e\u0301.txt")
+}
+
+func sameFileUnderTwoNames(tb testing.TB, made, looked string) bool {
+	tb.Helper()
+	dir := tb.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, made), []byte("probe\n"), 0o644); err != nil {
+		tb.Fatal(err)
+	}
+	a, err := os.Lstat(filepath.Join(dir, made))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	b, err := os.Lstat(filepath.Join(dir, looked))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return os.SameFile(a, b)
+}

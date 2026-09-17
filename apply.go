@@ -223,6 +223,9 @@ type Txn struct {
 	// batch that replaced three occurrences at once is not trivial, however
 	// few files it touched: no single Edit does that safely.
 	maxCount int
+	// spellings gives each file one spelling for the batch, where a directory
+	// folds case (§3.5).
+	spellings *Spellings
 	// per hunk, filled by Load. Validate indexes rather than resolving again:
 	// resolving twice is both wasted work and a second error path that cannot
 	// happen, since Load would already have refused it.
@@ -230,7 +233,7 @@ type Txn struct {
 }
 
 func NewTxn(tree *Tree, opt Options) *Txn {
-	return &Txn{tree: tree, opt: opt, index: map[string]*file{}}
+	return &Txn{tree: tree, opt: opt, index: map[string]*file{}, spellings: tree.Spellings()}
 }
 
 // Run performs phases 2 through 5. On any error nothing has been written,
@@ -322,8 +325,10 @@ func (x *Txn) load(h Hunk) (*file, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Keyed by resolved name, so "a.go", "./a.go" and a symlink to it are one
-	// file, read once and written once (§3.5).
+	tg = x.spellings.Respell(tg)
+	// Keyed by resolved name, so "a.go", "./a.go", a symlink to it, a path
+	// through a symlinked directory and, where the directory folds case, "A.go"
+	// are one file, read once and written once (§3.5).
 	if f, ok := x.index[tg.name]; ok {
 		return f, nil
 	}

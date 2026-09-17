@@ -319,6 +319,127 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 	}
 }
 
+// On a filesystem that folds case or Unicode normalization, two spellings of one
+// name are one file, and until 2026-09-17 they were two entries in the load
+// index: A.go and a.go in one batch lost an edit under exit 0. A name that
+// exists is now spelled the way its directory stores it, and a name the batch
+// creates the way the batch first spelled it, wherever its directory folds.
+//
+// Every row has two right answers, and the filesystem the test runs on says
+// which applies: Linux does not fold, macOS and Windows do, and so does this
+// machine's /workspace, which is how it was found.
+func TestASpellingIsTheOneTheDirectoryStores(t *testing.T) {
+	folds, normalizes := foldsCase(t), foldsNormalization(t)
+	nfc, nfd := "é.txt", "é.txt"
+	root := mktree(t)
+	must(t, os.WriteFile(filepath.Join(root, nfc), []byte("e\n"), 0o644))
+	// Sorts before nfc, so a lookup that took the first name not in ASCII,
+	// rather than the one that is the same file, would pick it.
+	must(t, os.WriteFile(filepath.Join(root, "\u00e0.txt"), []byte("a\n"), 0o644))
+	must(t, os.Link(filepath.Join(root, "top.txt"), filepath.Join(root, "hard.txt")))
+	must(t, os.MkdirAll(filepath.Join(root, "2026"), 0o755))
+	for _, n := range []string{"1", "2"} {
+		must(t, os.MkdirAll(filepath.Join(root, "digits", n), 0o755))
+	}
+
+	pick := func(when bool, yes, no string) string {
+		if when {
+			return yes
+		}
+		return no
+	}
+	for _, mode := range []struct {
+		name     string
+		unconfin bool
+		want     func(string) string
+	}{
+		{"confined", false, native},
+		{"unconfined", true, func(p string) string { return filepath.Join(root, native(p)) }},
+	} {
+		tree, err := OpenTree(root, mode.unconfin)
+		must(t, err)
+		t.Cleanup(func() { tree.Close() })
+		respell := func(t *testing.T, s *Spellings, in string) string {
+			t.Helper()
+			tg, err := tree.Resolve(in)
+			must(t, err)
+			return s.Respell(tg).name
+		}
+
+		for _, c := range []struct{ name, in, want string }{
+			{"the stored spelling", "top.txt", "top.txt"},
+			{"a file in another case", "TOP.TXT", pick(folds, "top.txt", "TOP.TXT")},
+			{"a directory in another case", "SUB/in.txt", pick(folds, "sub/in.txt", "SUB/in.txt")},
+			{"every component in another case", "Sub/IN.txt", pick(folds, "sub/in.txt", "Sub/IN.txt")},
+			{"the other normalization", nfd, pick(normalizes, nfc, nfd)},
+			{"a hard link keeps its own name", "hard.txt", "hard.txt"},
+			{"a name that does not exist is left as written", "new/Deep.go", "new/Deep.go"},
+			{"a name with no letter in it", "2026", "2026"},
+		} {
+			t.Run(mode.name+", "+c.name, func(t *testing.T) {
+				if got, want := respell(t, tree.Spellings(), c.in), mode.want(c.want); got != want {
+					t.Errorf("Respell(%q) = %q, want %q (folds case: %v, normalization: %v)", c.in, got, want, folds, normalizes)
+				}
+			})
+		}
+
+		// Names the batch creates, spelled more than once in one batch.
+		for _, c := range []struct {
+			name string
+			in   []string
+			want []string
+		}{
+			{"a new name in two cases", []string{"n.go", "N.go"}, []string{"n.go", pick(folds, "n.go", "N.go")}},
+			{"a new directory in two cases", []string{"NEW/x.go", "new/x.go"}, []string{"NEW/x.go", pick(folds, "NEW/x.go", "new/x.go")}},
+			{"a new name meeting its own spelling", []string{"n.go", "n.go"}, []string{"n.go", "n.go"}},
+			// Nothing in 2026 has a letter, and neither does its name, so it
+			// cannot say whether it folds. It is assumed to (Kevin, 2026-09-17):
+			// a refusal is recoverable and a lost file is not.
+			{"new names under a directory nothing can probe", []string{"2026/n.go", "2026/N.go"}, []string{"2026/n.go", "2026/n.go"}},
+			// Nothing in digits has a letter, but its own name does, so it is
+			// asked from its parent.
+			{"a directory that answers with its own name", []string{"digits/n.go", "digits/N.go"}, []string{"digits/n.go", pick(folds, "digits/n.go", "digits/N.go")}},
+			{"a directory asked once and answering twice", []string{"n.go", "N.go", "m.go", "M.go"}, []string{"n.go", pick(folds, "n.go", "N.go"), "m.go", pick(folds, "m.go", "M.go")}},
+			{"a new name that is not UTF-8 is its own", []string{"\xffn.go", "\xffN.go"}, []string{"\xffn.go", "\xffN.go"}},
+			// Inside a directory the batch creates, the directory that exists above
+			// it decides, not the new one, which cannot be asked anything.
+			{"a new name in two cases inside a new directory", []string{"NEW/x.go", "NEW/X.go"}, []string{"NEW/x.go", pick(folds, "NEW/x.go", "NEW/X.go")}},
+		} {
+			t.Run(mode.name+", "+c.name, func(t *testing.T) {
+				s := tree.Spellings()
+				for i, in := range c.in {
+					if got, want := respell(t, s, in), mode.want(c.want[i]); got != want {
+						t.Errorf("Respell(%q) = %q, want %q (folds case: %v)", in, got, want, folds)
+					}
+				}
+			})
+		}
+	}
+
+	// A directory that can be searched and not read cannot say how it stores a
+	// name, so the name stays as written. On a filesystem that does not fold
+	// the name is simply not there, and stays as written for that reason.
+	//
+	// Unconfined, because os.Root opens each directory it walks through, so a
+	// confined tree cannot reach a name in a directory it cannot read at all,
+	// and leaves it as written before a directory read is ever tried. Plain os
+	// looks a name up with search permission alone, which is the case here.
+	t.Run("a directory that cannot be read", func(t *testing.T) {
+		needsPOSIXPerms(t)
+		locked := filepath.Join(root, "sub")
+		must(t, os.Chmod(locked, 0o311))
+		t.Cleanup(func() { os.Chmod(locked, 0o755) })
+		tree, err := OpenTree(root, true)
+		must(t, err)
+		defer tree.Close()
+		tg, err := tree.Resolve("sub/IN.TXT")
+		must(t, err)
+		if got, want := tree.Spellings().Respell(tg).name, filepath.Join(root, "sub", "IN.TXT"); got != want {
+			t.Errorf("Respell = %q, want it as written, %q", got, want)
+		}
+	})
+}
+
 // No file name can hold a NUL byte, and one in a patch half-wrote the tree:
 // under a directory the batch creates, load's stat stopped at the missing
 // directory, and the name was first refused at the rename, after the files
@@ -580,6 +701,7 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 		"a.go", "sub/in.txt", "../escape", "/etc/passwd", "", "a/../../b",
 		"./x", "sub/./../top.txt", strings.Repeat("../", 40) + "etc/passwd",
 		"d/in.txt", "d/new/x.go", "l/x", "sub/../d/in.txt", "rel.link/x",
+		"SUB/IN.TXT", "Sub/New/X.go", "D/in.txt", "\u00e9.txt", "e\u0301.txt",
 	} {
 		f.Add(s)
 	}
@@ -593,6 +715,7 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 	os.Symlink("/etc/passwd", filepath.Join(root, "bad.link"))
 	os.Symlink("sub", filepath.Join(root, "d"))
 	os.Symlink("internal", filepath.Join(root, "l"))
+	folds := foldsCase(f) || foldsNormalization(f)
 
 	tree, err := OpenTree(root, false)
 	if err != nil {
@@ -631,6 +754,21 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 			if fi, err := os.Lstat(filepath.Join(tree.Root(), dir)); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 				t.Fatalf("Resolve(%q) = %q, and %q in it is still a link", p, tg.name, dir)
 			}
+		}
+		// Respell changes a spelling and never a file: the name it returns is
+		// the same file as the one it was given, or is as absent, and where the
+		// filesystem folds neither case nor normalization it is the same name.
+		rs := tree.Spellings().Respell(tg)
+		if !folds && rs.name != tg.name {
+			t.Fatalf("Respell(%q) = %q on a filesystem that does not fold", tg.name, rs.name)
+		}
+		was, wasErr := os.Lstat(abs)
+		now, nowErr := os.Lstat(filepath.Join(tree.Root(), rs.name))
+		switch {
+		case wasErr == nil && (nowErr != nil || !os.SameFile(was, now)):
+			t.Fatalf("Respell(%q) = %q, which is not the same file", tg.name, rs.name)
+		case errors.Is(wasErr, fs.ErrNotExist) && nowErr == nil:
+			t.Fatalf("Respell(%q) = %q, which exists where the name it was given does not", tg.name, rs.name)
 		}
 	})
 }

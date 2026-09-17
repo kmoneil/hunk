@@ -634,6 +634,187 @@ func TestOneFileUnderTwoNamesIsOneFile(t *testing.T) {
 	}
 }
 
+// The batch half of TestASpellingIsTheOneTheDirectoryStores: every shape probed
+// against v0.2.2 on this machine's case-insensitive /workspace, where two
+// spellings of one name were two entries. A replace under each case lost an
+// edit under exit 0, creates lost a payload, deletes and a hidden conflict
+// half-wrote the tree, and a delete then a create was refused as if the delete
+// had not happened. Each row has an outcome for a filesystem that folds and one
+// for a filesystem that does not, and runs the one that applies.
+func TestOneFileUnderTwoSpellingsIsOneFile(t *testing.T) {
+	type outcome struct {
+		after    map[string]string // applied: every regular file afterwards, by the name the directory lists
+		reported int
+		check    func(t *testing.T, files map[string]string) // applied, instead of after
+
+		hunk, line int // refused: the one failure
+		path, says string
+	}
+	const b = "alpha\nbeta\n"
+	nfc, nfd := "é.go", "é.go"
+	folds, normalizes := foldsCase(t), foldsNormalization(t)
+	for _, c := range []struct {
+		name            string
+		files           map[string]string // besides a.go
+		dirs            []string
+		byNormalization bool // folds is normalization, not case
+		patch           string
+		folded, plain   outcome
+	}{
+		{
+			name:   "a replace under each case",
+			patch:  "@@ file a.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file A.go\n@@ old\nbeta\n@@ new\nBETA\n",
+			folded: outcome{after: map[string]string{"a.go": "ALPHA\nBETA\n"}, reported: 1},
+			plain:  outcome{hunk: 2, line: 7, path: "A.go", says: "no such file"},
+		},
+		{
+			name:   "one replace in the wrong case keeps the stored name",
+			patch:  "@@ file A.go\n@@ old\nalpha\n@@ new\nALPHA\n",
+			folded: outcome{after: map[string]string{"a.go": "ALPHA\nbeta\n"}, reported: 1},
+			plain:  outcome{hunk: 1, line: 2, path: "A.go", says: "no such file"},
+		},
+		{
+			name:   "a create under each case",
+			patch:  "@@ create n.go\none\n\n@@ create N.go\ntwo\n\n",
+			folded: outcome{hunk: 2, line: 4, path: "N.go", says: "it already exists"},
+			plain:  outcome{after: map[string]string{"a.go": b, "n.go": "one\n", "N.go": "two\n"}, reported: 2},
+		},
+		{
+			name:   "a file and a path inside it, in another case",
+			patch:  "@@ create x\n@@ create X/y\n",
+			folded: outcome{hunk: 2, line: 2, path: "X/y", says: "it is inside x, which hunk 1 creates as a file"},
+			plain:  outcome{after: map[string]string{"a.go": b, "x": "", "X/y": ""}, reported: 2},
+		},
+		{
+			name:   "a delete under each case",
+			patch:  "@@ delete a.go\n@@ delete A.go\n",
+			folded: outcome{hunk: 2, line: 2, path: "A.go", says: "an earlier hunk in this batch deleted it"},
+			plain:  outcome{hunk: 2, line: 2, path: "A.go", says: "no such file"},
+		},
+		{
+			name:   "a directory under each case",
+			files:  map[string]string{"sub/b.go": b},
+			patch:  "@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file SUB/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
+			folded: outcome{after: map[string]string{"a.go": b, "sub/b.go": "ALPHA\nBETA\n"}, reported: 1},
+			plain:  outcome{hunk: 2, line: 7, path: "SUB/b.go", says: "no such file"},
+		},
+		{
+			name:            "an existing name under each normalization",
+			files:           map[string]string{nfc: b},
+			byNormalization: true,
+			patch:           "@@ file " + nfc + "\n@@ old\nalpha\n@@ new\nALPHA\n@@ file " + nfd + "\n@@ old\nbeta\n@@ new\nBETA\n",
+			folded:          outcome{after: map[string]string{"a.go": b, nfc: "ALPHA\nBETA\n"}, reported: 1},
+			plain:           outcome{hunk: 2, line: 7, path: nfd, says: "no such file"},
+		},
+		{
+			name:   "creates under a new directory in each case",
+			patch:  "@@ create NEW/x.go\none\n\n@@ create new/x.go\ntwo\n\n",
+			folded: outcome{hunk: 2, line: 4, path: "new/x.go", says: "it already exists"},
+			plain:  outcome{after: map[string]string{"a.go": b, "NEW/x.go": "one\n", "new/x.go": "two\n"}, reported: 2},
+		},
+		{
+			name:   "a delete, then a create in another case",
+			patch:  "@@ delete a.go\n@@ create A.go\nnew\n\n",
+			folded: outcome{after: map[string]string{"a.go": "new\n"}, reported: 1},
+			plain:  outcome{after: map[string]string{"A.go": "new\n"}, reported: 2},
+		},
+		{
+			// The stated limit (Kevin, 2026-09-17): telling two normalizations
+			// of a name that does not exist apart needs Unicode tables, which
+			// go.mod excludes. They are two creates everywhere, so where the
+			// filesystem folds normalization the second replaces the first.
+			name:            "a new name under each normalization is two creates",
+			byNormalization: true,
+			patch:           "@@ create " + nfc + "\none\n\n@@ create " + nfd + "\ntwo\n\n",
+			folded: outcome{reported: 2, check: func(t *testing.T, files map[string]string) {
+				if len(files) != 2 || files["a.go"] != b {
+					t.Errorf("want a.go and one other file, got %q", files)
+				}
+				for name, body := range files {
+					if name != "a.go" && body != "two\n" {
+						t.Errorf("%q holds %q; the limit is that the second payload wins", name, body)
+					}
+				}
+			}},
+			plain: outcome{after: map[string]string{"a.go": b, nfc: "one\n", nfd: "two\n"}, reported: 2},
+		},
+		{
+			// Nothing in 2026 has a letter, and neither has its name, so it
+			// cannot say whether it folds, and it is assumed to.
+			name:   "creates under a directory nothing can probe",
+			dirs:   []string{"2026"},
+			patch:  "@@ create 2026/n.go\none\n\n@@ create 2026/N.go\ntwo\n\n",
+			folded: outcome{hunk: 2, line: 4, path: "2026/N.go", says: "it already exists"},
+			plain:  outcome{hunk: 2, line: 4, path: "2026/N.go", says: "it already exists"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			want := c.plain
+			if (c.byNormalization && normalizes) || (!c.byNormalization && folds) {
+				want = c.folded
+			}
+			root := t.TempDir()
+			if r, err := filepath.EvalSymlinks(root); err == nil {
+				root = r
+			}
+			files := map[string]string{"a.go": b}
+			maps.Copy(files, c.files)
+			for name, body := range files {
+				full := filepath.Join(root, filepath.FromSlash(name))
+				must(t, os.MkdirAll(filepath.Dir(full), 0o755))
+				must(t, os.WriteFile(full, []byte(body), 0o644))
+			}
+			for _, d := range c.dirs {
+				must(t, os.MkdirAll(filepath.Join(root, d), 0o755))
+			}
+			tree, err := OpenTree(root, false)
+			must(t, err)
+			t.Cleanup(func() { tree.Close() })
+			p, err := Parse([]byte(c.patch), DefaultMarker)
+			must(t, err)
+
+			before := snapshot(t, root)
+			r, err := NewTxn(tree, Options{}).Run(p)
+			if want.says == "" {
+				if err != nil {
+					t.Fatalf("refused (folds case: %v, normalization: %v): %v", folds, normalizes, err)
+				}
+				if len(r.Files) != want.reported {
+					t.Errorf("the report lists %d files, want %d: %+v", len(r.Files), want.reported, r.Files)
+				}
+				got := regularFiles(t, root)
+				if want.check != nil {
+					want.check(t, got)
+				} else if !maps.Equal(got, want.after) {
+					t.Errorf("files afterwards:\n got %q\nwant %q", got, want.after)
+				}
+				return
+			}
+
+			if got := ExitCode(err); got != exitNoMatch {
+				t.Fatalf("exit %d, want %d (folds case: %v, normalization: %v): %v", got, exitNoMatch, folds, normalizes, err)
+			}
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("want *ValidationError, got %T: %v", err, err)
+			}
+			if len(ve.Failures) != 1 {
+				t.Fatalf("%d failures, want 1: %+v", len(ve.Failures), ve.Failures)
+			}
+			f := ve.Failures[0]
+			if f.Hunk != want.hunk || f.PatchLine != want.line || f.Path != want.path {
+				t.Errorf("failure is hunk %d, line %d, %q; want hunk %d, line %d, %q", f.Hunk, f.PatchLine, f.Path, want.hunk, want.line, want.path)
+			}
+			for _, s := range []string{want.says, root} {
+				if !strings.Contains(f.Refusal, s) {
+					t.Errorf("refusal = %q, want it to say %q", f.Refusal, s)
+				}
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
+}
+
 // regularFiles is every regular file under root and its contents, by
 // slash-separated relative name. Links and directories are not in it, so an
 // extra file, a duplicate or a leftover temp file is a difference.
