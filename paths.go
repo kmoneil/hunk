@@ -10,7 +10,8 @@ package main
 // between defeats it; os.Root resolves each component against a held directory
 // descriptor and has no such gap. What os.Root does not do is §6.5's
 // write-through, and it refuses an absolute symlink even when it points inside
-// the root, so the final component is resolved here.
+// the root, so links are resolved here: every link on a path, which is also what
+// gives one file one name.
 
 import (
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -74,15 +76,15 @@ func (e *PathRefusal) Detail() string {
 type Target struct {
 	name string // relative to the tree root when confined, absolute when not
 	orig string // as written in the patch, for messages
-	link bool   // the patch named a symlink and this is what it led to
+	link bool   // a symlink on the path the patch wrote led here
 }
 
 // Orig is the path as the patch wrote it. Reports say that, not the resolved
 // name, because that is the string the agent can act on.
 func (t Target) Orig() string { return t.orig }
 
-// ViaSymlink reports whether the patch named a symlink that this target is the
-// destination of. §6.5 writes through the link rather than replacing it.
+// ViaSymlink reports whether a symlink anywhere on the path the patch wrote led
+// to this target. §6.5 writes through the link rather than replacing it.
 func (t Target) ViaSymlink() bool { return t.link }
 
 // A Tree is the file tree a patch applies to, confined to the root unless
@@ -153,7 +155,7 @@ func (t *Tree) Resolve(p string) (Target, error) {
 	if err != nil {
 		return Target{}, err
 	}
-	final, viaLink, err := t.followFinalLink(p, name)
+	final, viaLink, err := t.resolveLinks(p, name)
 	if err != nil {
 		return Target{}, err
 	}
@@ -190,86 +192,172 @@ func (t *Tree) toName(p string) (string, error) {
 	return clean, nil
 }
 
-// followFinalLink resolves a chain of symlinks at the named location, which is
-// §6.5's "a target that is itself a symlink". It exists because os.Root does
-// two things this needs undone: it refuses an absolute symlink even when the
-// target is inside the root, and its Rename replaces a link rather than
-// writing through it.
+// resolveLinks resolves every symlink on name, in whichever component it is, and
+// returns the name with none left in it, so that one file has one name however
+// a patch spelled it (§3.5).
 //
-// Symlinks in intermediate components are left to os.Root, which follows the
-// relative ones and refuses the rest. Reimplementing its traversal to also
-// accept absolute intermediate links would hand back the check-then-use window
-// that using os.Root is what closes.
-func (t *Tree) followFinalLink(orig, name string) (string, bool, error) {
+// §6.5's "a target that is itself a symlink" is the final component, and until
+// 2026-09-17 that was the only one resolved here; os.Root followed the rest at
+// use. So with d -> sub, sub/b.go and d/b.go were two names for one file: two
+// entries in the load index, two writes, and a lost edit reported as applied.
+// Everything that reads Target.name needs the one name, which is the load
+// index, the conflict check, commit and rollback, so it is made here once.
+//
+// The walk is os.Root's own, so the two cannot disagree about which file a
+// spelling is. A link is replaced by its destination's components where it
+// stood, and a ".." removes the component before it, which by then is a
+// directory that exists. That is the physical answer, and cleaning the joined
+// text is not: with x -> sub/deep, "x/../in.txt" is sub/in.txt, not in.txt.
+//
+// os.Root still confines every use, and this opens nothing. Each path is
+// Lstat'd as it stands before it is walked, so an escape or an absolute link in
+// a parent is refused in os.Root's words, exactly as before. A path it cannot
+// traverse for any other reason, such as a loop, a file used as a directory or
+// a permission, comes back as it stands for load to report.
+func (t *Tree) resolveLinks(orig, name string) (string, bool, error) {
+	base, parts := t.splitName(name)
 	via := false
-	for hop := 0; ; hop++ {
-		if hop >= maxLinkHops {
+	links := 0
+	for i, walked := 0, false; ; {
+		if !walked {
+			walked = true
+			current := t.joinName(base, parts, false)
+			if _, err := t.lstat(current); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				if refusal := t.refusalFor(orig, filepath.Clean(current), err); refusal != nil {
+					return "", false, refusal
+				}
+				return filepath.Clean(current), via, nil
+			}
+		}
+		if i == len(parts) {
+			return t.joinName(base, parts, true), via, nil
+		}
+		switch parts[i] {
+		case ".":
+			parts = slices.Delete(parts, i, i+1)
+			continue
+		case "..":
+			if i == 0 {
+				// Above the top of an absolute path, which is where it stays.
+				// Confined, os.Root has already refused the path that got here.
+				parts = slices.Delete(parts, 0, 1)
+				continue
+			}
+			parts = slices.Delete(parts, i-1, i+1)
+			i--
+			continue
+		}
+		here := t.joinName(base, parts[:i+1], true)
+		fi, err := t.lstat(here)
+		if err != nil {
+			// Nothing under a directory that does not exist is a link, so the
+			// rest is the name. A ".." in the rest came from a link's
+			// destination and climbs out of the missing directory, which has
+			// no answer: the kernel stops at the missing directory too.
+			if slices.Contains(parts[i+1:], "..") {
+				return "", false, &PathRefusal{
+					Path: orig, Root: t.root, Resolved: t.joinName(base, parts, false),
+					Reason: "a symlink on it climbs out of a directory that does not exist",
+				}
+			}
+			return t.joinName(base, parts, true), via, nil
+		}
+		if fi.Mode()&fs.ModeSymlink == 0 {
+			i++
+			continue
+		}
+		if links >= maxLinkHops {
 			return "", false, &PathRefusal{
-				Path: orig, Root: t.root, Resolved: name,
+				Path: orig, Root: t.root, Resolved: here,
 				Reason: "too many symlinks; the chain loops or is absurd",
 			}
 		}
-		fi, err := t.lstat(name)
-		if err != nil {
-			// A path that does not exist yet is not an error here: @@ create
-			// makes one, and whether its absence is legal is §6.1's call, not
-			// this file's.
-			if errors.Is(err, fs.ErrNotExist) {
-				return name, via, nil
-			}
-			if refusal := t.refusalFor(orig, name, err); refusal != nil {
-				return "", false, refusal
-			}
-			return name, via, nil
-		}
-		if fi.Mode()&fs.ModeSymlink == 0 {
-			return name, via, nil
-		}
-		dest, err := t.readlink(name)
+		links++
+		dest, err := t.readlink(here)
 		if err != nil {
 			return "", false, &PathRefusal{
-				Path: orig, Root: t.root, Resolved: name,
+				Path: orig, Root: t.root, Resolved: here,
 				Reason: "the symlink could not be read: " + err.Error(),
 			}
 		}
 		via = true
-		next, err := t.relinkTarget(orig, name, dest)
+		absolute, destBase, destParts, err := t.linkDestination(orig, here, dest, i == len(parts)-1)
 		if err != nil {
 			return "", false, err
 		}
-		name = next
+		if absolute {
+			base, parts, i = destBase, slices.Concat(destParts, parts[i+1:]), 0
+		} else {
+			parts = slices.Concat(parts[:i], destParts, parts[i+1:])
+		}
+		walked = false
 	}
 }
 
-// relinkTarget turns a symlink's destination into a name in this tree's terms,
-// refusing one that leaves the root.
-func (t *Tree) relinkTarget(orig, link, dest string) (string, error) {
+// linkDestination turns a symlink's destination into components to put where
+// the link stood, and reports whether they start from the top instead.
+//
+// A final link gets the checks os.Root never makes on it, since Lstat does not
+// follow the last component: an absolute destination inside the root is
+// translated, which os.Root refuses even there, and one that leaves the root is
+// refused, as is a relative one whose text climbs out. A link in a parent was
+// already followed by os.Root in the Lstat before this walk, which refused it
+// if it escaped or was absolute.
+func (t *Tree) linkDestination(orig, link, dest string, final bool) (bool, string, []string, error) {
 	if t.r == nil {
 		if filepath.IsAbs(dest) {
-			return filepath.Clean(dest), nil
+			vol := filepath.VolumeName(dest)
+			return true, vol + string(filepath.Separator), splitPath(dest[len(vol):]), nil
 		}
-		return filepath.Join(filepath.Dir(link), dest), nil
+		return false, "", splitPath(dest), nil
 	}
 	if filepath.IsAbs(dest) {
-		// The case os.Root refuses outright even when it stays inside.
 		rel, err := filepath.Rel(t.root, filepath.Clean(dest))
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "", &PathRefusal{
+			return false, "", nil, &PathRefusal{
 				Path: orig, Root: t.root, Resolved: dest,
 				Reason: "it is a symlink out of the root",
 			}
 		}
-		return rel, nil
+		return true, "", splitPath(rel), nil
 	}
-	joined := filepath.Join(filepath.Dir(link), dest)
-	if joined == ".." || strings.HasPrefix(joined, ".."+string(filepath.Separator)) {
-		return "", &PathRefusal{
+	if joined := filepath.Join(filepath.Dir(link), dest); final &&
+		(joined == ".." || strings.HasPrefix(joined, ".."+string(filepath.Separator))) {
+		return false, "", nil, &PathRefusal{
 			Path: orig, Root: t.root,
 			Resolved: filepath.Join(t.root, filepath.Dir(link), dest),
 			Reason:   "it is a symlink out of the root",
 		}
 	}
-	return joined, nil
+	return false, "", splitPath(dest), nil
+}
+
+// splitName breaks a name in this tree's terms into the part the walk never
+// leaves, "" when confined and the volume's top when not, and its components.
+func (t *Tree) splitName(name string) (string, []string) {
+	if t.r != nil {
+		return "", splitPath(name)
+	}
+	vol := filepath.VolumeName(name)
+	return vol + string(filepath.Separator), splitPath(name[len(vol):])
+}
+
+// joinName puts a name back together. Cleaned, it is a name the rest of the
+// tree takes; raw, it keeps a ".." still to be walked, for os.Root to Lstat.
+func (t *Tree) joinName(base string, parts []string, clean bool) string {
+	name := strings.Join(parts, string(filepath.Separator))
+	if clean {
+		name = filepath.Join(parts...)
+	}
+	if base == "" && name == "" {
+		return "."
+	}
+	return base + name
+}
+
+// splitPath breaks p at every separator, dropping empty components.
+func splitPath(p string) []string {
+	return strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == filepath.Separator })
 }
 
 // refusalFor turns an os.Root escape into a refusal an agent can act on.
