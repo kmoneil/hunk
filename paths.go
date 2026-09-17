@@ -23,6 +23,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // maxLinkHops bounds symlink chain resolution. The kernel uses 40; this is a
@@ -71,8 +73,9 @@ func (e *PathRefusal) Detail() string {
 }
 
 // A Target is a location the Tree has already checked. Only Tree.Resolve makes
-// one, so no Tree method can be handed a path that was never checked. That is
-// the guarantee, and it is structural rather than a rule somebody follows.
+// one, and Spellings.Respell only respells one it was given, so no Tree method
+// can be handed a path that was never checked. That is the guarantee, and it is
+// structural rather than a rule somebody follows.
 type Target struct {
 	name string // relative to the tree root when confined, absolute when not
 	orig string // as written in the patch, for messages
@@ -546,4 +549,202 @@ func (t *Tree) removeName(name string) {
 		return
 	}
 	_ = t.r.Remove(name)
+}
+
+// Spellings gives each file one spelling for the length of a batch, on a
+// filesystem that folds case or Unicode normalization.
+//
+// Resolve gives a file one name through its links, but on such a filesystem
+// A.go and a.go are one file under two names, and until 2026-09-17 the load
+// index kept them apart: a replace under each lost an edit under exit 0. A
+// component that exists is respelled the way its directory stores it. That is
+// exact for case and for normalization, it keeps a hard link's two names apart
+// because both are stored, and it means a write goes through the stored name.
+// A component the batch will create has no stored spelling yet, so it takes the
+// batch's first spelling of it wherever its directory folds. Two normalizations
+// of such a name cannot be matched without Unicode tables, which go.mod
+// excludes, and stay two names: a limit, decided 2026-09-17.
+//
+// Whether a directory folds is asked of the directory rather than assumed of the
+// platform, because Windows and Linux can fold one directory and not the next:
+// a name stat'd in the other case is the same file or it is not. A directory is
+// read only where that answer is yes, and once per batch.
+type Spellings struct {
+	tree  *Tree
+	folds map[string]bool     // by directory: whether it folds case
+	names map[string][]string // by directory: its names as stored
+	first map[string]string   // by parent and folded name: the batch's first spelling of a name not there yet
+}
+
+// Spellings returns the spellings for one batch.
+func (t *Tree) Spellings() *Spellings {
+	return &Spellings{tree: t, folds: map[string]bool{}, names: map[string][]string{}, first: map[string]string{}}
+}
+
+// Respell returns tg with each component spelled as its directory stores it, or,
+// for one that does not exist yet, as this batch first spelled it where its
+// directory folds. It names the same file as tg; only the spelling can change.
+func (s *Spellings) Respell(tg Target) Target {
+	base, parts := s.tree.splitName(tg.name)
+	spelled := make([]string, 0, len(parts))
+	existing := "" // the deepest directory that exists, which answers for those below it
+	exists := true
+	for _, c := range parts {
+		dir := s.tree.joinName(base, spelled, true)
+		if exists {
+			if fi, err := s.tree.lstat(filepath.Join(dir, c)); err == nil {
+				spelled = append(spelled, s.stored(dir, c, fi))
+				continue
+			}
+			exists, existing = false, dir
+		}
+		spelled = append(spelled, s.firstSpelling(existing, dir, c))
+	}
+	return Target{name: s.tree.joinName(base, spelled, true), orig: tg.orig, link: tg.link}
+}
+
+// stored is the spelling dir keeps for c, which exists there as fi.
+func (s *Spellings) stored(dir, c string, fi fs.FileInfo) string {
+	ascii := isASCII([]byte(c))
+	if ascii && (flipCase(c) == c || !s.foldsFor(dir, c, fi)) {
+		// No letter to fold, or a directory that does not fold: the name that
+		// was found is the name stored. One that is not ASCII can still be
+		// stored in another normalization where case does not fold.
+		return c
+	}
+	names := s.list(dir)
+	if slices.Contains(names, c) {
+		return c
+	}
+	for _, n := range names {
+		if (strings.EqualFold(n, c) || (!ascii && !isASCII([]byte(n)))) && s.isFile(filepath.Join(dir, n), fi) {
+			return n
+		}
+	}
+	return c
+}
+
+// foldsFor reports whether dir folds case, asked of c, which exists there as fi
+// and has a letter: stat'd in the other case, it is the same file or it is not.
+func (s *Spellings) foldsFor(dir, c string, fi fs.FileInfo) bool {
+	if v, ok := s.folds[dir]; ok {
+		return v
+	}
+	v := s.isFile(filepath.Join(dir, flipCase(c)), fi)
+	s.folds[dir] = v
+	return v
+}
+
+// firstSpelling is the spelling this batch first used for c, a name not yet in
+// dir, where the directory that decides it folds. existing is dir, or the
+// deepest directory above it that exists, whose filesystem a new one shares.
+func (s *Spellings) firstSpelling(existing, dir, c string) string {
+	key := dir + "\x00" + foldKey(c)
+	first, ok := s.first[key]
+	switch {
+	case !ok:
+		s.first[key] = c
+		return c
+	case first == c || !s.foldsDir(existing):
+		return c
+	}
+	return first
+}
+
+// foldsDir reports whether dir, which exists, folds case, for a name not in it
+// yet. It asks a name in dir that has a letter, and failing that dir's own name
+// in its parent. A directory with nothing to ask is assumed to fold (Kevin,
+// 2026-09-17): two spellings become one name and the second create is refused,
+// which is recoverable, where two names could lose a file.
+func (s *Spellings) foldsDir(dir string) bool {
+	if v, ok := s.folds[dir]; ok {
+		return v
+	}
+	v := true
+	if name, fi, ok := s.askable(dir); ok {
+		v = s.isFile(filepath.Join(filepath.Dir(name), flipCase(filepath.Base(name))), fi)
+	}
+	s.folds[dir] = v
+	return v
+}
+
+// askable finds a name that can say whether dir folds: one in dir with a
+// letter, or dir itself when its own name has one.
+func (s *Spellings) askable(dir string) (string, fs.FileInfo, bool) {
+	for _, n := range s.list(dir) {
+		if flipCase(n) == n {
+			continue
+		}
+		name := filepath.Join(dir, n)
+		if fi, err := s.tree.lstat(name); err == nil {
+			return name, fi, true
+		}
+	}
+	if base := filepath.Base(dir); flipCase(base) != base {
+		if fi, err := s.tree.lstat(dir); err == nil {
+			return dir, fi, true
+		}
+	}
+	return "", nil, false
+}
+
+// isFile reports whether name exists and is the same file as fi.
+func (s *Spellings) isFile(name string, fi fs.FileInfo) bool {
+	other, err := s.tree.lstat(name)
+	return err == nil && os.SameFile(other, fi)
+}
+
+// list is dir's names as the directory stores them, read once a batch and
+// sorted, so which listed name is tried first does not depend on the
+// filesystem's order. A directory that cannot be read lists nothing, and names
+// in it stay as written.
+func (s *Spellings) list(dir string) []string {
+	if names, ok := s.names[dir]; ok {
+		return names
+	}
+	names, _ := s.tree.readDirNames(dir)
+	slices.Sort(names)
+	s.names[dir] = names
+	return names
+}
+
+// readDirNames lists a directory's names as it stores them.
+func (t *Tree) readDirNames(name string) ([]string, error) {
+	var f *os.File
+	var err error
+	if t.r == nil {
+		f, err = os.Open(name)
+	} else {
+		f, err = t.r.Open(name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return f.Readdirnames(-1)
+}
+
+// flipCase swaps the case of every letter in s.
+func flipCase(s string) string {
+	return strings.Map(func(r rune) rune {
+		if u := unicode.ToUpper(r); u != r {
+			return u
+		}
+		return unicode.ToLower(r)
+	}, s)
+}
+
+// foldKey is s with each letter replaced by the least rune it folds with, so
+// two names are strings.EqualFold exactly when their keys are equal.
+func foldKey(s string) string {
+	if !utf8.ValidString(s) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			least = min(least, f)
+		}
+		return least
+	}, s)
 }
