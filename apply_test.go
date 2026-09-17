@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"io/fs"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -32,11 +33,22 @@ func fixture(t *testing.T, files map[string]string) (*Tree, string) {
 // snapshot records every regular file's contents and mode, so "nothing was
 // written" can be asserted rather than assumed. §4.1 attaches a tree state to
 // four exit codes and this is how those are checked.
+//
+// A symlink is recorded as the link, not read through. Reading through one made
+// a tree with a directory link or a dangling link impossible to snapshot at
+// all, and a link replaced by a regular file, which §6.5 forbids, would have
+// looked unchanged.
 func snapshot(t *testing.T, root string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
 	err := filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
 		if err != nil || fi.IsDir() {
+			return err
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			dest, err := os.Readlink(p)
+			rel, _ := filepath.Rel(root, p)
+			out[rel] = "symlink\x00" + dest
 			return err
 		}
 		b, err := os.ReadFile(p)
@@ -778,6 +790,92 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 			}
 		}
 	})
+}
+
+// Two spellings of one file are one file (§3.5), for any patch. The property is
+// metamorphic: a patch naming paths through the directory link d -> sub, and
+// the same patch with each of them spelled through sub instead, have to do
+// exactly the same thing to the tree. Until 2026-09-17 they did not, and the
+// commonest difference was an edit lost under exit 0.
+func FuzzASpellingThroughALinkIsTheSameFile(f *testing.F) {
+	for _, s := range []string{
+		"@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file d/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
+		"@@ create sub/n.go\none\n\n@@ create d/n.go\ntwo\n\n",
+		"@@ create d/n.go\nalpha\n\n@@ file sub/n.go\n@@ old\nalpha\n@@ new\nbeta\n",
+		"@@ delete sub/b.go\n@@ file d/b.go\n@@ old\nalpha\n@@ new\nALPHA\n",
+		"@@ delete sub/b.go\n@@ delete d/b.go\n",
+		"@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ append d/b.go\ngamma\n\n",
+		"@@ create d/x\n@@ create sub/x/y\n",
+		"@@ file d/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, patch string) {
+		p, err := Parse([]byte(patch), DefaultMarker)
+		if err != nil {
+			return
+		}
+		respelled := respellThroughSub(patch)
+		q, err := Parse([]byte(respelled), DefaultMarker)
+		if err != nil {
+			t.Fatalf("respelling made the patch unparseable: %v\n%q", err, respelled)
+		}
+		linkExit, linkTree := applyToLinkedTree(t, p)
+		subExit, subTree := applyToLinkedTree(t, q)
+		if linkExit != subExit {
+			t.Fatalf("exit %d through the link, %d through sub\n%q\n%q", linkExit, subExit, patch, respelled)
+		}
+		if !maps.Equal(linkTree, subTree) {
+			t.Fatalf("the trees differ\nthrough the link: %q\nthrough sub:      %q\npatch: %q", linkTree, subTree, patch)
+		}
+	})
+}
+
+// respellThroughSub names every path a directive names under d/ under sub/
+// instead, and leaves every other byte alone. It asks the parser's own test
+// which lines are directives, so no payload line is ever touched.
+func respellThroughSub(patch string) string {
+	lines := strings.Split(patch, "\n")
+	for i, line := range lines {
+		word, arg, ok := directive([]byte(line), DefaultMarker)
+		if !ok || !strings.HasPrefix(arg, "d/") {
+			continue
+		}
+		switch word {
+		case "file", "create", "delete", "append", "prepend":
+			lines[i] = DefaultMarker + " " + word + " sub/" + strings.TrimPrefix(arg, "d/")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// applyToLinkedTree applies p to a fresh tree of sub/b.go, a.go and the
+// directory link d -> sub, and returns the exit and the whole tree afterwards:
+// files with their contents and modes, links, and directories.
+func applyToLinkedTree(t *testing.T, p *Patch) (int, map[string]string) {
+	t.Helper()
+	root := t.TempDir()
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	must(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, "sub", "b.go"), []byte("alpha\nbeta\n"), 0o644))
+	must(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("one\n"), 0o644))
+	must(t, os.Symlink("sub", filepath.Join(root, "d")))
+	tree, err := OpenTree(root, false)
+	must(t, err)
+	defer tree.Close()
+
+	_, runErr := NewTxn(tree, Options{}).Run(p)
+	state := snapshot(t, root)
+	must(t, filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && path != root {
+			rel, _ := filepath.Rel(root, path)
+			state[rel] = "directory"
+		}
+		return err
+	}))
+	return ExitCode(runErr), state
 }
 
 // An "@@ old x2" that rewrites two lines changed two lines. Counting per hunk

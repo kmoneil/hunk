@@ -138,7 +138,7 @@ func TestAbsoluteInRootSymlinkIsTheStdlibGap(t *testing.T) {
 	must(t, err)
 	defer r.Close()
 	if _, err := r.Open("abs.link"); err == nil {
-		t.Error("os.Root now allows an absolute in-root symlink; followFinalLink may be able to go")
+		t.Error("os.Root now allows an absolute in-root symlink; linkDestination's translation of one may be able to go")
 	}
 
 	tree, err := OpenTree(root, false)
@@ -181,6 +181,135 @@ func TestResolveUnconfined(t *testing.T) {
 				t.Errorf("name = %q, want %q", tg.name, c.want)
 			}
 		})
+	}
+}
+
+// Every link on a path is resolved, in any component, so one file has one name
+// whatever spelling reached it (§3.5). Until 2026-09-17 only the final
+// component's was: with d -> sub, sub/in.txt and d/in.txt were two names, and a
+// batch using both loaded the file twice, wrote it twice, and reported both
+// while the second write discarded the first.
+func TestResolveGivesAFileOneName(t *testing.T) {
+	root := mktree(t)
+	must(t, os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755))
+	must(t, os.MkdirAll(filepath.Join(root, "other"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, "other", "f.txt"), []byte("o\n"), 0o644))
+	// In order, so each link's target exists before a link to it is made.
+	for _, l := range [][2]string{
+		{"d", "sub"},
+		{"e", "d"},
+		{"sub/alias.link", "in.txt"},
+		{"sub/inner", "../other"},
+		{"x", "sub/deep"},
+		// x/.. is sub, physically. Cleaning the text would make it the root.
+		{"phys.link", "x/../in.txt"},
+		{"l", "internal"},
+		{"nowhere.link", "missing/../top.txt"},
+		{"dot.link", "./sub"},
+		{"here.link", "."},
+		{"dotdot.link", "sub/./../top.txt"},
+		{"up", ".."},
+	} {
+		must(t, os.Symlink(filepath.FromSlash(l[1]), filepath.Join(root, filepath.FromSlash(l[0]))))
+	}
+	must(t, os.Symlink(filepath.Join(root, "sub"), filepath.Join(root, "absd")))
+
+	for _, mode := range []struct {
+		name     string
+		unconfin bool
+		want     func(string) string
+	}{
+		{"confined", false, native},
+		{"unconfined", true, func(p string) string { return filepath.Join(root, native(p)) }},
+	} {
+		tree, err := OpenTree(root, mode.unconfin)
+		must(t, err)
+		t.Cleanup(func() { tree.Close() })
+
+		for _, c := range []struct {
+			name, in, want string
+			via            bool
+		}{
+			{"no link at all", "sub/in.txt", "sub/in.txt", false},
+			{"a path that does not exist yet", "new/deep/file.go", "new/deep/file.go", false},
+			{"a directory link", "d/in.txt", "sub/in.txt", true},
+			{"a chain of directory links", "e/in.txt", "sub/in.txt", true},
+			{"a final link under a directory link", "d/alias.link", "sub/in.txt", true},
+			{"a link whose destination climbs with ..", "sub/inner/f.txt", "other/f.txt", true},
+			{"a .. after a link inside a destination, resolved physically", "phys.link", "sub/in.txt", true},
+			{"a new file under a directory link", "d/new/x.go", "sub/new/x.go", true},
+			{"a dangling directory link, written through", "l/new.go", "internal/new.go", true},
+			{"a path below a dangling directory link", "l/a/b.go", "internal/a/b.go", true},
+			{"a . inside a destination", "dot.link/in.txt", "sub/in.txt", true},
+			{"a link to the root itself", "here.link", ".", true},
+			{"a . then a .. inside a destination", "dotdot.link", "top.txt", true},
+		} {
+			t.Run(mode.name+", "+c.name, func(t *testing.T) {
+				tg, err := tree.Resolve(c.in)
+				if err != nil {
+					t.Fatalf("Resolve(%q): %v", c.in, err)
+				}
+				if want := mode.want(c.want); tg.name != want {
+					t.Errorf("name = %q, want %q", tg.name, want)
+				}
+				if tg.ViaSymlink() != c.via {
+					t.Errorf("ViaSymlink = %v, want %v", tg.ViaSymlink(), c.via)
+				}
+				if tg.Orig() != c.in {
+					t.Errorf("Orig = %q, want it as written, %q", tg.Orig(), c.in)
+				}
+			})
+		}
+
+		// A .. inside a link's destination, after a directory that does not
+		// exist, has no physical answer: the kernel stops at the missing
+		// directory. Written through, it would make a path that no spelling of
+		// it reaches, so it is refused.
+		t.Run(mode.name+", a .. after a directory that does not exist", func(t *testing.T) {
+			_, err := tree.Resolve("nowhere.link")
+			var pr *PathRefusal
+			if !errors.As(err, &pr) {
+				t.Fatalf("Resolve = %v, want a *PathRefusal", err)
+			}
+			for _, want := range []string{"climbs out of a directory that does not exist", tree.Root()} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%q does not say %q", err.Error(), want)
+				}
+			}
+		})
+	}
+
+	// The absolute directory link: refused confined, by os.Root and in its words
+	// (TestAbsoluteSymlinkInAnIntermediateComponent), and resolved unconfined.
+	loose, err := OpenTree(root, true)
+	must(t, err)
+	t.Cleanup(func() { loose.Close() })
+	tg, err := loose.Resolve("absd/in.txt")
+	must(t, err)
+	if want := filepath.Join(root, "sub", "in.txt"); tg.name != want {
+		t.Errorf("unconfined absd/in.txt = %q, want %q", tg.name, want)
+	}
+
+	// Confined, a link in a parent that climbs out of the root is refused by
+	// os.Root, in its words, before the walk could clamp it at the top.
+	confined, err := OpenTree(root, false)
+	must(t, err)
+	t.Cleanup(func() { confined.Close() })
+	_, err = confined.Resolve("up/x")
+	var pr *PathRefusal
+	if !errors.As(err, &pr) || !strings.Contains(pr.Reason, "it leaves the root") {
+		t.Errorf("confined up/x = %v, want os.Root's refusal of an escape", err)
+	}
+
+	// Unconfined, a ".." above the top of the path stays at the top, as it does
+	// for the kernel. Confined, os.Root refuses the same link as an escape.
+	vol := filepath.VolumeName(root)
+	climb := filepath.Join(strings.Repeat(".."+string(filepath.Separator), 64), root[len(vol):], "sub")
+	must(t, os.Symlink(climb, filepath.Join(root, "climb.link")))
+	tg, err = loose.Resolve("climb.link/in.txt")
+	must(t, err)
+	if want := filepath.Join(root, "sub", "in.txt"); tg.name != want {
+		t.Errorf("unconfined climb.link/in.txt = %q, want %q", tg.name, want)
 	}
 }
 
@@ -444,6 +573,7 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 	for _, s := range []string{
 		"a.go", "sub/in.txt", "../escape", "/etc/passwd", "", "a/../../b",
 		"./x", "sub/./../top.txt", strings.Repeat("../", 40) + "etc/passwd",
+		"d/in.txt", "d/new/x.go", "l/x", "sub/../d/in.txt", "rel.link/x",
 	} {
 		f.Add(s)
 	}
@@ -455,6 +585,8 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 	os.WriteFile(filepath.Join(root, "sub", "in.txt"), []byte("in\n"), 0o644)
 	os.Symlink("sub/in.txt", filepath.Join(root, "rel.link"))
 	os.Symlink("/etc/passwd", filepath.Join(root, "bad.link"))
+	os.Symlink("sub", filepath.Join(root, "d"))
+	os.Symlink("internal", filepath.Join(root, "l"))
 
 	tree, err := OpenTree(root, false)
 	if err != nil {
@@ -482,12 +614,24 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 		if filepath.IsAbs(tg.name) {
 			t.Fatalf("Resolve(%q) returned an absolute name %q from a confined tree", p, tg.name)
 		}
+		// The name is the file's one name (§3.5): wherever it can be used at
+		// all, as a file that exists or one a create would make, no component
+		// of it is still a link. A name that fails for another reason, such as
+		// a path through a file, is load's to report and is not checked here.
+		if _, err := os.Lstat(abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return
+		}
+		for dir := tg.name; dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+			if fi, err := os.Lstat(filepath.Join(tree.Root(), dir)); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+				t.Fatalf("Resolve(%q) = %q, and %q in it is still a link", p, tg.name, dir)
+			}
+		}
 	})
 }
 
-// An absolute symlink in an *intermediate* component is refused, by os.Root
-// rather than by followFinalLink, which resolves the final component only.
-// That is a deliberate scope line (§6.5 says "a target that is itself a
+// An absolute symlink in an *intermediate* component is refused, by os.Root in
+// the Lstat resolveLinks makes before it walks, and not translated as a final
+// one is. That is a deliberate scope line (§6.5 says "a target that is itself a
 // symlink"), so the refusal has to carry a message an agent can act on rather
 // than os.Root's "path escapes from parent", which names neither the root nor
 // what happened.
@@ -501,7 +645,7 @@ func TestAbsoluteSymlinkInAnIntermediateComponent(t *testing.T) {
 
 	_, err = tree.Resolve("absdir/in.txt")
 	if err == nil {
-		t.Fatal("allowed; if os.Root has relaxed, followFinalLink can cover this case too")
+		t.Fatal("allowed; if os.Root has relaxed, linkDestination can translate this case too")
 	}
 	var pr *PathRefusal
 	if !errors.As(err, &pr) {
@@ -619,7 +763,7 @@ func TestMkdirAllOverAFile(t *testing.T) {
 }
 
 // The unconfined mirror of TestWriteAtomicCleansUpAfterAFailedRename, and of
-// the relative-symlink branch of relinkTarget. Both are code that only
+// the relative-symlink branch of linkDestination. Both are code that only
 // --allow-outside-root reaches, and the RemoveDir bug this file found was
 // exactly that shape.
 func TestUnconfinedFailurePaths(t *testing.T) {

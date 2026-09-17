@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -388,6 +389,292 @@ func TestAFileAndADirectoryAtOnePathIsGolden(t *testing.T) {
 		t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
 	}
 	golden(t, "cli-a-file-and-a-directory", slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
+}
+
+// A file is read once and written once (§3.5), and that has to mean the file,
+// not the spelling. Until 2026-09-17 a directory link made one file two: with
+// d -> sub, a batch naming sub/b.go and d/b.go loaded it twice and wrote it
+// twice, and every operation had a shape of it. Replaces lost an edit and said
+// both applied, a delete came back with an edit in it, creates lost a payload,
+// and a file and a path inside it hid their conflict and half-wrote the tree.
+// Each row is one of those, probed against v0.2.1 before it was written.
+func TestOneFileUnderTwoNamesIsOneFile(t *testing.T) {
+	const b = "alpha\nbeta\n"
+	for _, c := range []struct {
+		name       string
+		files      map[string]string // besides sub/b.go and a.txt
+		links      [][2]string       // besides d -> sub; made in order, ROOT standing for the root
+		hardLinks  [][2]string       // new name, existing file
+		patch      string
+		unconfined bool
+		dryRun     bool
+
+		after    map[string]string // when it applies: every regular file afterwards
+		reported int               // and how many files the report lists
+
+		hunk, line int // when it is refused: the one failure
+		path, says string
+	}{
+		{
+			name:     "a replace under each spelling",
+			patch:    "@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file d/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
+			after:    map[string]string{"sub/b.go": "ALPHA\nBETA\n"},
+			reported: 1,
+		},
+		{
+			name:     "a replace matching what the other spelling's replace made",
+			patch:    "@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file d/b.go\n@@ old\nALPHA\n@@ new\nOMEGA\n",
+			after:    map[string]string{"sub/b.go": "OMEGA\nbeta\n"},
+			reported: 1,
+		},
+		{
+			name:  "a create under each spelling",
+			patch: "@@ create sub/n.go\none\n\n@@ create d/n.go\ntwo\n\n",
+			hunk:  2, line: 4, path: "d/n.go", says: "it already exists",
+		},
+		{
+			name:     "a create, then a replace under the other spelling",
+			patch:    "@@ create d/n.go\nalpha\n\n@@ file sub/n.go\n@@ old\nalpha\n@@ new\nbeta\n",
+			after:    map[string]string{"sub/b.go": b, "sub/n.go": "beta\n"},
+			reported: 1,
+		},
+		{
+			name:  "a delete, then a replace under the other spelling",
+			patch: "@@ delete sub/b.go\n@@ file d/b.go\n@@ old\nalpha\n@@ new\nALPHA\n",
+			hunk:  2, line: 3, path: "d/b.go", says: "an earlier hunk in this batch deleted it",
+		},
+		{
+			name:  "a delete under each spelling",
+			patch: "@@ delete sub/b.go\n@@ delete d/b.go\n",
+			hunk:  2, line: 2, path: "d/b.go", says: "an earlier hunk in this batch deleted it",
+		},
+		{
+			name:     "a final link under a directory link",
+			links:    [][2]string{{"sub/alias.go", "b.go"}},
+			patch:    "@@ file d/alias.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file sub/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
+			after:    map[string]string{"sub/b.go": "ALPHA\nBETA\n"},
+			reported: 1,
+		},
+		{
+			name:     "a chain of directory links",
+			links:    [][2]string{{"e", "d"}},
+			patch:    "@@ file e/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file sub/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
+			after:    map[string]string{"sub/b.go": "ALPHA\nBETA\n"},
+			reported: 1,
+		},
+		{
+			name:     "an append under the other spelling",
+			patch:    "@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ append d/b.go\ngamma\n\n",
+			after:    map[string]string{"sub/b.go": "ALPHA\nbeta\ngamma\n"},
+			reported: 1,
+		},
+		{
+			name:  "creates under a directory neither spelling has yet",
+			patch: "@@ create d/new/x.go\none\n\n@@ create sub/new/x.go\ntwo\n\n",
+			hunk:  2, line: 4, path: "sub/new/x.go", says: "it already exists",
+		},
+		{
+			name:     "a link whose destination climbs with ..",
+			files:    map[string]string{"other/f.go": "o\n"},
+			links:    [][2]string{{"sub/inner", "../other"}},
+			patch:    "@@ file sub/inner/f.go\n@@ old\no\n@@ new\nO1\n@@ file other/f.go\n@@ old\nO1\n@@ new\nO2\n",
+			after:    map[string]string{"sub/b.go": b, "other/f.go": "O2\n"},
+			reported: 1,
+		},
+		{
+			name:  "a file and a path inside it, hidden by a link",
+			patch: "@@ create d/x\n@@ create sub/x/y\n",
+			hunk:  2, line: 2, path: "sub/x/y", says: "it is inside d/x, which hunk 1 creates as a file",
+		},
+		{
+			name:  "the same, the other way round",
+			patch: "@@ create sub/x/y\n@@ create d/x\n",
+			hunk:  2, line: 2, path: "d/x", says: "hunk 1 creates sub/x/y inside it, so it cannot also be a file",
+		},
+		{
+			name:     "a create through a dangling directory link is written through",
+			links:    [][2]string{{"l", "internal"}},
+			patch:    "@@ create l/0\nx\n\n",
+			after:    map[string]string{"sub/b.go": b, "internal/0": "x\n"},
+			reported: 1,
+		},
+		{
+			name:     "an earlier create, then one through a dangling directory link",
+			links:    [][2]string{{"l", "internal"}},
+			patch:    "@@ create first.txt\nx\n\n@@ create l/0\ny\n\n",
+			after:    map[string]string{"sub/b.go": b, "first.txt": "x\n", "internal/0": "y\n"},
+			reported: 2,
+		},
+		{
+			name:     "a create in the link's destination, then one through the link",
+			links:    [][2]string{{"l", "internal"}},
+			patch:    "@@ create internal/x\nx\n\n@@ create l/y\ny\n\n",
+			after:    map[string]string{"sub/b.go": b, "internal/x": "x\n", "internal/y": "y\n"},
+			reported: 2,
+		},
+		{
+			name:     "the same two creates in the order commit used to fail",
+			links:    [][2]string{{"l", "internal"}},
+			patch:    "@@ create l/y\ny\n\n@@ create internal/x\nx\n\n",
+			after:    map[string]string{"sub/b.go": b, "internal/x": "x\n", "internal/y": "y\n"},
+			reported: 2,
+		},
+		{
+			name:  "a dangling link's destination created as a file, then a path through the link",
+			links: [][2]string{{"l", "internal"}},
+			patch: "@@ create internal\n@@ create l/0\n",
+			hunk:  2, line: 2, path: "l/0", says: "it is inside internal, which hunk 1 creates as a file",
+		},
+		{
+			name:       "unconfined, through a relative link",
+			patch:      "@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file d/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
+			unconfined: true,
+			after:      map[string]string{"sub/b.go": "ALPHA\nBETA\n"},
+			reported:   1,
+		},
+		{
+			name:       "unconfined, through an absolute link",
+			links:      [][2]string{{"dabs", "ROOT/sub"}},
+			patch:      "@@ file dabs/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file sub/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
+			unconfined: true,
+			after:      map[string]string{"sub/b.go": "ALPHA\nBETA\n"},
+			reported:   1,
+		},
+		{
+			name:     "a dry run reports one file",
+			patch:    "@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file d/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
+			dryRun:   true,
+			after:    map[string]string{"sub/b.go": b},
+			reported: 1,
+		},
+		{
+			// Not an alias. Rename separates a hard link in any batch, so each
+			// name keeps its own edit; unchanged, and pinned so that changing
+			// it is a decision.
+			name:      "a hard link is two files",
+			hardLinks: [][2]string{{"hard.go", "sub/b.go"}},
+			patch:     "@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file hard.go\n@@ old\nbeta\n@@ new\nBETA\n",
+			after:     map[string]string{"sub/b.go": "ALPHA\nbeta\n", "hard.go": "alpha\nBETA\n"},
+			reported:  2,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			files := map[string]string{"sub/b.go": b, "a.txt": "x\n"}
+			maps.Copy(files, c.files)
+			root := t.TempDir()
+			if r, err := filepath.EvalSymlinks(root); err == nil {
+				root = r
+			}
+			for name, body := range files {
+				full := filepath.Join(root, filepath.FromSlash(name))
+				must(t, os.MkdirAll(filepath.Dir(full), 0o755))
+				must(t, os.WriteFile(full, []byte(body), 0o644))
+			}
+			links := append([][2]string{{"d", "sub"}}, c.links...)
+			for _, l := range links {
+				dest := filepath.FromSlash(strings.Replace(l[1], "ROOT", filepath.ToSlash(root), 1))
+				must(t, os.Symlink(dest, filepath.Join(root, filepath.FromSlash(l[0]))))
+			}
+			for _, h := range c.hardLinks {
+				must(t, os.Link(filepath.Join(root, filepath.FromSlash(h[1])), filepath.Join(root, filepath.FromSlash(h[0]))))
+			}
+			tree, err := OpenTree(root, c.unconfined)
+			must(t, err)
+			t.Cleanup(func() { tree.Close() })
+			p, err := Parse([]byte(c.patch), DefaultMarker)
+			must(t, err)
+
+			before := snapshot(t, root)
+			var r *Result
+			if c.dryRun {
+				r, err = NewTxn(tree, Options{}).Preview(p)
+			} else {
+				r, err = NewTxn(tree, Options{}).Run(p)
+			}
+
+			if c.says == "" {
+				must(t, err)
+				if len(r.Files) != c.reported {
+					t.Errorf("the report lists %d files, want %d: %+v", len(r.Files), c.reported, r.Files)
+				}
+				want := map[string]string{"a.txt": "x\n"}
+				maps.Copy(want, c.after)
+				if got := regularFiles(t, root); !maps.Equal(got, want) {
+					t.Errorf("files afterwards:\n got %q\nwant %q", got, want)
+				}
+				for _, l := range links {
+					if fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(l[0]))); err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+						t.Errorf("%s is no longer a symlink: %v", l[0], err)
+					}
+				}
+				return
+			}
+
+			if got := ExitCode(err); got != exitNoMatch {
+				t.Fatalf("exit %d, want %d: %v", got, exitNoMatch, err)
+			}
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("want *ValidationError, got %T: %v", err, err)
+			}
+			if len(ve.Failures) != 1 {
+				t.Fatalf("%d failures, want 1: %+v", len(ve.Failures), ve.Failures)
+			}
+			f := ve.Failures[0]
+			if f.Hunk != c.hunk || f.PatchLine != c.line || f.Path != c.path {
+				t.Errorf("failure is hunk %d, line %d, %q; want hunk %d, line %d, %q", f.Hunk, f.PatchLine, f.Path, c.hunk, c.line, c.path)
+			}
+			for _, want := range []string{c.says, root} {
+				if !strings.Contains(f.Refusal, want) {
+					t.Errorf("refusal = %q, want it to say %q", f.Refusal, want)
+				}
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
+}
+
+// regularFiles is every regular file under root and its contents, by
+// slash-separated relative name. Links and directories are not in it, so an
+// extra file, a duplicate or a leftover temp file is a difference.
+func regularFiles(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	must(t, filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		body, err := os.ReadFile(p)
+		rel, _ := filepath.Rel(root, p)
+		out[filepath.ToSlash(rel)] = string(body)
+		return err
+	}))
+	return out
+}
+
+// With one entry per spelling, a failed verify rolled the file back twice: the
+// first entry found the second entry's bytes and refused, blaming a second
+// writer, and the second restored it. Exit 4, "the only one that leaves the tree
+// in a state you have to look at", about a tree that was fine.
+func TestRollbackOfOneFileUnderTwoNames(t *testing.T) {
+	for _, c := range []struct{ name, patch string }{
+		{"two replaces", "@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file d/b.go\n@@ old\nbeta\n@@ new\nBETA\n"},
+		{"a create and a replace", "@@ create sub/n.go\none\n\n@@ file d/n.go\n@@ old\none\n@@ new\ntwo\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"sub/b.go": "alpha\nbeta\n"})
+			must(t, os.Symlink("sub", filepath.Join(root, "d")))
+			before := snapshot(t, root)
+			code, _, errOut := runCLI(t, root, []string{"--verify", "false"}, c.patch)
+			if code != exitVerifyFailed {
+				t.Fatalf("exit %d, want %d:\n%s", code, exitVerifyFailed, errOut)
+			}
+			if !strings.Contains(errOut, "rolled back 1 file\n") {
+				t.Errorf("stderr does not say one file was rolled back:\n%s", errOut)
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
 }
 
 // The seam (§3.3, decided 2026-09-04). A weld happens when the text on the left
