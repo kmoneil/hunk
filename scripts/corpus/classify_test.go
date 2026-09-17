@@ -361,6 +361,7 @@ var reportGoldens = map[string]int{
 	"report-verify-failed-json":       3,
 	"cli-path-refused":                ExitNoMatch,
 	"cli-path-refused-resolves":       ExitNoMatch,
+	"cli-a-file-and-a-directory":      ExitNoMatch,
 	"cli-verify-failed":               3,
 	"report-rollback-incomplete":      4,
 	"report-rollback-incomplete-json": 4,

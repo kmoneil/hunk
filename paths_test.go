@@ -184,6 +184,71 @@ func TestResolveUnconfined(t *testing.T) {
 	}
 }
 
+// No file name can hold a NUL byte, and one in a patch half-wrote the tree:
+// under a directory the batch creates, load's stat stopped at the missing
+// directory, and the name was first refused at the rename, after the files
+// before it were written. Fuzzing FuzzApplyIsAllOrNothing found it on
+// 2026-09-17. Where load could reach the byte, it was exit 5 in a syscall's
+// words. It is a path refusal wherever it is, confined or not.
+func TestANulByteInAPathIsRefused(t *testing.T) {
+	root := mktree(t)
+	for _, mode := range []struct {
+		name         string
+		allowOutside bool
+	}{{"confined", false}, {"unconfined", true}} {
+		tree, err := OpenTree(root, mode.allowOutside)
+		must(t, err)
+		t.Cleanup(func() { tree.Close() })
+		for _, c := range []struct{ name, in string }{
+			{"under a directory that does not exist", "new/\x00"},
+			{"as a directory under one that does not exist", "new/\x00/deep.go"},
+			{"under a directory that exists", "sub/\x00"},
+			{"inside a name", "a\x00b.go"},
+			{"alone", "\x00"},
+		} {
+			t.Run(mode.name+", "+c.name, func(t *testing.T) {
+				_, err := tree.Resolve(c.in)
+				var pr *PathRefusal
+				if !errors.As(err, &pr) {
+					t.Fatalf("Resolve(%q) = %v, want a *PathRefusal", c.in, err)
+				}
+				if got := ExitCode(err); got != exitNoMatch {
+					t.Errorf("exit %d, want %d", got, exitNoMatch)
+				}
+				if pr.Path != c.in {
+					t.Errorf("path = %q, want it as written, %q", pr.Path, c.in)
+				}
+				for _, want := range []string{"the path contains a NUL byte", tree.Root()} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%q does not say %q", err.Error(), want)
+					}
+				}
+			})
+		}
+	}
+
+	// The find, end to end. The fuzz snapshot records files, so this is what
+	// says the directory is not left behind either, and that a dry run agrees.
+	patch := "@@ create 0\n@@ create 1/\x00"
+	for _, args := range [][]string{nil, {"--dry-run"}} {
+		t.Run("the find, with args "+strings.Join(args, " "), func(t *testing.T) {
+			root := cliTree(t, map[string]string{"a.txt": "x\n"})
+			code, _, errOut := runCLI(t, root, args, patch)
+			if code != exitNoMatch {
+				t.Fatalf("exit %d, want %d: %s", code, exitNoMatch, errOut)
+			}
+			if !strings.Contains(errOut, "the path contains a NUL byte") {
+				t.Errorf("stderr = %q", errOut)
+			}
+			for _, name := range []string{"0", "1"} {
+				if _, err := os.Lstat(filepath.Join(root, name)); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("%s is on disk: %v", name, err)
+				}
+			}
+		})
+	}
+}
+
 // A root that is itself a symlink must not make every path under it look like
 // an escape.
 func TestSymlinkedRoot(t *testing.T) {

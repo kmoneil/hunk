@@ -1,0 +1,7 @@
+hunk: 2 of 4 hunks did not match; nothing was written
+
+hunk 2  internal/0  (patch line 2)
+  it is inside internal, which hunk 1 creates as a file; the root is /the/root
+
+hunk 4  cmd  (patch line 4)
+  hunk 3 creates cmd/main.go inside it, so it cannot also be a file; the root is /the/root

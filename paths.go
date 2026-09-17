@@ -137,6 +137,18 @@ func (t *Tree) Resolve(p string) (Target, error) {
 	if p == "" {
 		return Target{}, &PathRefusal{Path: p, Root: t.root, Reason: "the path is empty"}
 	}
+	// No file name can hold a NUL byte, since a path reaches the operating
+	// system as a string that ends at one. Left to the system call, it was
+	// refused only where load happened to look: under a directory the batch
+	// creates, load's stat stops at the missing directory, and the name was
+	// first refused at the rename, after commit had written the files before
+	// it. Fuzzing found that on 2026-09-17.
+	if strings.Contains(p, "\x00") {
+		return Target{}, &PathRefusal{
+			Path: p, Root: t.root,
+			Reason: "the path contains a NUL byte, which no filesystem accepts",
+		}
+	}
 	name, err := t.toName(p)
 	if err != nil {
 		return Target{}, err
