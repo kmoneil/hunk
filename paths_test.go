@@ -302,13 +302,19 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 	}
 
 	// Unconfined, a ".." above the top of the path stays at the top, as it does
-	// for the kernel. Confined, os.Root refuses the same link as an escape.
+	// for the kernel. Confined, os.Root refuses the same link as an escape. Where
+	// the platform will not walk such a link at all, the path comes back as
+	// written, for load to report (see climbingPastTheTopResolves).
 	vol := filepath.VolumeName(root)
 	climb := filepath.Join(strings.Repeat(".."+string(filepath.Separator), 64), root[len(vol):], "sub")
 	must(t, os.Symlink(climb, filepath.Join(root, "climb.link")))
 	tg, err = loose.Resolve("climb.link/in.txt")
 	must(t, err)
-	if want := filepath.Join(root, "sub", "in.txt"); tg.name != want {
+	want := filepath.Join(root, "sub", "in.txt")
+	if !climbingPastTheTopResolves() {
+		want = filepath.Join(root, "climb.link", "in.txt")
+	}
+	if tg.name != want {
 		t.Errorf("unconfined climb.link/in.txt = %q, want %q", tg.name, want)
 	}
 }
