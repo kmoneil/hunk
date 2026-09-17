@@ -713,6 +713,12 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 		"@@ file ../escape\n@@ old\nx\n@@ new\ny\n",
 		"@@ delete a.go\n",
 		formatExamplePatch,
+		// The sweep's first find (issue #11), byte for byte: a file, then a
+		// file inside it. Both are absent at load, so both used to validate.
+		"@@ create internal\n@@ create internal/0",
+		// Found by fuzzing the fix for it: a NUL byte under a directory the
+		// batch creates, which load's stat never reached.
+		"@@ create 0\n@@ create 1/\x00",
 	} {
 		f.Add(s)
 	}
@@ -742,8 +748,15 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 		r, err := NewTxn(tree, Options{}).Run(p)
 		if err != nil {
 			// Every failure path leaves the tree exactly as it was. The one
-			// exception §6.2 admits is a commit that fails part-way, which
-			// needs a write to fail and cannot happen here.
+			// exception §6.2 admits is a commit that fails part-way, and this
+			// comment used to say that needs a write to fail and cannot happen
+			// here. The patch alone can make one fail. A file and then a file
+			// inside it did, and so did a NUL byte under a directory the batch
+			// creates, until each was refused before commit (issue #11). A
+			// name too long for the filesystem, in the same place, still does,
+			// and when that directory is all it leaves behind this snapshot,
+			// which records files, cannot see it
+			// (a-name-the-filesystem-refuses-is-found-in-commit's card).
 			assertUnchanged(t, root, before)
 			return
 		}
@@ -784,11 +797,15 @@ func TestDiffstatCountsPerOccurrence(t *testing.T) {
 // ordinary patch, and until 2026-09-06 they were the only three that reached it
 // without the root, because Validate stored err.Reason and dropped what the
 // PathRefusal knew. The two that abort the load never lost it.
+//
+// The fourth per-hunk refusal came from the nightly fuzz sweep on 2026-09-17,
+// and is listed so that it cannot be the one that forgets.
 func TestEveryRefusalNamesTheRootItLookedIn(t *testing.T) {
 	for _, c := range []struct{ name, patch, want string }{
 		{"a missing file", "@@ file gone.go\n@@ old\nx\n@@ new\ny\n", "no such file"},
 		{"a create over a file that is there", "@@ create a.go\nz\n\n", "already exists"},
 		{"a replace after a delete", "@@ delete a.go\n@@ old\nx\n@@ new\ny\n", "earlier hunk in this batch deleted it"},
+		{"a create inside a file the batch creates", "@@ create new\n@@ create new/x\n", "which hunk 1 creates as a file"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tree, root := fixture(t, map[string]string{"a.go": "x\n"})

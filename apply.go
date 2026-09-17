@@ -29,6 +29,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -187,6 +189,9 @@ type file struct {
 	// every later hunk (§3.5 says a @@ old may follow a @@ create) while still
 	// being a create at commit.
 	created bool
+	// createdBy is the last hunk that created it, which is the one a path
+	// conflict names.
+	createdBy int
 
 	// madeDirs are directories create had to make, deepest first, so rollback
 	// can unwind exactly the ones this tool created (§6.6).
@@ -390,6 +395,9 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		}
 		if h.Op != OpReplace {
 			x.applyWhole(f, h)
+			if h.Op == OpCreate {
+				f.createdBy = n
+			}
 			continue
 		}
 		old := x.convert(h.Old, f.eol)
@@ -440,6 +448,84 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			f.removed += lineCount(old) * h.Count
 		}
 		f.cur = next
+	}
+	// A path conflict is a property of the final state, so it can only be
+	// found once the walk is over, and its failures join the others in hunk
+	// order.
+	if conflicts := x.pathConflicts(p); len(conflicts) > 0 {
+		failures = append(failures, conflicts...)
+		sort.SliceStable(failures, func(i, j int) bool { return failures[i].Hunk < failures[j].Hunk })
+	}
+	return failures
+}
+
+// pathConflicts refuses a batch that needs one path to be both a file and a
+// directory: a create inside a path the batch creates as a file, in either
+// order. Both paths are absent at load, so requireState passes them and so does
+// the check. Until the nightly fuzz sweep found it (issue #11), commit wrote the
+// first, failed on the second, and left the first behind.
+//
+// It reads the final state, as commit does (§6.6), so a file created and then
+// deleted is no obstacle to a directory in its place. Only creates can
+// conflict: a path under a file on disk fails at load, and a path that is a
+// directory on disk is refused there. A file whose own hunks failed takes no
+// part, because the delete that would have removed the conflict may be among
+// the hunks skipped after it.
+//
+// The later hunk of a pair is reported, naming the earlier, and a hunk in
+// several conflicts names the earliest. Each created path looks its ancestors
+// up in a set, so the cost is the batch's total path depth, not the square of
+// its file count.
+func (x *Txn) pathConflicts(p *Patch) []Failure {
+	created := map[string]*file{}
+	for _, f := range x.files {
+		if f.failedAt == 0 && f.finalOp() == "create" {
+			created[f.target.name] = f
+		}
+	}
+	type conflict struct {
+		with   int  // the earlier hunk
+		inside bool // the reported path is inside the file that hunk creates
+	}
+	byHunk := map[int]conflict{}
+	for _, f := range x.files {
+		if created[f.target.name] != f {
+			continue
+		}
+		for d := filepath.Dir(f.target.name); ; d = filepath.Dir(d) {
+			if outer, ok := created[d]; ok {
+				n, c := f.createdBy, conflict{with: outer.createdBy, inside: true}
+				if outer.createdBy > f.createdBy {
+					n, c = outer.createdBy, conflict{with: f.createdBy}
+				}
+				if seen, ok := byHunk[n]; !ok || c.with < seen.with {
+					byHunk[n] = c
+				}
+			}
+			if filepath.Dir(d) == d {
+				break
+			}
+		}
+	}
+
+	hunks := make([]int, 0, len(byHunk))
+	for n := range byHunk {
+		hunks = append(hunks, n)
+	}
+	sort.Ints(hunks)
+	failures := make([]Failure, 0, len(hunks))
+	for _, n := range hunks {
+		c := byHunk[n]
+		h, other := p.Hunks[n-1], p.Hunks[c.with-1]
+		reason := fmt.Sprintf("hunk %d creates %s inside it, so it cannot also be a file", c.with, other.Path)
+		if c.inside {
+			reason = fmt.Sprintf("it is inside %s, which hunk %d creates as a file", other.Path, c.with)
+		}
+		refusal := &PathRefusal{Path: h.Path, Root: x.tree.Root(), Reason: reason}
+		failures = append(failures, Failure{
+			Hunk: n, Path: h.Path, PatchLine: h.Line,
+			Refusal: refusal.Detail(),
+		})
 	}
 	return failures
 }

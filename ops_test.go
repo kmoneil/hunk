@@ -193,6 +193,203 @@ func TestOrderingAcrossOpsOnOnePath(t *testing.T) {
 	}
 }
 
+// The two-path half of the table above, and the nightly fuzz sweep's first find
+// (issue #11). A batch that needed one path to be a file and a directory passed
+// validation, because both paths were absent at load, and commit wrote the
+// first, failed on the second, and left the first behind: exit 5, and a syscall
+// naming a temp file the agent never wrote.
+//
+// The rule reads the final state, as commit does (§6.6). The rows that apply
+// reach the same pairs of names and work, and a check that walked the sequence
+// instead would refuse them.
+func TestOneBatchCannotMakeAPathBothAFileAndADirectory(t *testing.T) {
+	type failure struct {
+		hunk, line int
+		path       string
+		says       string // a substring of the refusal; "" for a failure that is not one
+		skipped    int    // SkippedAfter
+	}
+	for _, c := range []struct {
+		name       string
+		patch      string
+		want       []failure // every failure, in order; nil means the batch applies
+		files      []string  // when it applies: regular files it leaves
+		dryRun     bool
+		unconfined bool
+	}{
+		{
+			name:  "a create inside a file an earlier hunk creates",
+			patch: "@@ create internal\n@@ create internal/0\n",
+			want:  []failure{{2, 2, "internal/0", "it is inside internal, which hunk 1 creates as a file", 0}},
+		},
+		{
+			name:  "a file created where an earlier hunk needs a directory",
+			patch: "@@ create internal/0\n@@ create internal\n",
+			want:  []failure{{2, 2, "internal", "hunk 1 creates internal/0 inside it, so it cannot also be a file", 0}},
+		},
+		{
+			name:  "a create two levels inside a file",
+			patch: "@@ create x\n@@ create x/y/z\n",
+			want:  []failure{{2, 2, "x/y/z", "it is inside x, which hunk 1 creates as a file", 0}},
+		},
+		{
+			name:  "a file created two levels above an earlier create",
+			patch: "@@ create x/y/z\n@@ create x\n",
+			want:  []failure{{2, 2, "x", "hunk 1 creates x/y/z inside it, so it cannot also be a file", 0}},
+		},
+		{
+			name:  "the same directory spelled two ways",
+			patch: "@@ create internal\n@@ create ./internal/0\n",
+			want:  []failure{{2, 2, "./internal/0", "it is inside internal, which hunk 1 creates as a file", 0}},
+		},
+		{
+			name:  "named by the hunk that created it, not the last to touch it",
+			patch: "@@ create internal\nalpha\n\n@@ append internal\nbeta\n\n@@ create internal/0\nz\n",
+			want:  []failure{{3, 7, "internal/0", "it is inside internal, which hunk 1 creates as a file", 0}},
+		},
+		{
+			name:  "every create inside one file is refused",
+			patch: "@@ create a\n@@ create a/b\n@@ create a/c\n",
+			want: []failure{
+				{2, 2, "a/b", "it is inside a, which hunk 1 creates as a file", 0},
+				{3, 3, "a/c", "it is inside a, which hunk 1 creates as a file", 0},
+			},
+		},
+		{
+			name:  "a hunk in several conflicts names the earliest",
+			patch: "@@ create a/b/c\n@@ create a/b\n@@ create a\n",
+			want: []failure{
+				{2, 2, "a/b", "hunk 1 creates a/b/c inside it, so it cannot also be a file", 0},
+				{3, 3, "a", "hunk 1 creates a/b/c inside it, so it cannot also be a file", 0},
+			},
+		},
+		{
+			name:  "reported in hunk order among the other failures",
+			patch: "@@ create internal\n@@ create internal/0\n@@ file a.txt\n@@ old\nabsent\n@@ new\ny\n",
+			want: []failure{
+				{2, 2, "internal/0", "it is inside internal, which hunk 1 creates as a file", 0},
+				{3, 4, "a.txt", "", 0},
+			},
+		},
+		{
+			// The delete that removes the conflict is skipped, so reporting
+			// one would send the agent after a phantom (§3.5).
+			name:  "a file whose own hunk failed takes no part",
+			patch: "@@ create x\nhello\n\n@@ old\nabsent\n@@ new\ny\n@@ delete x\n@@ create x/y\n",
+			want:  []failure{{2, 4, "x", "", 0}, {3, 8, "x", "", 2}},
+		},
+		{
+			name:   "a dry run refuses it too",
+			patch:  "@@ create internal\n@@ create internal/0\n",
+			want:   []failure{{2, 2, "internal/0", "it is inside internal, which hunk 1 creates as a file", 0}},
+			dryRun: true,
+		},
+		{
+			name:       "an unconfined tree refuses it too",
+			patch:      "@@ create internal\n@@ create internal/0\n",
+			want:       []failure{{2, 2, "internal/0", "it is inside internal, which hunk 1 creates as a file", 0}},
+			unconfined: true,
+		},
+		{
+			name:  "a sibling whose name only starts the same",
+			patch: "@@ create internal\n@@ create internal2/0\n",
+			files: []string{"internal", "internal2/0"},
+		},
+		{
+			name:  "two creates into one new directory",
+			patch: "@@ create d/a\n@@ create d/b\n",
+			files: []string{"d/a", "d/b"},
+		},
+		{
+			name:  "a file created and deleted, then a directory in its place",
+			patch: "@@ create x\n@@ delete x\n@@ create x/y\n",
+			files: []string{"x/y"},
+		},
+		{
+			name:  "a directory's only create deleted, then a file in its place",
+			patch: "@@ create x/y\n@@ delete x/y\n@@ create x\n",
+			files: []string{"x"},
+		},
+		{
+			name:  "a file over a directory a later hunk empties",
+			patch: "@@ create x/y\n@@ create x\n@@ delete x/y\n",
+			files: []string{"x"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			if r, err := filepath.EvalSymlinks(root); err == nil {
+				root = r
+			}
+			must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("x\n"), 0o644))
+			tree, err := OpenTree(root, c.unconfined)
+			must(t, err)
+			t.Cleanup(func() { tree.Close() })
+			p, err := Parse([]byte(c.patch), DefaultMarker)
+			must(t, err)
+
+			before := snapshot(t, root)
+			if c.dryRun {
+				_, err = NewTxn(tree, Options{}).Preview(p)
+			} else {
+				_, err = NewTxn(tree, Options{}).Run(p)
+			}
+			if c.want == nil {
+				must(t, err)
+				for _, name := range c.files {
+					if fi, err := os.Stat(filepath.Join(root, name)); err != nil || !fi.Mode().IsRegular() {
+						t.Errorf("%s should be a file: %v", name, err)
+					}
+				}
+				return
+			}
+
+			if got := ExitCode(err); got != exitNoMatch {
+				t.Fatalf("exit %d, want %d: %v", got, exitNoMatch, err)
+			}
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("want *ValidationError, got %T: %v", err, err)
+			}
+			if len(ve.Failures) != len(c.want) {
+				t.Fatalf("%d failures, want %d: %+v", len(ve.Failures), len(c.want), ve.Failures)
+			}
+			for i, w := range c.want {
+				f := ve.Failures[i]
+				if f.Hunk != w.hunk || f.PatchLine != w.line || f.Path != w.path || f.SkippedAfter != w.skipped {
+					t.Errorf("failure %d is hunk %d, line %d, %q, skipped after %d; want hunk %d, line %d, %q, skipped after %d",
+						i, f.Hunk, f.PatchLine, f.Path, f.SkippedAfter, w.hunk, w.line, w.path, w.skipped)
+				}
+				switch {
+				case w.says == "" && f.Refusal != "":
+					t.Errorf("hunk %d was refused and should not have been: %s", f.Hunk, f.Refusal)
+				case w.says != "" && !strings.Contains(f.Refusal, w.says):
+					t.Errorf("hunk %d: refusal = %q, want it to say %q", f.Hunk, f.Refusal, w.says)
+				case w.says != "" && !strings.Contains(f.Refusal, root):
+					t.Errorf("hunk %d: refusal = %q, want it to name the root %q", f.Hunk, f.Refusal, root)
+				}
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
+}
+
+// The page an agent reads, with both directions of the refusal on it. It is the
+// first per-hunk refusal pinned end to end; the root is substituted as in
+// TestAPathRefusalIsGolden.
+func TestAFileAndADirectoryAtOnePathIsGolden(t *testing.T) {
+	root := cliTree(t, map[string]string{"a.txt": "x\n"})
+	patch := "@@ create internal\n@@ create internal/0\n@@ create cmd/main.go\n@@ create cmd\n"
+	code, out, errOut := runCLI(t, root, nil, patch)
+	if code != exitNoMatch {
+		t.Fatalf("exit %d, want %d: %s", code, exitNoMatch, errOut)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
+	}
+	golden(t, "cli-a-file-and-a-directory", slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
+}
+
 // The seam (§3.3, decided 2026-09-04). A weld happens when the text on the left
 // of the seam does not end in a newline: for append that is the file, for
 // prepend it is the payload. Both are normalized, and the inserted byte is
