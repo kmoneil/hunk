@@ -199,9 +199,12 @@ program never has to parse the text.
 Replacing one file is atomic, via `rename(2)`. **The batch is not.** A crash or
 a full disk part-way through leaves the files before it written.
 
-Every target is re-hashed between validation and writing, so another process
-writing the tree is caught and the exit is 6 with nothing written. That narrows
-the window to microseconds without closing it. There is no lock file.
+Every target is re-hashed between validation and writing, so a process that
+wrote the tree in between is caught, and the exit is 6 with nothing written.
+One writing at the same time is not. There is no lock file, and two `hunk` runs
+started together on the same files usually both succeed, which can leave some
+files as one wrote them and some as the other did. No file is ever a mix of
+the two.
 
 Both gaps are repaired by the version control your tree is already under, which
 is why neither is worth the complexity of closing.

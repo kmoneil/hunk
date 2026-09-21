@@ -22,7 +22,10 @@ so a program never has to parse the text.
 ## What it does not promise
 
 Replacing one file is atomic. **The batch is not**: a crash part-way through
-leaves the files before it written. And the check that guards against a second
-writer narrows that window without closing it. Both are repaired by the version
-control the tree is already under. Do not build anything on the batch being
-atomic across a power failure.
+leaves the files before it written. **Nor is there a lock.** A writer that
+finished between `hunk`'s read and its write is caught, at exit 6, but one
+writing at the same time is not: two `hunk` runs on the same files at once
+usually both succeed, and can leave some files as one wrote them and some as
+the other did. Both are repaired by the version control the tree is already
+under. Do not build anything on the batch being atomic across a power failure,
+or on two agents editing the same files at once.

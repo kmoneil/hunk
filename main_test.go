@@ -16,6 +16,17 @@ import (
 )
 
 // runCLI drives the real entry point in process, with a real tree.
+// TestMain makes the test binary hunk itself when HUNK_TEST_AS_HUNK is set, so
+// a test can run it as a separate process. §8.1's concurrency test is about two
+// hunk processes, and two goroutines in one would share a scheduler and a
+// process that two runs of the tool do not.
+func TestMain(m *testing.M) {
+	if os.Getenv("HUNK_TEST_AS_HUNK") == "1" {
+		main()
+	}
+	os.Exit(m.Run())
+}
+
 func runCLI(t *testing.T, root string, args []string, stdin string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
@@ -387,6 +398,12 @@ func TestHelpCarriesWhatTheSpecCommitsItTo(t *testing.T) {
 	// its guarantees is worse than one that has none".
 	if !strings.Contains(got, "The batch is not") {
 		t.Error("--help does not state the batch-atomicity limit (§6.2)")
+	}
+	// And the concurrency limit beside it, which until 2026-09-21 it stated as
+	// a window "narrowed to microseconds". Two runs started together nearly
+	// always both pass the check; TestTwoProcessesOnTheSameFiles counts it.
+	if !strings.Contains(got, "not one writing at the same time") {
+		t.Error("--help does not state that a concurrent writer is not caught (§6.2)")
 	}
 	// §6.3: the flag and the reason together, not just the behaviour.
 	if !strings.Contains(got, "--verify-may-format") ||
