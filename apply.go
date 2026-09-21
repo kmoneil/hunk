@@ -576,6 +576,7 @@ func (x *Txn) pathConflicts(p *Patch) []Failure {
 // path may be created or deleted is requireState's call, already made.
 func (x *Txn) applyWhole(f *file, h Hunk) {
 	eol := []byte(f.eol)
+	before := f.cur
 	switch h.Op {
 	case OpCreate:
 		// §6.4 converts a payload to the file's dominant ending, and a file
@@ -639,6 +640,14 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 		}
 		f.cur = append(append([]byte{}, body...), f.cur...)
 		f.added += lineCount(body)
+	}
+	// An append or prepend that leaves every byte as it was changed nothing,
+	// like a replace whose new text equals its old: counting it would rewrite
+	// the file, move its mtime and list it as "M +0 -0". Create and delete
+	// count regardless, since an overwrite with the same bytes can still
+	// change the mode.
+	if (h.Op == OpAppend || h.Op == OpPrepend) && bytes.Equal(before, f.cur) {
+		return
 	}
 	f.changed = true
 	f.applied++

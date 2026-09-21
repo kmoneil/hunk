@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func absent(t *testing.T, root, name string) {
@@ -1168,8 +1169,13 @@ func TestTheSeam(t *testing.T) {
 			if got := readFile(t, root, "a.txt"); got != c.want {
 				t.Errorf("got %q, want %q", got, c.want)
 			}
-			if r.Files[0].SeamAdded != c.wantAdded {
-				t.Errorf("SeamAdded = %v, want %v", r.Files[0].SeamAdded, c.wantAdded)
+			// A batch that leaves the bytes as they were lists no file, like a
+			// replace whose new text equals its old (an-empty-append-rewrites-the-file).
+			if unchanged := c.start == c.want; unchanged != (len(r.Files) == 0) {
+				t.Errorf("unchanged %v, but %d files listed", unchanged, len(r.Files))
+			}
+			if added := len(r.Files) == 1 && r.Files[0].SeamAdded; added != c.wantAdded {
+				t.Errorf("SeamAdded = %v, want %v", added, c.wantAdded)
 			}
 		})
 	}
@@ -1213,6 +1219,52 @@ func TestTheSeam(t *testing.T) {
 			t.Errorf("--json: %s", js)
 		}
 	})
+}
+
+// An append or prepend that changes no byte is not a write, as a replace whose
+// new text equals its old is not. Until 2026-09-22 it counted anyway: the file
+// was listed as "M +0 -0" and rewritten, with a new inode and a new mtime,
+// which invalidates a build cache for nothing.
+func TestAnAppendThatChangesNothingIsNotAWrite(t *testing.T) {
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name, start, patch, out, want string
+	}{
+		{"an empty append to a file that ends in a newline", "x\n", "@@ append t.txt\n", "0 files, 1 hunk, +0 -0\n", "x\n"},
+		{"an empty prepend", "x\n", "@@ prepend t.txt\n", "0 files, 1 hunk, +0 -0\n", "x\n"},
+		{"an empty append to an empty file", "", "@@ append t.txt\n", "0 files, 1 hunk, +0 -0\n", ""},
+		{
+			// The seam byte is a change, so this one is a write.
+			"an empty append to a file with no final newline", "x", "@@ append t.txt\n",
+			"M t.txt +0 -0  (added a final newline)\n1 file, 1 hunk, +0 -0\n", "x\n",
+		},
+		{
+			// Listed once, for the replace.
+			"after a real change", "x\n", "@@ file t.txt\n@@ old\nx\n@@ new\ny\n@@ append t.txt\n",
+			"M t.txt +1 -1\n1 file, 2 hunks, +1 -1\n", "y\n",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"t.txt": c.start})
+			path := filepath.Join(root, "t.txt")
+			must(t, os.Chtimes(path, old, old))
+			before, err := os.Stat(path)
+			must(t, err)
+			code, out, errOut := runCLI(t, root, nil, c.patch)
+			if code != exitOK || out != c.out {
+				t.Fatalf("exit %d, out %q, want %q: %s", code, out, c.out, errOut)
+			}
+			if got := readFile(t, root, "t.txt"); got != c.want {
+				t.Errorf("t.txt = %q, want %q", got, c.want)
+			}
+			after, err := os.Stat(path)
+			must(t, err)
+			written := !os.SameFile(before, after) || !after.ModTime().Equal(old)
+			if want := c.start != c.want; written != want {
+				t.Errorf("written = %v, want %v", written, want)
+			}
+		})
+	}
 }
 
 // §3.3's create writes exactly the bytes it was given, and since 2026-09-21 the
