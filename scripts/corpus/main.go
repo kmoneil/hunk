@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Stats is everything one run measures. §1's table is the top half; §12's
@@ -86,6 +87,23 @@ type Stats struct {
 	HunkDirectives    map[string]int `json:"hunk_directives,omitempty"`
 	HunkFlagUse       map[string]int `json:"hunk_flags,omitempty"`
 	HunkPatchFromFile int            `json:"hunk_patch_from_file"`
+
+	// Two agents in one tree at once, from 2026-09-22: pairs of calls from
+	// different transcripts in the same working directory whose spans overlap.
+	// A span runs from the tool_use to its tool_result, which also holds the
+	// model's latency and any --verify, and the tree is the working directory,
+	// which a --root or a cd can leave. So these are upper bounds: an overlap
+	// can only look likelier than it was, the safe direction for the question
+	// should-two-runs-at-once-be-guarded asks, and a non-zero count is a reason
+	// to look, not a finding. The first one looked at was two skill-eval
+	// subagents, each in its own --root. EditsOverlapping counts pairs with an
+	// edit tool on at least one side and an edit tool or Bash on the other: one
+	// agent editing while another works in the same tree. Bash on both sides is
+	// left out, since parallel subagents run thousands of reads.
+	HunkRunsOverlapping int        `json:"hunk_runs_overlapping_another_agent"`
+	EditsOverlapping    int        `json:"edits_overlapping_another_agent"`
+	hunkRuns            []interval // hunk applications, for HunkRunsOverlapping
+	writes              []interval // edit tools and Bash, for EditsOverlapping
 
 	// A verify that rewrites files is the only way to reach exit 4, so this is
 	// the number §11's second open question has been waiting on since
@@ -180,6 +198,49 @@ type call struct {
 	id      string
 	name    string
 	command string
+	// start is the tool_use record's timestamp and end its tool_result's, so
+	// the command ran somewhere inside [start, end]. cwd is the tree.
+	start, end time.Time
+	cwd        string
+}
+
+// An interval is one call's span in one tree, from one transcript: one agent.
+// edit marks a call made with an edit tool rather than Bash.
+type interval struct {
+	file       string
+	cwd        string
+	start, end time.Time
+	edit       bool
+}
+
+// overlappingPairs counts pairs of intervals from different transcripts in the
+// same tree that overlap, touching included, since a millisecond timestamp
+// cannot tell touching from overlapping, and that keep accepts, or every such
+// pair when keep is nil. Within a tree, sorted by start, a sweep keeps the
+// intervals still open when each one starts.
+func overlappingPairs(ivs []interval, keep func(a, b interval) bool) int {
+	byTree := map[string][]interval{}
+	for _, iv := range ivs {
+		byTree[iv.cwd] = append(byTree[iv.cwd], iv)
+	}
+	n := 0
+	for _, tree := range byTree {
+		sort.Slice(tree, func(i, j int) bool { return tree[i].start.Before(tree[j].start) })
+		var open []interval
+		for _, iv := range tree {
+			var still []interval
+			for _, o := range open {
+				if !o.end.Before(iv.start) {
+					still = append(still, o)
+					if o.file != iv.file && (keep == nil || keep(o, iv)) {
+						n++
+					}
+				}
+			}
+			open = append(still, iv)
+		}
+	}
+	return n
 }
 
 func newStats(root string) *Stats {
@@ -234,6 +295,12 @@ func WalkSplit(root, lab string) (*Stats, error) {
 		}
 		return nil
 	})
+	for _, a := range []*Stats{s, s.Field, s.Here} {
+		if a != nil {
+			a.HunkRunsOverlapping = overlappingPairs(a.hunkRuns, nil)
+			a.EditsOverlapping = overlappingPairs(a.writes, func(x, y interval) bool { return x.edit || y.edit })
+		}
+	}
 	return s, err
 }
 
@@ -262,6 +329,7 @@ func (s *Stats) session(path, project string) error {
 
 	var calls []call
 	results := map[string]string{}
+	returned := map[string]time.Time{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
 	for sc.Scan() {
@@ -270,7 +338,9 @@ func (s *Stats) session(path, project string) error {
 			continue
 		}
 		var rec struct {
-			Message struct {
+			Timestamp string `json:"timestamp"`
+			Cwd       string `json:"cwd"`
+			Message   struct {
 				Content []struct {
 					Type      string          `json:"type"`
 					Name      string          `json:"name"`
@@ -284,6 +354,7 @@ func (s *Stats) session(path, project string) error {
 		if err := json.Unmarshal(line, &rec); err != nil {
 			continue // a record shape this tool does not know is not an error
 		}
+		at, _ := time.Parse(time.RFC3339Nano, rec.Timestamp) // zero when absent
 		for _, c := range rec.Message.Content {
 			switch c.Type {
 			case "tool_use":
@@ -291,9 +362,10 @@ func (s *Stats) session(path, project string) error {
 					Command string `json:"command"`
 				}
 				_ = json.Unmarshal(c.Input, &in)
-				calls = append(calls, call{id: c.ID, name: c.Name, command: in.Command})
+				calls = append(calls, call{id: c.ID, name: c.Name, command: in.Command, start: at, cwd: rec.Cwd})
 			case "tool_result":
 				results[c.ToolUseID] += resultText(c.Content)
+				returned[c.ToolUseID] = at
 			}
 		}
 	}
@@ -309,6 +381,24 @@ func (s *Stats) session(path, project string) error {
 	// firstFail is the index of the first failed attempt still open for a path.
 	firstFail := map[string]int{}
 	for i, c := range calls {
+		// A call with no result, interrupted, is an instant.
+		c.end = returned[c.id]
+		if c.end.Before(c.start) {
+			c.end = c.start
+		}
+		if !c.start.IsZero() {
+			span := interval{file: path, cwd: c.cwd, start: c.start, end: c.end}
+			switch c.name {
+			case "Edit", "MultiEdit", "Write", "NotebookEdit":
+				span.edit = true
+				s.writes = append(s.writes, span)
+			case "Bash":
+				s.writes = append(s.writes, span)
+			}
+			if c.name == "Bash" && IsHunkCall(c.command) && HunkExit(c.command, results[c.id]) != ExitProbe {
+				s.hunkRuns = append(s.hunkRuns, span)
+			}
+		}
 		s.ToolCalls++
 		switch c.name {
 		case "Edit", "MultiEdit", "Write", "NotebookEdit":
@@ -557,6 +647,8 @@ func (s *Stats) writeTwelve(b *strings.Builder, title string) {
 		fmt.Fprintln(b)
 		fmt.Fprintf(b, "  verify rewrites files   %9d   exit 4 needs one of these\n",
 			s.HunkFormattingVerify)
+		fmt.Fprintf(b, "  another agent at once   %9d   hunk runs overlapping, %d edits overlapping\n",
+			s.HunkRunsOverlapping, s.EditsOverlapping)
 	}
 }
 

@@ -26,3 +26,4 @@ tool mix overall           Bash 5    Edit 0
     patch from a file (-f)      1   directives unknown for those
   flags used                --verify 2 --dry-run 1 --json 1 --marker 1
   verify rewrites files           1   exit 4 needs one of these
+  another agent at once           0   hunk runs overlapping, 0 edits overlapping
