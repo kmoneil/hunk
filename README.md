@@ -192,7 +192,7 @@ line naming the file as removed by something else.
 | 2 | a hunk did not match | untouched |
 | 3 | verify failed, rolled back | untouched |
 | 4 | verify failed and rollback was incomplete | **inconsistent** |
-| 5 | I/O error | see the message |
+| 5 | I/O error | untouched, unless the message says otherwise |
 | 6 | a file changed on disk between load and commit | untouched |
 
 **Exit 2 is not an error condition to route around.** It is the tool working,

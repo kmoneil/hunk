@@ -67,6 +67,23 @@ func needsSignals(t *testing.T) {
 	}
 }
 
+// brokenShell returns a directory to use as PATH in which exec.LookPath finds
+// an sh that cannot run: garbage, marked executable where there is such a
+// mark. It is how a verify command that is found and still cannot start is
+// reached, which is what hunk's rollback is the backstop for when the check
+// for sh before writing passes. Windows finds a program by its extension, not
+// a mode bit, so there it is sh.exe.
+func brokenShell(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	name := "sh"
+	if runtime.GOOS == "windows" {
+		name = "sh.exe"
+	}
+	must(t, os.WriteFile(filepath.Join(dir, name), []byte("not a program\n"), 0o755))
+	return dir
+}
+
 // assertMode checks a permission bit set on the platforms that have one.
 //
 // Preferred over needsPOSIXPerms wherever the mode is one assertion inside a

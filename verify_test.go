@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const vPatch = "@@ file a.txt\n@@ old\none\n@@ new\nONE\n"
@@ -310,23 +311,26 @@ func TestVerifyCoverageEdges(t *testing.T) {
 		}
 	})
 
-	// A shell that cannot be found means nothing was verified at all, which is
+	// A shell that cannot be found means nothing could be verified, which is
 	// exit 5 and not exit 3. Reporting it as a failed verify would be a lie
-	// about the tree.
+	// about the tree. Since 2026-09-22 it is found out before anything is
+	// written: TestAVerifyThatCannotStart has the rest.
 	t.Run("no shell on PATH is exit 5", func(t *testing.T) {
 		t.Setenv("PATH", "")
 		root := cliTree(t, map[string]string{"a.txt": "one\n"})
+		before := snapshot(t, root)
 		code, _, errOut := runCLI(t, root, []string{"--verify", "true"}, vPatch)
 		if code != exitIO {
 			t.Fatalf("exit %d, want 5: %s", code, errOut)
 		}
-		if !strings.Contains(errOut, "could not run the verify command") {
+		if !strings.Contains(errOut, "--verify runs its command with sh, which was not found") {
 			t.Errorf("err = %q", errOut)
 		}
 		// And it did not claim the verify failed.
 		if strings.Contains(errOut, "verify failed") {
 			t.Errorf("reported as a failed verify: %q", errOut)
 		}
+		assertUnchanged(t, root, before)
 	})
 
 	t.Run("--dry-run reports a load failure", func(t *testing.T) {
@@ -459,9 +463,11 @@ func TestTryPutsTheTreeBackWhateverTheCommandSays(t *testing.T) {
 		}
 	})
 
+	// No sh at all is refused before writing; one that is found and will not
+	// run is the rollback's. TestAVerifyThatCannotStart has both for --verify.
 	t.Run("a command that cannot start is 5, with the batch put back", func(t *testing.T) {
 		root := cliTree(t, map[string]string{"a.txt": "one\n"})
-		t.Setenv("PATH", t.TempDir()) // no sh to be found
+		t.Setenv("PATH", brokenShell(t))
 		code, _, errOut := runCLI(t, root, []string{"--try", "true"}, vPatch)
 		if code != exitIO || !strings.Contains(errOut, "could not run the --try command") ||
 			!strings.HasSuffix(errOut, "; the batch was put back\n") {
@@ -494,34 +500,47 @@ func TestTryPutsTheTreeBackWhateverTheCommandSays(t *testing.T) {
 }
 
 // A command that cannot start, after which a file cannot be put back because
-// something changed it: the message must not claim the batch was put back.
-// Nothing through the CLI can change a file between the apply and the put
-// back, so the phases are driven here.
-func TestTryThatCannotStartDoesNotClaimAPutBack(t *testing.T) {
-	tree, root := fixture(t, map[string]string{"a.txt": "one\n"})
-	txn := NewTxn(tree, Options{})
-	p, err := Parse([]byte(vPatch), DefaultMarker)
-	must(t, err)
-	_, err = txn.Run(p)
-	must(t, err)
-	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("somebody else\n"), 0o644))
-	t.Setenv("PATH", t.TempDir())
+// something changed it: the message must not claim the batch was put back, the
+// file is named, and the exit is 4. Nothing through the CLI can change a file
+// between the apply and the put-back, so the phases are driven here, for both
+// flags that run a command.
+func TestACommandThatCannotStartDoesNotClaimAPutBack(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		run  func(txn *Txn, tree *Tree) (*Verify, error)
+	}{
+		{"--try", func(txn *Txn, tree *Tree) (*Verify, error) { return runTry(txn, tree, "true", 40, false) }},
+		{"--verify", func(txn *Txn, tree *Tree) (*Verify, error) {
+			return runVerify(txn, tree, "true", 40, false, false)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tree, root := fixture(t, map[string]string{"a.txt": "one\n"})
+			txn := NewTxn(tree, Options{})
+			p, err := Parse([]byte(vPatch), DefaultMarker)
+			must(t, err)
+			_, err = txn.Run(p)
+			must(t, err)
+			must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("somebody else\n"), 0o644))
+			t.Setenv("PATH", t.TempDir())
 
-	v, err := runTry(txn, tree, "true", 40, false)
-	if err == nil || !strings.HasSuffix(err.Error(), "; 1 file could not be put back") {
-		t.Fatalf("err = %v", err)
-	}
-	rep := NewReport(nil, err, v, false, 1)
-	if rep.Exit != exitRollbackFailed {
-		t.Errorf("exit %d, want 4", rep.Exit)
-	}
-	var out, errOut bytes.Buffer
-	rep.Text(&out, &errOut, false)
-	if !strings.Contains(errOut.String(), "a.txt was not restored.") {
-		t.Errorf("does not name the file:\n%s", errOut.String())
-	}
-	if got := readFile(t, root, "a.txt"); got != "somebody else\n" {
-		t.Errorf("a.txt = %q; the other writer's work was overwritten", got)
+			v, err := c.run(txn, tree)
+			if err == nil || !strings.HasSuffix(err.Error(), "; 1 file could not be put back") {
+				t.Fatalf("err = %v", err)
+			}
+			rep := NewReport(nil, err, v, false, 1)
+			if rep.Exit != exitRollbackFailed {
+				t.Errorf("exit %d, want 4", rep.Exit)
+			}
+			var out, errOut bytes.Buffer
+			rep.Text(&out, &errOut, false)
+			if !strings.Contains(errOut.String(), "a.txt was not restored.") {
+				t.Errorf("does not name the file:\n%s", errOut.String())
+			}
+			if got := readFile(t, root, "a.txt"); got != "somebody else\n" {
+				t.Errorf("a.txt = %q; the other writer's work was overwritten", got)
+			}
+		})
 	}
 }
 
@@ -574,4 +593,114 @@ func TestTryGoldens(t *testing.T) {
 			golden(t, c.name+"-json", js.String())
 		})
 	}
+}
+
+// A verify whose command cannot start verified nothing, and --verify keeps a
+// batch only when its check passes, so the batch goes, decided 2026-09-22.
+// Until then it stayed at exit 5, and --json printed nothing. With no sh at all
+// the batch is refused before it is written. With an sh that is found and will
+// not run, it is written and rolled back. Either way the exit is 5 and the tree
+// is as it was, unless --keep-on-fail says to keep it.
+func TestAVerifyThatCannotStart(t *testing.T) {
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name    string
+		path    func(t *testing.T) string
+		args    []string
+		exit    int
+		says    string
+		after   string // a.txt afterwards
+		written bool   // whether a.txt was written at all
+	}{
+		{
+			"no sh: refused before writing", func(t *testing.T) string { return t.TempDir() },
+			[]string{"--verify", "true"},
+			exitIO,
+			`--verify runs its command with sh, which was not found (exec: "sh": executable file not found in `, "one\n", false,
+		},
+		{
+			"no sh, under --try", func(t *testing.T) string { return t.TempDir() },
+			[]string{"--try", "true"},
+			exitIO, "--try runs its command with sh, which was not found", "one\n", false,
+		},
+		{
+			// A dry run runs nothing, so it does not need sh.
+			"no sh, a dry run", func(t *testing.T) string { return t.TempDir() },
+			[]string{"--verify", "true", "--dry-run"},
+			exitOK, "(dry run: nothing written, verify not run)", "one\n", false,
+		},
+		{
+			"an sh that will not run: rolled back", brokenShell,
+			[]string{"--verify", "true"},
+			exitIO, "could not run the verify command: ", "one\n", true,
+		},
+		{
+			"and with --keep-on-fail, kept", brokenShell,
+			[]string{"--verify", "true", "--keep-on-fail"},
+			exitIO,
+			"; the changes are left in place (--keep-on-fail)", "ONE\n", true,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"a.txt": "one\n"})
+			path := filepath.Join(root, "a.txt")
+			must(t, os.Chtimes(path, old, old))
+			before, err := os.Stat(path)
+			must(t, err)
+			t.Setenv("PATH", c.path(t))
+			code, out, errOut := runCLI(t, root, c.args, vPatch)
+			if code != c.exit {
+				t.Fatalf("exit %d, want %d\n%s%s", code, c.exit, out, errOut)
+			}
+			if !strings.Contains(out+errOut, c.says) {
+				t.Errorf("want %q in:\n%s%s", c.says, out, errOut)
+			}
+			if c.exit == exitIO && c.after == "one\n" && c.written && !strings.HasSuffix(errOut, "; the batch was rolled back\n") {
+				t.Errorf("does not say the batch was rolled back: %q", errOut)
+			}
+			if got := readFile(t, root, "a.txt"); got != c.after {
+				t.Errorf("a.txt = %q, want %q", got, c.after)
+			}
+			after, err := os.Stat(path)
+			must(t, err)
+			if written := !os.SameFile(before, after) || !after.ModTime().Equal(old); written != c.written {
+				t.Errorf("written = %v, want %v", written, c.written)
+			}
+		})
+	}
+
+	t.Run("--json prints its object on both paths", func(t *testing.T) {
+		for _, c := range []struct {
+			name       string
+			path       func(t *testing.T) string
+			rolledBack int
+		}{
+			{"refused before writing", func(t *testing.T) string { return t.TempDir() }, 0},
+			{"rolled back", brokenShell, 1},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				root := cliTree(t, map[string]string{"a.txt": "one\n"})
+				t.Setenv("PATH", c.path(t))
+				code, js, errOut := runCLI(t, root, []string{"--json", "--verify", "true"}, vPatch)
+				var v struct {
+					OK     bool
+					Exit   int
+					Error  string
+					Verify *struct {
+						Ran        bool
+						RolledBack int `json:"rolled_back"`
+					}
+				}
+				if err := json.Unmarshal([]byte(js), &v); err != nil {
+					t.Fatalf("no JSON object on stdout (%v): %q, stderr %q", err, js, errOut)
+				}
+				if code != exitIO || v.Exit != exitIO || v.OK || v.Error == "" || errOut != "" {
+					t.Errorf("exit %d: %s, stderr %q", code, js, errOut)
+				}
+				if c.rolledBack > 0 && (v.Verify == nil || v.Verify.Ran || v.Verify.RolledBack != c.rolledBack) {
+					t.Errorf("the verify object does not say it was rolled back: %s", js)
+				}
+			})
+		}
+	})
 }

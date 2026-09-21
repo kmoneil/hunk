@@ -49,7 +49,8 @@ EXIT CODES
   2  a hunk did not match                           tree untouched
   3  verify failed, rolled back                     tree untouched
   4  verify failed and rollback was incomplete      tree inconsistent
-  5  I/O error                                      see the message
+  5  I/O error                                      tree untouched, unless
+                                                    the message says otherwise
   6  a file changed on disk between load and commit tree untouched
 
 Exit 2 is the one to expect routinely and act on without alarm: fix the patch

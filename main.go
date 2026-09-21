@@ -10,11 +10,14 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"runtime/debug"
+	"strconv"
 	"strings"
 )
 
@@ -143,7 +146,8 @@ EXIT CODES
   2  a hunk did not match                           tree untouched
   3  verify failed, rolled back                     tree untouched
   4  verify failed and rollback was incomplete      tree inconsistent
-  5  I/O error                                      see the message
+  5  I/O error                                      tree untouched, unless
+                                                    the message says otherwise
   6  a file changed on disk between load and commit tree untouched
 
 Exit 2 is the one to expect routinely and act on without alarm: fix the patch
@@ -204,10 +208,29 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		showVersion  = fs.Bool("version", false, "")
 	)
 
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(stderr, "hunk: %v\nRun \"hunk --help\" for the flags.\n", err)
-		return exitUsage
+	// fail reports an error found before the transaction runs. §4: a caller
+	// that passed --json "asked for it on every path", so it gets the object
+	// on stdout rather than a line on stderr. Until 2026-09-22 none of these
+	// paths printed one. The text is what they printed before, byte for byte.
+	wantsJSON := jsonRequested(args)
+	fail := func(code int, err error, hint string) int {
+		if wantsJSON {
+			if werr := (&Report{Exit: code, Err: err}).JSON(stdout); werr != nil {
+				fmt.Fprintf(stderr, "hunk: %v\nhunk: the --json report could not be written: %v\n", err, werr)
+			}
+			return code
+		}
+		fmt.Fprintf(stderr, "hunk: %v\n", err)
+		if hint != "" {
+			fmt.Fprintln(stderr, hint)
+		}
+		return code
 	}
+
+	if err := fs.Parse(args); err != nil {
+		return fail(exitUsage, err, `Run "hunk --help" for the flags.`)
+	}
+	wantsJSON = *asJSON
 	if *help || *h {
 		fmt.Fprint(stdout, usage)
 		return exitOK
@@ -223,11 +246,9 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// "format" is a subcommand and has to come first, which is what §4's
 		// synopsis says. Saying that beats "unexpected argument".
 		if fs.Arg(0) == "format" {
-			fmt.Fprintln(stderr, "hunk: format is a subcommand and takes no flags; run \"hunk format\"")
-		} else {
-			fmt.Fprintf(stderr, "hunk: unexpected argument %q; the patch comes from stdin or -f\n", fs.Arg(0))
+			return fail(exitUsage, errors.New(`format is a subcommand and takes no flags; run "hunk format"`), "")
 		}
-		return exitUsage
+		return fail(exitUsage, fmt.Errorf("unexpected argument %q; the patch comes from stdin or -f", fs.Arg(0)), "")
 	}
 
 	// --verify-may-format only ever acts during a rollback, and --keep-on-fail
@@ -235,29 +256,24 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// and a flag that silently does nothing is what this tool refuses
 	// everywhere else.
 	if *keepOnFail && *verifyFormat {
-		fmt.Fprintln(stderr, "hunk: --keep-on-fail and --verify-may-format cannot both be set; "+
-			"--verify-may-format only acts while rolling back, and --keep-on-fail means not rolling back")
-		return exitUsage
+		return fail(exitUsage, errors.New("--keep-on-fail and --verify-may-format cannot both be set; "+
+			"--verify-may-format only acts while rolling back, and --keep-on-fail means not rolling back"), "")
 	}
 	if *verifyLines < 1 {
-		fmt.Fprintf(stderr, "hunk: --verify-lines must be at least 1, not %d\n", *verifyLines)
-		return exitUsage
+		return fail(exitUsage, fmt.Errorf("--verify-lines must be at least 1, not %d", *verifyLines), "")
 	}
 	// --try always puts the tree back, and --verify keeps it when the check
 	// passes, so the pair asks for two outcomes of one run (§4.1).
 	if *try != "" && *verify != "" {
-		fmt.Fprintln(stderr, "hunk: --try and --verify cannot both be set; "+
-			"--try always puts the tree back, so there is nothing for --verify to keep")
-		return exitUsage
+		return fail(exitUsage, errors.New("--try and --verify cannot both be set; "+
+			"--try always puts the tree back, so there is nothing for --verify to keep"), "")
 	}
 	if *keepOnFail && *verify == "" {
-		fmt.Fprintln(stderr, "hunk: --keep-on-fail does nothing without --verify")
-		return exitUsage
+		return fail(exitUsage, errors.New("--keep-on-fail does nothing without --verify"), "")
 	}
 	// --verify-may-format governs putting files back, which --try does too.
 	if *verifyFormat && *verify == "" && *try == "" {
-		fmt.Fprintln(stderr, "hunk: --verify-may-format does nothing without --verify or --try")
-		return exitUsage
+		return fail(exitUsage, errors.New("--verify-may-format does nothing without --verify or --try"), "")
 	}
 
 	opt := Options{Context: *context}
@@ -267,28 +283,23 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "strict":
 		opt.EOL = EOLStrict
 	default:
-		fmt.Fprintf(stderr, "hunk: --eol must be auto or strict, not %q\n", *eol)
-		return exitUsage
+		return fail(exitUsage, fmt.Errorf("--eol must be auto or strict, not %q", *eol), "")
 	}
 	if *marker == "" {
-		fmt.Fprintln(stderr, "hunk: --marker must not be empty")
-		return exitUsage
+		return fail(exitUsage, errors.New("--marker must not be empty"), "")
 	}
 	if *context < 1 {
-		fmt.Fprintf(stderr, "hunk: --context must be at least 1, not %d\n", *context)
-		return exitUsage
+		return fail(exitUsage, fmt.Errorf("--context must be at least 1, not %d", *context), "")
 	}
 
 	src, err := readPatch(*patchFile, stdin)
 	if err != nil {
-		fmt.Fprintf(stderr, "hunk: %v\n", err)
-		return exitUsage
+		return fail(exitUsage, err, "")
 	}
 
 	p, err := Parse(src, *marker)
 	if err != nil {
-		fmt.Fprintf(stderr, "hunk: %v\n", err)
-		return exitUsage
+		return fail(exitUsage, err, "")
 	}
 
 	dir := *root
@@ -297,12 +308,22 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	tree, err := OpenTree(dir, *allowOutside)
 	if err != nil {
-		fmt.Fprintf(stderr, "hunk: %v\n", err)
-		return exitIO
+		return fail(exitIO, err, "")
 	}
 	// The root descriptor goes away with the process either way, and a close
 	// error here has nothing left to report it to.
 	defer func() { _ = tree.Close() }()
+
+	// A --verify or --try command runs through sh. With no sh to find, the
+	// command cannot start, and the batch would be written only to be rolled
+	// back, rewriting every file for nothing. So sh is looked for first, and a
+	// missing one is refused before anything is written. The rollback in
+	// runVerify is for whatever this cannot see.
+	if name, cmd := commandFlag(*verify, *try); cmd != "" && !*dryRun {
+		if _, lookErr := exec.LookPath("sh"); lookErr != nil {
+			return fail(exitIO, fmt.Errorf("%s runs its command with sh, which was not found (%v); nothing was written", name, lookErr), "")
+		}
+	}
 
 	txn := NewTxn(tree, opt)
 	var res *Result
@@ -325,10 +346,6 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			v = &Verify{Command: *verify}
 		} else {
 			v, err = runVerify(txn, tree, *verify, *verifyLines, *keepOnFail, *verifyFormat)
-			if err != nil {
-				fmt.Fprintf(stderr, "hunk: could not run the verify command: %v\n", err)
-				return exitIO
-			}
 		}
 	}
 
@@ -337,7 +354,13 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// --json wins over --quiet: a caller that asked for machine output
 		// asked for it on every path. It is alone on stdout.
 		if err := rep.JSON(stdout); err != nil {
-			fmt.Fprintf(stderr, "hunk: %v\n", err)
+			// Exit 5 leaves the tree as it was unless the message says
+			// otherwise, and here the batch may be on disk.
+			if rep.changedTheTree() {
+				fmt.Fprintf(stderr, "hunk: the batch is applied, but the --json report could not be written: %v\n", err)
+			} else {
+				fmt.Fprintf(stderr, "hunk: the --json report could not be written: %v\n", err)
+			}
 			return exitIO
 		}
 		return rep.Exit
@@ -351,7 +374,16 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func runVerify(txn *Txn, tree *Tree, command string, lines int, keep, mayFormat bool) (*Verify, error) {
 	v, err := RunVerify(command, tree.Root(), lines)
 	if err != nil {
-		return nil, err
+		// Nothing was verified, and --verify keeps a batch only when its
+		// check passes, so the batch goes, decided 2026-09-22. Until then it
+		// stayed, unverified, at exit 5. --keep-on-fail keeps it, as it keeps
+		// a batch whose check failed.
+		v = &Verify{Command: command, Applied: txn.Applied()}
+		if keep {
+			v.Kept = true
+			return v, fmt.Errorf("could not run the verify command: %w; the changes are left in place (--keep-on-fail)", err)
+		}
+		return v, cannotStart("the verify command", "rolled back", err, v, txn, mayFormat)
 	}
 	if v.OK {
 		return v, nil
@@ -373,19 +405,54 @@ func runVerify(txn *Txn, tree *Tree, command string, lines int, keep, mayFormat 
 func runTry(txn *Txn, tree *Tree, command string, lines int, mayFormat bool) (*Verify, error) {
 	v, err := RunVerify(command, tree.Root(), lines)
 	if err != nil {
-		v = &Verify{Command: command}
+		v = &Verify{Command: command, Try: true, Applied: txn.Applied()}
+		return v, cannotStart("the --try command", "put back", err, v, txn, mayFormat)
 	}
 	v.Try = true
 	v.Applied = txn.Applied()
 	v.RolledBack, v.NotRestored, v.Gone = txn.Rollback(mayFormat)
-	if err != nil {
-		back := "the batch was put back"
-		if len(v.NotRestored) > 0 {
-			back = fmt.Sprintf("%s could not be put back", count(len(v.NotRestored), "file"))
-		}
-		err = fmt.Errorf("could not run the --try command: %w; %s", err, back)
+	return v, nil
+}
+
+// cannotStart puts the batch back after a command that could not start, and
+// says whether it managed to: it names how many files it could not put back
+// rather than claiming it did, and the report lists them.
+func cannotStart(what, done string, err error, v *Verify, txn *Txn, mayFormat bool) error {
+	v.RolledBack, v.NotRestored, v.Gone = txn.Rollback(mayFormat)
+	back := "the batch was " + done
+	if len(v.NotRestored) > 0 {
+		back = fmt.Sprintf("%s could not be put back", count(len(v.NotRestored), "file"))
 	}
-	return v, err
+	return fmt.Errorf("could not run %s: %w; %s", what, err, back)
+}
+
+// commandFlag names the flag whose command the batch will run, if either.
+func commandFlag(verify, try string) (name, cmd string) {
+	if try != "" {
+		return "--try", try
+	}
+	return "--verify", verify
+}
+
+// jsonRequested reports whether --json is among the arguments, read without
+// the flag package: an unknown flag stops the flag package before it reaches
+// a --json that comes after it, and that caller asked for JSON too.
+func jsonRequested(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		name, val, hasVal := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if !strings.HasPrefix(a, "-") || name != "json" {
+			continue
+		}
+		if !hasVal {
+			return true
+		}
+		b, err := strconv.ParseBool(val)
+		return err == nil && b
+	}
+	return false
 }
 
 // readPatch reads the patch from -f or from stdin.
