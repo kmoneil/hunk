@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -475,6 +476,78 @@ func TestAllocationsPerCandidateSpanStayBudgeted(t *testing.T) {
 	if per > budget {
 		t.Errorf("%.1f allocations per candidate span over %d candidates, budget is %d: "+
 			"old is being normalized inside the span loop again (§7.2)", per, len(starts), budget)
+	}
+}
+
+// bytesPerRun is testing.AllocsPerRun for bytes: the heap bytes f allocates
+// on average over runs, after one warm run, with GOMAXPROCS at 1 as
+// AllocsPerRun has it, so no other goroutine's allocations are counted.
+func bytesPerRun(runs int, f func()) float64 {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	f()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		f()
+	}
+	runtime.ReadMemStats(&after)
+	return float64(after.TotalAlloc-before.TotalAlloc) / float64(runs)
+}
+
+// §7.2's table says the near-miss search is linear in old and linear in the
+// file, 1.86x and 2.0x per doubling, and until 2026-09-21 that was prose
+// measured once by hand. A regression that made it superlinear in either
+// dimension changed no output, so no golden and no behavioural test could see
+// it. This one can: a term quadratic in the doubled dimension measures near 4
+// per doubling once it dominates, and linear measures near 2.
+//
+// It measures bytes allocated, not allocations. Comparing a span allocates the
+// same number of times however long old is, and only the size of each
+// allocation grows, so a count stays flat as old doubles (measured x0.98) and
+// would pass any regression in that dimension. Bytes track the work in both,
+// and they are exact where time is not: this machine's wall clock swings
+// two- or threefold between identical runs.
+//
+// One doubling against a limit of 3 catches a quadratic term once it is as
+// large as the linear work at the smaller size: with linear work L and
+// quadratic work Q, the ratio is (2L+4Q)/(L+Q), which reaches 3 at Q = L. A
+// smaller quadratic term needs a larger fixture to see, and this one is sized
+// to run in a quarter of a second. Measured on the day it landed: x1.87 for
+// old, x2.03 for the file, and x3.34 to x4.03 for three quadratic mutants.
+//
+// The fixture is the degenerate shape TestCostBounds uses, where no
+// normalization explains any span, so the loop runs to the end. It is a budget
+// rather than a measurement. If a change moves it, decide whether the change
+// is worth it; do not edit the number to match.
+func TestTheNearMissSearchIsLinearInEachDimension(t *testing.T) {
+	const limit = 3.0
+	diagnose := func(fileLines, oldLines int) float64 {
+		file := []byte(strings.Repeat("}\n", fileLines))
+		old := []byte(strings.Repeat("}\n", oldLines) + "zzz")
+		return bytesPerRun(3, func() { Diagnose(old, file, 20) })
+	}
+	for _, c := range []struct {
+		name                                 string
+		fileSmall, oldSmall, fileBig, oldBig int
+	}{
+		{"old doubles, the file held at 1,600 lines", 1600, 80, 1600, 160},
+		{"the file doubles, old held at 40 lines", 1600, 40, 3200, 40},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			small := diagnose(c.fileSmall, c.oldSmall)
+			// A search that stopped before the span loop would allocate
+			// almost nothing, and a ratio of two small numbers says nothing.
+			if small < 1<<20 {
+				t.Fatalf("%.0f bytes for the smaller search; the span loop did not run", small)
+			}
+			big := diagnose(c.fileBig, c.oldBig)
+			ratio := big / small
+			t.Logf("x%.2f in bytes allocated, %.0f to %.0f", ratio, small, big)
+			if ratio >= limit {
+				t.Errorf("doubling costs x%.2f in bytes allocated (%.0f to %.0f), limit x%.1f: "+
+					"the near-miss search is superlinear in this dimension (§7.2)", ratio, small, big, limit)
+			}
+		})
 	}
 }
 
