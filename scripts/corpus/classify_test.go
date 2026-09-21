@@ -388,7 +388,7 @@ var reportGoldens = map[string]int{
 	"report-dry-run":                  0,
 	"cli-all-three-ops":               0,
 	"cli-seam-added":                  0,
-	"cli-trivial-note":                0,
+	"cli-one-replacement":             0,
 	"cli-spec-example":                0,
 	"cli-spec-example-full":           0,
 	"report-validation":               2,
@@ -702,16 +702,21 @@ func TestUnknownRecordsAreSkipped(t *testing.T) {
 	}
 }
 
-// The note's rate is the whole of the decision about it, so the rule is written
-// against hunk's own golden rather than a copy of the sentence: a reworded note
-// fails this measurement instead of quietly zeroing it.
+// The note was printed by v0.1.0 through v0.2.4 and dropped on 2026-09-21, so
+// hunk has no golden of it any more. The transcripts those versions wrote still
+// carry it, and its rate is how the drop shows in the numbers, so the rule is
+// written against the last golden's bytes, frozen here, rather than a copy of
+// the sentence. The same bytes are a success, and must still read as one.
 func TestPrintsTrivialNote(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", "cli-trivial-note.txt"))
+	b, err := os.ReadFile(filepath.Join("testdata", "historic-trivial-note.txt"))
 	if err != nil {
-		t.Fatalf("%v: the golden this rule is written against is gone", err)
+		t.Fatal(err)
 	}
 	if !PrintsTrivialNote(string(b)) {
-		t.Errorf("the golden does not match the rule:\n%s", b)
+		t.Errorf("the frozen golden does not match the rule:\n%s", b)
+	}
+	if got := HunkExit("hunk -f p.txt", string(b)); got != 0 {
+		t.Errorf("the frozen golden reads as exit %d, want 0:\n%s", got, b)
 	}
 	for _, c := range []struct {
 		name string
