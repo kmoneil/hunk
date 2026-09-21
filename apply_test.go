@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -30,24 +31,36 @@ func fixture(t *testing.T, files map[string]string) (*Tree, string) {
 	return tree, root
 }
 
-// snapshot records every regular file's contents and mode, so "nothing was
-// written" can be asserted rather than assumed. §4.1 attaches a tree state to
-// four exit codes and this is how those are checked.
+// snapshot records the tree under root, so "nothing was written" can be
+// asserted rather than assumed: every regular file's contents and mode, every
+// symlink, and every directory. §4.1 attaches a tree state to four exit codes
+// and this is how those are checked.
 //
 // A symlink is recorded as the link, not read through. Reading through one made
 // a tree with a directory link or a dangling link impossible to snapshot at
 // all, and a link replaced by a regular file, which §6.5 forbids, would have
 // looked unchanged.
+//
+// Directories were left out until 2026-09-21, which made assertUnchanged blind
+// to the one thing a rollback can leave behind that is not a file. Rollback
+// left a directory two creates had shared, under an exit 3 that says the tree
+// is untouched, and every test that checked the tree passed.
 func snapshot(t *testing.T, root string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
 	err := filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
-		if err != nil || fi.IsDir() {
+		if err != nil {
 			return err
 		}
-		if fi.Mode()&fs.ModeSymlink != 0 {
+		rel, _ := filepath.Rel(root, p)
+		switch {
+		case fi.IsDir():
+			if rel != "." {
+				out[rel] = "directory"
+			}
+			return nil
+		case fi.Mode()&fs.ModeSymlink != 0:
 			dest, err := os.Readlink(p)
-			rel, _ := filepath.Rel(root, p)
 			out[rel] = "symlink\x00" + dest
 			return err
 		}
@@ -55,7 +68,6 @@ func snapshot(t *testing.T, root string) map[string]string {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(root, p)
 		out[rel] = fi.Mode().String() + "\x00" + string(b)
 		return nil
 	})
@@ -63,21 +75,97 @@ func snapshot(t *testing.T, root string) map[string]string {
 	return out
 }
 
-func assertUnchanged(t *testing.T, root string, before map[string]string) {
-	t.Helper()
-	after := snapshot(t, root)
-	if len(before) != len(after) {
-		t.Fatalf("file count changed: %d -> %d", len(before), len(after))
+// filesOnly is a snapshot without its directories. FuzzApplyIsAllOrNothing is
+// the one place that wants it, and says why.
+func filesOnly(s map[string]string) map[string]string {
+	out := map[string]string{}
+	for name, v := range s {
+		if v != "directory" {
+			out[name] = v
+		}
 	}
+	return out
+}
+
+// snapshotDiff names every entry that differs between two snapshots, in name
+// order: what appeared, what went, and what changed. Nil means identical.
+func snapshotDiff(before, after map[string]string) []string {
 	var names []string
-	for n := range before {
-		names = append(names, n)
+	for name := range before {
+		names = append(names, name)
+	}
+	for name := range after {
+		if _, ok := before[name]; !ok {
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
-	for _, n := range names {
-		if before[n] != after[n] {
-			t.Errorf("%s changed; the tree should be byte-identical", n)
+	var diffs []string
+	for _, name := range names {
+		b, wasThere := before[name]
+		a, isThere := after[name]
+		switch {
+		case !isThere:
+			diffs = append(diffs, name+" is gone")
+		case !wasThere:
+			diffs = append(diffs, name+" appeared")
+		case a != b:
+			diffs = append(diffs, name+" changed")
 		}
+	}
+	return diffs
+}
+
+func assertUnchanged(t *testing.T, root string, before map[string]string) {
+	t.Helper()
+	for _, d := range snapshotDiff(before, snapshot(t, root)) {
+		t.Errorf("%s; the tree should be byte-identical", d)
+	}
+}
+
+func TestSnapshotDiffNamesEveryDifference(t *testing.T) {
+	base := map[string]string{"a.txt": "-rw-r--r--\x00a\n", "sub": "directory"}
+	for _, c := range []struct {
+		name  string
+		after map[string]string
+		want  []string
+	}{
+		{"identical", map[string]string{"a.txt": "-rw-r--r--\x00a\n", "sub": "directory"}, nil},
+		{
+			"a directory appeared",
+			map[string]string{"a.txt": "-rw-r--r--\x00a\n", "sub": "directory", "new": "directory"},
+			[]string{"new appeared"},
+		},
+		{"a directory went", map[string]string{"a.txt": "-rw-r--r--\x00a\n"}, []string{"sub is gone"}},
+		{"a file changed", map[string]string{"a.txt": "-rw-r--r--\x00b\n", "sub": "directory"}, []string{"a.txt changed"}},
+		{
+			"all three, in name order",
+			map[string]string{"a.txt": "-rw-------\x00a\n", "b.txt": "-rw-r--r--\x00b\n"},
+			[]string{"a.txt changed", "b.txt appeared", "sub is gone"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := snapshotDiff(base, c.after); !slices.Equal(got, c.want) {
+				t.Errorf("snapshotDiff = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestSnapshotRecordsDirectories(t *testing.T) {
+	root := cliTree(t, map[string]string{"a.txt": "a\n"})
+	must(t, os.MkdirAll(filepath.Join(root, "empty", "deeper"), 0o755))
+	got := snapshot(t, root)
+	for _, d := range []string{"empty", filepath.Join("empty", "deeper")} {
+		if got[d] != "directory" {
+			t.Errorf("snapshot has %q for %s, want it recorded as a directory", got[d], d)
+		}
+	}
+	if _, ok := got["."]; ok {
+		t.Error("snapshot records the root itself, which every tree has")
+	}
+	if len(filesOnly(got)) != 1 {
+		t.Errorf("filesOnly(snapshot) = %q, want only a.txt", filesOnly(got))
 	}
 }
 
@@ -759,16 +847,24 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 		before := snapshot(t, root)
 		r, err := NewTxn(tree, Options{}).Run(p)
 		if err != nil {
-			// Every failure path leaves the tree exactly as it was. The one
-			// exception §6.2 admits is a commit that fails part-way, and this
-			// comment used to say that needs a write to fail and cannot happen
-			// here. The patch alone can make one fail. A file and then a file
-			// inside it did, and so did a NUL byte under a directory the batch
-			// creates, until each was refused before commit (issue #11). A
-			// name too long for the filesystem, in the same place, still does,
-			// and when that directory is all it leaves behind this snapshot,
-			// which records files, cannot see it
-			// (a-name-the-filesystem-refuses-is-found-in-commit's card).
+			// Every failure path leaves the tree exactly as it was,
+			// directories included. The one exception §6.2 admits is a commit
+			// that fails part-way, and this comment used to say that needs a
+			// write to fail and cannot happen here. The patch alone can make
+			// one fail. A file and then a file inside it did, and so did a NUL
+			// byte under a directory the batch creates, until each was refused
+			// before commit (issue #11). A name too long for the filesystem,
+			// in the same place, still does, and leaves the directory it was
+			// to go in: a-name-the-filesystem-refuses-is-found-in-commit's
+			// card, waiting on a decision. So where a failed commit ends, at
+			// exit 5, directories are left out of the comparison and files are
+			// not. The exemption goes when that card is decided.
+			if ExitCode(err) == exitIO {
+				for _, d := range snapshotDiff(filesOnly(before), filesOnly(snapshot(t, root))) {
+					t.Errorf("%s; a failed commit may leave a directory, and nothing else", d)
+				}
+				return
+			}
 			assertUnchanged(t, root, before)
 			return
 		}
@@ -867,15 +963,7 @@ func applyToLinkedTree(t *testing.T, p *Patch) (int, map[string]string) {
 	defer tree.Close()
 
 	_, runErr := NewTxn(tree, Options{}).Run(p)
-	state := snapshot(t, root)
-	must(t, filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() && path != root {
-			rel, _ := filepath.Rel(root, path)
-			state[rel] = "directory"
-		}
-		return err
-	}))
-	return ExitCode(runErr), state
+	return ExitCode(runErr), snapshot(t, root)
 }
 
 // An "@@ old x2" that rewrites two lines changed two lines. Counting per hunk
