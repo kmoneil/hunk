@@ -1114,9 +1114,15 @@ func TestTheSeam(t *testing.T) {
 		},
 		{
 			// §3.3 never gives a payload a trailing newline, so without
-			// normalizing this welds every time: "yx\n".
+			// normalizing this welds every time: "yx\n". The newline is the
+			// payload's own, so it is not reported, since 2026-09-22.
 			name: "prepend a payload with no final newline", start: "x\n",
-			patch: "@@ prepend a.txt\ny\n", want: "y\nx\n", wantAdded: true,
+			patch: "@@ prepend a.txt\ny\n", want: "y\nx\n",
+		},
+		{
+			// The file's end is not prepend's seam, so it is left alone.
+			name: "prepend a payload with none to a file with none", start: "x",
+			patch: "@@ prepend a.txt\ny\n", want: "y\nx",
 		},
 		{
 			name: "prepend a payload that ends in a newline", start: "x\n",
@@ -1299,11 +1305,11 @@ func TestACreatedFileWithNoFinalNewlineSaysSo(t *testing.T) {
 			"A n.txt +2 -1  (no final newline)", "bye",
 		},
 		{
-			// Both true: the first names the byte between the two payloads,
-			// the second the file's end. It takes a prepend, which neither the
-			// field nor this repository has ever used.
-			"a later prepend, and both are said", nil, "@@ create n.txt\na\n@@ prepend n.txt\np\n",
-			"A n.txt +2 -0  (added a final newline)  (no final newline)", "p\na",
+			// The newline prepend gives its payload is not reported, so only
+			// the file's end is said. Until 2026-09-22 this row printed both
+			// suffixes, "(added a final newline)  (no final newline)".
+			"a later prepend, and only the file's end is said", nil, "@@ create n.txt\na\n@@ prepend n.txt\np\n",
+			"A n.txt +2 -0  (no final newline)", "p\na",
 		},
 		{
 			// The case where it matters most: the file had a final newline.
