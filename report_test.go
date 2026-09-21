@@ -421,7 +421,7 @@ func TestJSONDoesNotHTMLEscape(t *testing.T) {
 // it is in this table beside the ones that never did, and the assertion is on
 // the shape rather than the words, so a note back under any wording fails.
 func TestASuccessReportIsTheDiffstatAndNothingElse(t *testing.T) {
-	row := regexp.MustCompile(`^[MAD] \S+ +\+\d+ -\d+(  \(added a final newline\))?$`)
+	row := regexp.MustCompile(`^[MAD] \S+ +\+\d+ -\d+(  \(added a final newline\))?(  \(no final newline\))?$`)
 	total := regexp.MustCompile(`^\d+ files?, \d+ hunks?, \+\d+ -\d+` +
 		`(, verify ok \(\d+\.\ds\)| \(dry run: nothing written(, verify not run)?\))?$`)
 	// §5.1's success object. It carried the note as "trivial": true.
@@ -442,6 +442,7 @@ func TestASuccessReportIsTheDiffstatAndNothingElse(t *testing.T) {
 		{"one prepend", v, "@@ prepend v.go\n// start\n", nil, 1},
 		{"one append that added a final newline", map[string]string{"a.txt": "x"}, "@@ append a.txt\ny\n", nil, 1},
 		{"one create", nil, "@@ create n.txt\nhi\n\n", nil, 1},
+		{"one create with no final newline", nil, "@@ create n.txt\nhi\n", nil, 1},
 		{"one delete", v, "@@ delete v.go\n", nil, 1},
 
 		// What it never fired on.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"maps"
@@ -1057,6 +1058,7 @@ func TestTheSeam(t *testing.T) {
 		name      string
 		start     string
 		patch     string
+		opt       Options
 		want      string
 		wantAdded bool
 	}{
@@ -1071,8 +1073,39 @@ func TestTheSeam(t *testing.T) {
 			patch: "@@ append a.txt\ny\n\n", want: "x\ny\n", wantAdded: true,
 		},
 		{
+			// §3.3 never gives a payload a trailing newline, and this one is
+			// the new end of the file, so until 2026-09-21 this was "x\ny", a
+			// file with no final newline. Every append in the field was spelled
+			// this way. Append adds whole lines now, and says nothing about it:
+			// the caller can predict it from the patch alone.
 			name: "append a payload with no final newline", start: "x\n",
-			patch: "@@ append a.txt\ny\n", want: "x\ny",
+			patch: "@@ append a.txt\ny\n", want: "x\ny\n",
+		},
+		{
+			name: "append several lines, the last with no newline", start: "x\n",
+			patch: "@@ append a.txt\ny\nz\n", want: "x\ny\nz\n",
+		},
+		{
+			// Both bytes, and one report: the one at the seam.
+			name: "append a payload with none to a file with none", start: "x",
+			patch: "@@ append a.txt\ny\n", want: "x\ny\n", wantAdded: true,
+		},
+		{
+			name: "append a payload with none to an empty file", start: "",
+			patch: "@@ append a.txt\ny\n", want: "y\n",
+		},
+		{
+			// An empty payload has no last line to end.
+			name: "append nothing to a file that ends in a newline", start: "x\n",
+			patch: "@@ append a.txt\n", want: "x\n",
+		},
+		{
+			name: "append nothing to a file with no final newline", start: "x",
+			patch: "@@ append a.txt\n", want: "x\n", wantAdded: true,
+		},
+		{
+			name: "append nothing to an empty file", start: "",
+			patch: "@@ append a.txt\n", want: "",
 		},
 		{
 			name: "append to an empty file adds no seam", start: "",
@@ -1097,10 +1130,40 @@ func TestTheSeam(t *testing.T) {
 			name: "the seam byte on a CRLF file", start: "a\r\nx",
 			patch: "@@ append a.txt\ny\n\n", want: "a\r\nx\r\ny\r\n", wantAdded: true,
 		},
+		{
+			name: "the payload's newline on a CRLF file", start: "a\r\n",
+			patch: "@@ append a.txt\ny\n", want: "a\r\ny\r\n",
+		},
+		{
+			name: "both on a CRLF file", start: "a\r\nx",
+			patch: "@@ append a.txt\ny\n", want: "a\r\nx\r\ny\r\n", wantAdded: true,
+		},
+		{
+			// The file already ends in a newline, a bare one. Asking whether
+			// it ended in the file's own ending, CRLF, added a second newline
+			// here until 2026-09-21: "c\n\r\n", a blank line nobody wrote,
+			// reported as a final newline added to a file that had one.
+			name: "a CRLF file whose last line ends in a bare LF", start: "a\r\nb\r\nc\n",
+			patch: "@@ append a.txt\ny\n\n", want: "a\r\nb\r\nc\ny\r\n",
+		},
+		{
+			// --eol strict does not convert the payload, so its LF reaches a
+			// CRLF file as written, and it is still a newline.
+			name: "append under --eol strict, a payload that ends in LF", start: "a\r\n",
+			patch: "@@ append a.txt\ny\n\n", opt: Options{EOL: EOLStrict}, want: "a\r\ny\n",
+		},
+		{
+			name: "append under --eol strict, a payload with none", start: "a\r\n",
+			patch: "@@ append a.txt\ny\n", opt: Options{EOL: EOLStrict}, want: "a\r\ny\r\n",
+		},
+		{
+			name: "prepend under --eol strict, a payload that ends in LF", start: "a\r\n",
+			patch: "@@ prepend a.txt\ny\n\n", opt: Options{EOL: EOLStrict}, want: "y\na\r\n",
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tree, root := fixture(t, map[string]string{"a.txt": c.start})
-			r, err := run(t, tree, c.patch, Options{})
+			r, err := run(t, tree, c.patch, c.opt)
 			must(t, err)
 			if got := readFile(t, root, "a.txt"); got != c.want {
 				t.Errorf("got %q, want %q", got, c.want)
@@ -1131,6 +1194,195 @@ func TestTheSeam(t *testing.T) {
 		_, out, _ := runCLI(t, root, nil, "@@ append a.txt\ny\n\n")
 		if strings.Contains(out, "final newline") {
 			t.Errorf("out = %q", out)
+		}
+	})
+
+	// The newline append gives the end of its payload is not reported. Every
+	// append in the field needed it, so a suffix for it would sit on every
+	// append row and say nothing the patch did not, and sharing the words with
+	// the seam byte would hide the one thing the suffix does say: that the
+	// file had no final newline.
+	t.Run("nor the newline append gives its payload", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"a.txt": "x\n"})
+		_, out, _ := runCLI(t, root, nil, "@@ append a.txt\ny\n")
+		if out != "M a.txt +1 -0\n1 file, 1 hunk, +1 -0\n" {
+			t.Errorf("out = %q", out)
+		}
+		_, js, _ := runCLI(t, cliTree(t, map[string]string{"a.txt": "x\n"}), []string{"--json"}, "@@ append a.txt\ny\n")
+		if strings.Contains(js, "newline") {
+			t.Errorf("--json: %s", js)
+		}
+	})
+}
+
+// §3.3's create writes exactly the bytes it was given, and since 2026-09-21 the
+// report says when the file it made does not end in a newline. 45 of the
+// field's 52 creates were spelled that way, a payload running straight into the
+// terminator, so this speaks up in the common case, and it is the case a
+// formatter run as a check refuses. It is read off the bytes the batch ends
+// with, not off the create's payload: a later hunk can give the newline back or
+// take it away, and a delete then create commits as a modify.
+func TestACreatedFileWithNoFinalNewlineSaysSo(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		patch string
+		row   string // n.txt's line of the report
+		want  string // n.txt afterwards
+	}{
+		{"a payload that runs into the terminator", nil, "@@ create n.txt\nhi\n", "A n.txt +1 -0  (no final newline)", "hi"},
+		{"a payload with the blank line", nil, "@@ create n.txt\nhi\n\n", "A n.txt +1 -0", "hi\n"},
+		{"an empty file has no last line to end", nil, "@@ create n.txt\n", "A n.txt +0 -0", ""},
+		{"CRLF, ended", nil, "@@ create n.txt\na\r\nb\r\n\n", "A n.txt +2 -0", "a\r\nb\r\n"},
+		{"CRLF, not ended", nil, "@@ create n.txt\na\r\nb\n", "A n.txt +2 -0  (no final newline)", "a\r\nb"},
+		{"a bare CR is not a newline", nil, "@@ create n.txt\nhi\r\n", "A n.txt +1 -0  (no final newline)", "hi\r"},
+		{
+			// The append meets a file with no final newline, which is the seam
+			// byte and is said, and then ends its own payload.
+			"a later append ends it", nil, "@@ create n.txt\nhi\n@@ append n.txt\nthere\n",
+			"A n.txt +2 -0  (added a final newline)", "hi\nthere\n",
+		},
+		{
+			"a later replace takes it away", nil, "@@ create n.txt\nhi\n\n@@ old\nhi\n\n@@ new\nbye\n",
+			"A n.txt +2 -1  (no final newline)", "bye",
+		},
+		{
+			// Both true: the first names the byte between the two payloads,
+			// the second the file's end. It takes a prepend, which neither the
+			// field nor this repository has ever used.
+			"a later prepend, and both are said", nil, "@@ create n.txt\na\n@@ prepend n.txt\np\n",
+			"A n.txt +2 -0  (added a final newline)  (no final newline)", "p\na",
+		},
+		{
+			// The case where it matters most: the file had a final newline.
+			"an overwrite, which commits as a modify",
+			map[string]string{"n.txt": "old\n"},
+			"@@ delete n.txt\n@@ create n.txt\nnew\n", "M n.txt +1 -1  (no final newline)", "new",
+		},
+		{
+			"an overwrite with the blank line",
+			map[string]string{"n.txt": "old\n"},
+			"@@ delete n.txt\n@@ create n.txt\nnew\n\n", "M n.txt +1 -1", "new\n",
+		},
+		{
+			// Only a create is reported. A replace spells both sides, and
+			// §3.3's blank-line rule is how it spells the newline.
+			"a modify of a file that has none",
+			map[string]string{"n.txt": "a\nb"},
+			"@@ file n.txt\n@@ old\na\n@@ new\nA\n", "M n.txt +1 -1", "A\nb",
+		},
+		{
+			"a modify that takes it away",
+			map[string]string{"n.txt": "a\n"},
+			"@@ file n.txt\n@@ old\na\n\n@@ new\nA\n", "M n.txt +1 -1", "A",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, c.files)
+			code, out, errOut := runCLI(t, root, nil, c.patch)
+			if code != exitOK {
+				t.Fatalf("exit %d: %s", code, errOut)
+			}
+			if row, _, _ := strings.Cut(out, "\n"); row != c.row {
+				t.Errorf("row = %q, want %q", row, c.row)
+			}
+			if got := readFile(t, root, "n.txt"); got != c.want {
+				t.Errorf("n.txt = %q, want %q", got, c.want)
+			}
+
+			// --json carries it as a field, on a tree of its own.
+			_, js, _ := runCLI(t, cliTree(t, c.files), []string{"--json"}, c.patch)
+			var v struct{ Files []map[string]any }
+			must(t, json.Unmarshal([]byte(js), &v))
+			if len(v.Files) != 1 {
+				t.Fatalf("--json: %s", js)
+			}
+			if got, want := v.Files[0]["no_final_newline"] == true, strings.Contains(c.row, "(no final newline)"); got != want {
+				t.Errorf("no_final_newline = %v, want %v: %s", got, want, js)
+			}
+		})
+	}
+
+	t.Run("a dry run says it about the file it would make", func(t *testing.T) {
+		root := cliTree(t, nil)
+		_, out, _ := runCLI(t, root, []string{"--dry-run"}, "@@ create n.txt\nhi\n")
+		if want := "A n.txt +1 -0  (no final newline)\n1 file, 1 hunk, +1 -0 (dry run: nothing written)\n"; out != want {
+			t.Errorf("out = %q, want %q", out, want)
+		}
+		absent(t, root, "n.txt")
+	})
+
+	// Two creates, one of each, so the suffix is seen against the padding.
+	t.Run("golden", func(t *testing.T) {
+		patch := "@@ create testdata/empty.json\n{}\n@@ create testdata/one.json\n{\"a\": 1}\n\n"
+		_, out, _ := runCLI(t, cliTree(t, nil), nil, patch)
+		golden(t, "cli-no-final-newline", out)
+		_, js, _ := runCLI(t, cliTree(t, nil), []string{"--json"}, patch)
+		golden(t, "cli-no-final-newline-json", js)
+	})
+}
+
+// §3.3's append, for any file and any payload. The file's bytes are kept as a
+// prefix. The file's ending goes in at the seam exactly when the file has text
+// and its last byte is not \n. What follows is the payload as §6.4 translates it
+// for this file, and then the file's ending if the payload has text and does
+// not end in \n. Until 2026-09-21 the last part was false for the default
+// spelling, and a file ending in a bare LF among CRLFs broke the second.
+//
+// The comparison is exact. Its first draft compared line endings as LF, and
+// fuzzing it found that normalizing welds a payload's trailing CR to the
+// ending added after it, on a CRLF file: "\r" became "\r\r\n", which is right,
+// and read as "\r\n" against a wanted "\n".
+func FuzzAppendAddsWholeLines(f *testing.F) {
+	for _, c := range [][2]string{
+		{"x\n", "y\n"},
+		{"x", "y\n"},
+		{"x\n", "y\n\n"},
+		{"", "y\n"},
+		{"x", ""},
+		{"", ""},
+		{"a\r\nx", "y\n"},
+		{"a\r\n", "y\nz\n"},
+		{"a\r\nb\r\nc\n", "y\n\n"},
+		{"a\n", "y\r"},
+	} {
+		f.Add([]byte(c[0]), c[1])
+	}
+	f.Fuzz(func(t *testing.T, start []byte, payload string) {
+		patch := "@@ append a.txt\n" + payload
+		p, err := Parse([]byte(patch), DefaultMarker)
+		if err != nil || len(p.Hunks) != 1 {
+			return // the payload held a directive, which is FuzzParse's ground
+		}
+		tree, root := fixture(t, map[string]string{"a.txt": string(start)})
+		r, err := NewTxn(tree, Options{}).Run(p)
+		if err != nil {
+			t.Fatalf("an append to a file that exists failed: %v", err)
+		}
+		got := []byte(readFile(t, root, "a.txt"))
+
+		eol := []byte(dominantEOL(start))
+		rest, ok := bytes.CutPrefix(got, start)
+		if !ok {
+			t.Fatalf("the file's bytes were not kept:\nstart %q\ngot   %q", start, got)
+		}
+		seam := len(start) > 0 && start[len(start)-1] != '\n'
+		if seam {
+			if rest, ok = bytes.CutPrefix(rest, eol); !ok {
+				t.Fatalf("no %q at the seam of %q: %q", eol, start, got)
+			}
+		}
+		reported := len(r.Files) == 1 && r.Files[0].SeamAdded
+		if reported != seam {
+			t.Errorf("SeamAdded = %v for %q, want %v", reported, start, seam)
+		}
+
+		want := toEOL(p.Hunks[0].Body, string(eol))
+		if len(want) > 0 && want[len(want)-1] != '\n' {
+			want = append(want, eol...)
+		}
+		if !bytes.Equal(rest, want) {
+			t.Errorf("after the file came %q, want %q\nstart %q, payload %q", rest, want, start, payload)
 		}
 	})
 }

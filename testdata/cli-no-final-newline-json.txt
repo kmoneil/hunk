@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "exit": 0,
+  "files": [
+    {
+      "path": "testdata/empty.json",
+      "op": "create",
+      "added": 1,
+      "removed": 0,
+      "no_final_newline": true
+    },
+    {
+      "path": "testdata/one.json",
+      "op": "create",
+      "added": 1,
+      "removed": 0
+    }
+  ],
+  "hunks": 2
+}

@@ -433,6 +433,11 @@ leave a blank line before the next directive:
 The rule is the same at the end of a patch: a blank line before the terminator
 gives the last payload its trailing newline.
 
+append and prepend add whole lines: a payload with no trailing newline gets one,
+and append first ends the file's last line if it has none. create writes its
+payload exactly, so leave the blank line if the new file should end in a
+newline. The report says "(no final newline)" when it does not.
+
 A payload may be empty. "@@ new" followed immediately by another directive
 replaces the old text with nothing, which together with the blank-line rule
 deletes a line, newline included.

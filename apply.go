@@ -115,9 +115,16 @@ type FileResult struct {
 	Removed int
 
 	// SeamAdded means append or prepend inserted a newline the patch did not
-	// contain (§3.3). Reported rather than done quietly, which is the whole
-	// reason normalizing the seam was acceptable.
+	// contain at the seam, where the payload meets text already there (§3.3).
+	// Reported rather than done quietly, which is the whole reason normalizing
+	// the seam was acceptable. The newline append gives the end of its payload
+	// is not a seam, and is not counted here.
 	SeamAdded bool
+
+	// NoFinalNewline means the batch created this file, overwrite included,
+	// and the bytes it made do not end in a newline. create writes exactly
+	// what it was given, so this is said rather than fixed (§3.3).
+	NoFinalNewline bool
 }
 
 // A Result is a successful apply.
@@ -196,8 +203,8 @@ type file struct {
 	inFile, inFileName string
 
 	// seamAdded records that append or prepend inserted a newline the patch did
-	// not contain (§3.3). Reported rather than done quietly, which is the whole
-	// reason normalizing the seam was acceptable.
+	// not contain at a seam (§3.3). Reported rather than done quietly, which is
+	// the whole reason normalizing the seam was acceptable.
 	seamAdded bool
 
 	failedAt int // the first hunk against this file that did not match
@@ -589,12 +596,29 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 		// The seam: a weld happens when the text on the left of it does not end
 		// in a newline, which for append is the file (§3.3). The inserted byte
 		// is recorded so the report can say it happened.
+		//
+		// The three newline checks in this function ask whether text ends in
+		// \n, which is what §3.3 says, and add the file's ending when it does
+		// not. Until 2026-09-21 they asked whether it ended in the file's
+		// ending, so a CRLF file whose last line ended in a bare \n, or a
+		// payload under --eol strict, got a second newline: a blank line
+		// nobody wrote.
 		base := f.cur
-		if len(base) > 0 && !bytes.HasSuffix(base, eol) {
+		if len(base) > 0 && !bytes.HasSuffix(base, lf) {
 			base = append(append([]byte{}, base...), eol...)
 			f.seamAdded = true
 		}
 		body := x.convert(h.Body, f.eol)
+		// And the far end: §3.3 never gives a payload a trailing newline, and
+		// this payload is the new end of the file, so without this the default
+		// spelling leaves the file unterminated. It did for every append in the
+		// field until 2026-09-21. This byte is not reported. Append adds whole
+		// lines, as cat >> with a heredoc does, so the caller can predict it
+		// from the patch alone. The seam byte depends on the file, which is
+		// why that one is reported.
+		if len(body) > 0 && !bytes.HasSuffix(body, lf) {
+			body = append(body, eol...)
+		}
 		f.cur = append(append([]byte{}, base...), body...)
 		f.added += lineCount(body)
 
@@ -603,7 +627,7 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 		// payload, and §3.3 never gives a payload a trailing newline, so
 		// without this it would weld by default.
 		body := x.convert(h.Body, f.eol)
-		if len(body) > 0 && !bytes.HasSuffix(body, eol) {
+		if len(body) > 0 && !bytes.HasSuffix(body, lf) {
 			body = append(body, eol...)
 			f.seamAdded = true
 		}
@@ -881,6 +905,10 @@ func (x *Txn) result(hunks int) *Result {
 		r.Files = append(r.Files, FileResult{
 			Path: f.target.Orig(), Op: op, Added: f.added, Removed: f.removed,
 			SeamAdded: f.seamAdded,
+			// Read off the bytes the batch ends with, not the create's payload:
+			// a later hunk can take the newline away or give it back, and a
+			// delete then create commits as a modify.
+			NoFinalNewline: f.created && len(f.cur) > 0 && !bytes.HasSuffix(f.cur, lf),
 		})
 	}
 	return r

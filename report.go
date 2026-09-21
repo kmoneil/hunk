@@ -166,6 +166,9 @@ func (r *Report) writeSuccess(w io.Writer) {
 		if f.SeamAdded {
 			fmt.Fprint(w, "  (added a final newline)")
 		}
+		if f.NoFinalNewline {
+			fmt.Fprint(w, "  (no final newline)")
+		}
 		fmt.Fprintln(w)
 	}
 
@@ -301,11 +304,12 @@ type jsonReport struct {
 }
 
 type jsonFile struct {
-	Path      string `json:"path"`
-	Op        string `json:"op"`
-	Added     int    `json:"added"`
-	Removed   int    `json:"removed"`
-	SeamAdded bool   `json:"added_final_newline,omitempty"`
+	Path           string `json:"path"`
+	Op             string `json:"op"`
+	Added          int    `json:"added"`
+	Removed        int    `json:"removed"`
+	SeamAdded      bool   `json:"added_final_newline,omitempty"`
+	NoFinalNewline bool   `json:"no_final_newline,omitempty"`
 }
 
 type jsonVerify struct {
@@ -357,7 +361,7 @@ func (r *Report) JSON(w io.Writer) error {
 	if r.Result != nil {
 		out.Hunks = r.Result.Hunks
 		for _, f := range r.Result.Files {
-			out.Files = append(out.Files, jsonFile{f.Path, f.Op, f.Added, f.Removed, f.SeamAdded})
+			out.Files = append(out.Files, jsonFile{f.Path, f.Op, f.Added, f.Removed, f.SeamAdded, f.NoFinalNewline})
 		}
 	}
 	if v := r.Verify; v != nil {

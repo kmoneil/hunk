@@ -118,11 +118,12 @@ func foo(ctx context.Context) {
 
 ```
 
-The same blank line is what gives a file you create or append to its final
-newline. There the payload is the end of the file, so if its last line runs
-straight into `HUNK`, the file has no final newline, and a formatter run as a
-check (`zig fmt --check`) refuses it. The `@@ create` in the example at the top
-leaves that blank line on purpose.
+The same blank line is what gives a file you create its final newline. The
+payload is the whole file, so if its last line runs straight into `HUNK`, the
+file has no final newline, the report says `(no final newline)`, and a
+formatter run as a check (`zig fmt --check`) refuses it. The `@@ create` in the
+example at the top leaves that blank line on purpose. `@@ append` and
+`@@ prepend` need no blank line: they add whole lines.
 
 **2. `@@ old` means exactly one occurrence.** `@@ old x3` means exactly three,
 and replaces all three. There is no "one or more". If you do not know the count,
