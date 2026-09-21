@@ -137,9 +137,12 @@ var (
 	reExitTriedAlone     = regexp.MustCompile(`(?m)^(?:hunk: )?tried \d+ hunks? and put back .*left alone`)
 	reTryJSON            = regexp.MustCompile(`(?m)^\s*"try":\s*\{`)
 	reTryJSONNotRestored = regexp.MustCompile(`"not_restored"`)
-	reExitTryCannotStart = regexp.MustCompile(`(?m)^hunk: could not run the --try command`)
-	reExitVerifyFailed   = regexp.MustCompile(`(?m)^hunk: applied .*verify failed`)
-	reExitChanged        = regexp.MustCompile(`changed on disk between being read and being written`)
+	// A --verify or --try command that could not start, which is 5 whether it
+	// was refused before writing (no sh) or rolled back after (an sh that
+	// would not run). Since 2026-09-22 both leave the tree as it was.
+	reExitCannotStart  = regexp.MustCompile(`(?m)^hunk: (?:could not run the (?:verify|--try) command|--(?:verify|try) runs its command with sh, which was not found)`)
+	reExitVerifyFailed = regexp.MustCompile(`(?m)^hunk: applied .*verify failed`)
+	reExitChanged      = regexp.MustCompile(`changed on disk between being read and being written`)
 	// Exit 1 is enumerable: a parse error carries its patch line, and the usage
 	// errors are fixed strings in main.go. Exit 5 is not enumerable, because
 	// its text is whatever the OS said, so it is never guessed at.
@@ -339,7 +342,7 @@ func HunkExit(cmd, result string) int {
 		return 4
 	case reExitTried.MatchString(result):
 		return ExitOK
-	case reExitTryCannotStart.MatchString(result):
+	case reExitCannotStart.MatchString(result):
 		return 5
 	case reExitChanged.MatchString(result):
 		return 6

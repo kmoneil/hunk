@@ -1028,3 +1028,121 @@ func TestTheVersionFlagPrintsAndStops(t *testing.T) {
 		t.Errorf("stdout = %q, want one line naming the tool and its version", got)
 	}
 }
+
+// §4: --json "asked for it on every path". Until 2026-09-22 no error found
+// before the transaction printed an object: a caller parsing stdout got nothing
+// and an exit code. Each of those paths is here, with and without --json, and
+// without it the text is what it always was, byte for byte.
+func TestJSONOnEveryPath(t *testing.T) {
+	root := cliTree(t, map[string]string{"a.txt": "one\n"})
+	missing := filepath.Join(root, "nope.txt")
+	for _, c := range []struct {
+		name  string
+		args  []string
+		stdin string
+		exit  int
+		text  string // stderr without --json
+	}{
+		{
+			"an unknown flag",
+			[]string{"--bogus"},
+			vPatch, exitUsage,
+			"hunk: flag provided but not defined: -bogus\nRun \"hunk --help\" for the flags.\n",
+		},
+		{"a bad flag value", []string{"--eol", "lf"}, vPatch, exitUsage, "hunk: --eol must be auto or strict, not \"lf\"\n"},
+		{
+			"an unexpected argument",
+			[]string{"x"},
+			vPatch, exitUsage,
+			"hunk: unexpected argument \"x\"; the patch comes from stdin or -f\n",
+		},
+		{
+			"format after flags",
+			[]string{"format"},
+			vPatch, exitUsage,
+			"hunk: format is a subcommand and takes no flags; run \"hunk format\"\n",
+		},
+		{"inert flags", []string{"--keep-on-fail"}, vPatch, exitUsage, "hunk: --keep-on-fail does nothing without --verify\n"},
+		// The OS words a missing file its own way, so only the prefix is ours.
+		{"a missing -f", []string{"-f", missing}, "", exitUsage, "hunk: open " + missing + ": "},
+		{"a parse error", nil, "@@ bogus\n", exitUsage, "hunk: patch line 1: "},
+		{"an unopenable root", []string{"--root", missing}, vPatch, exitIO, "hunk: "},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// runCLI puts its own --root first; a later --root wins.
+			code, out, errOut := runCLI(t, root, c.args, c.stdin)
+			if code != c.exit || out != "" || !strings.HasPrefix(errOut, c.text) {
+				t.Errorf("without --json: exit %d, stdout %q, stderr %q; want %d and %q", code, out, errOut, c.exit, c.text)
+			}
+			if strings.HasSuffix(c.text, "\n") && errOut != c.text {
+				t.Errorf("without --json the text changed:\n got %q\nwant %q", errOut, c.text)
+			}
+
+			code, js, errOut := runCLI(t, root, append([]string{"--json"}, c.args...), c.stdin)
+			var v struct {
+				OK    bool
+				Exit  int
+				Error string
+			}
+			if err := json.Unmarshal([]byte(js), &v); err != nil {
+				t.Fatalf("with --json, no object on stdout (%v): %q, stderr %q", err, js, errOut)
+			}
+			if code != c.exit || v.Exit != c.exit || v.OK || v.Error == "" || errOut != "" {
+				t.Errorf("with --json: exit %d, %s, stderr %q", code, js, errOut)
+			}
+		})
+	}
+}
+
+// Exit 5 leaves the tree as it was unless the message says otherwise, and one
+// exit 5 comes after the batch is written: a --json report stdout will not take.
+func TestAJSONReportThatCannotBeWritten(t *testing.T) {
+	for _, c := range []struct {
+		name, patch, says string
+	}{
+		{"after the batch was applied", vPatch, "hunk: the batch is applied, but the --json report could not be written: "},
+		{"after a refusal", "@@ file a.txt\n@@ old\nabsent\n@@ new\nx\n", "hunk: the --json report could not be written: "},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"a.txt": "one\n"})
+			var errOut bytes.Buffer
+			code := cli([]string{"--root", root, "--json"}, strings.NewReader(c.patch), failingWriter{}, &errOut)
+			if code != exitIO || !strings.HasPrefix(errOut.String(), c.says) {
+				t.Errorf("exit %d, stderr %q", code, errOut.String())
+			}
+		})
+	}
+}
+
+// An error found before the transaction, with --json asked for and a stdout
+// that will not take it: the error itself still reaches stderr.
+func TestAnEarlyErrorWhoseJSONCannotBeWritten(t *testing.T) {
+	var errOut bytes.Buffer
+	code := cli([]string{"--json", "--eol", "lf"}, strings.NewReader(""), failingWriter{}, &errOut)
+	want := "hunk: --eol must be auto or strict, not \"lf\"\nhunk: the --json report could not be written: disk gone\n"
+	if code != exitUsage || errOut.String() != want {
+		t.Errorf("exit %d, stderr %q", code, errOut.String())
+	}
+}
+
+func TestJSONRequested(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"--json"}, true},
+		{[]string{"-json"}, true},
+		{[]string{"--bogus", "--json"}, true},
+		{[]string{"--json=true"}, true},
+		{[]string{"--json=false"}, false},
+		{[]string{"--json=maybe"}, false},
+		{[]string{"--jsonx"}, false},
+		{[]string{"json"}, false},
+		{[]string{"--", "--json"}, false},
+		{nil, false},
+	} {
+		if got := jsonRequested(c.args); got != c.want {
+			t.Errorf("jsonRequested(%q) = %v, want %v", c.args, got, c.want)
+		}
+	}
+}

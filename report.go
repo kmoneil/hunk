@@ -141,8 +141,23 @@ func NewReport(res *Result, err error, v *Verify, dryRun bool, hunks int) *Repor
 		if len(v.NotRestored) > 0 {
 			r.Exit = exitRollbackFailed
 		}
+	case v != nil && len(v.NotRestored) > 0:
+		// A verify that could not start, and a rollback that could not put
+		// everything back: the tree is inconsistent, which is 4 (§4.1).
+		r.Exit = exitRollbackFailed
 	}
 	return r
+}
+
+// changedTheTree reports whether the batch is on disk when the report is
+// written: applied and kept, rather than refused, rolled back, put back by
+// --try, or previewed.
+func (r *Report) changedTheTree() bool {
+	if r.DryRun || r.Result == nil || len(r.Result.Files) == 0 {
+		return false
+	}
+	v := r.Verify
+	return (r.Exit == exitOK && (v == nil || !v.Try)) || (v != nil && v.Kept)
 }
 
 // Text writes §5's human output. Success goes to out; anything an agent has to
@@ -185,9 +200,9 @@ func (r *Report) Text(out, errOut io.Writer, quiet bool) {
 		if errors.As(r.Err, &ce) {
 			writeNotRestored(errOut, ce.NotRestored)
 		}
-		// A --try command that could not start, after which the batch
-		// could not all be put back.
-		if v := r.Verify; v != nil && v.Try {
+		// A --verify or --try command that could not start, after which the
+		// batch could not all be put back.
+		if v := r.Verify; v != nil {
 			writeNotRestored(errOut, v.NotRestored)
 		}
 	}

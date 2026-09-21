@@ -13,7 +13,7 @@ guarantee.
 | 2 | a hunk did not match | untouched |
 | 3 | verify failed, rolled back | untouched |
 | 4 | verify failed and rollback was incomplete | **inconsistent** |
-| 5 | I/O error | see the message |
+| 5 | I/O error | untouched, unless the message says otherwise |
 | 6 | a file changed on disk between read and write | untouched |
 
 **Under `--try CMD` the exit is `CMD`'s own status** once every file is back,
