@@ -1,0 +1,5 @@
+  the text is there with different leading whitespace, at line 1:
+      1 |             a := 1
+      2 |             b := 2
+      3 |             c := 3
+  line 1 of your old used 16 spaces; the file uses 12 spaces, and the other lines do not all differ the same way

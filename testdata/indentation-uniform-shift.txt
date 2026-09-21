@@ -1,0 +1,5 @@
+  the text is there with different leading whitespace, at line 1:
+      1 |             a := 1
+      2 |                 b := 2
+      3 |             c := 3
+  every line of your old is indented 4 spaces more than the file

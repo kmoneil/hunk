@@ -53,6 +53,112 @@ func diagnose(t *testing.T, fileBody, oldText string, opt Options) *Diagnosis {
 	return ve.Failures[0].Near
 }
 
+// Row 2 equates any two blocks whose lines differ only in leading whitespace,
+// uniform or not, and its sentence has to say which, decided 2026-09-21. Until
+// then it described the first line that differed, in words that read as though
+// they described old, and an agent that shifted its whole old by that amount
+// met a second refusal whenever the shift was not uniform. A one-line old is
+// its own description, and keeps the old words.
+func TestTheIndentationSentenceSaysWhetherTheShiftIsUniform(t *testing.T) {
+	for _, c := range []struct {
+		name, file, old, want string
+	}{
+		{
+			"one line", "            x := 1\n", "                x := 1",
+			"your old used 16 spaces; the file uses 12 spaces",
+		},
+		{
+			// A blank line has no depth, so this is still one line.
+			"one line and a blank one", "  x := 1\n\n", "    x := 1\n",
+			"your old used 4 spaces; the file uses 2 spaces",
+		},
+		{
+			"every line deeper", "    a\n        b\n    c\n", "        a\n            b\n        c",
+			"every line of your old is indented 4 spaces more than the file",
+		},
+		{
+			"every line shallower", "        a\n            b\n", "    a\n        b",
+			"every line of your old is indented 4 spaces less than the file",
+		},
+		{
+			"a tab for nothing", "a\n    b\n", "\ta\n\t    b",
+			"every line of your old is indented a tab more than the file",
+		},
+		{
+			// The swap is at the start of the line, and the alignment after
+			// it is common to both, so a tab for four spaces is one swap here.
+			"a tab for four spaces, with alignment after it", "    a\n      b\n", "\ta\n\t  b",
+			"every line of your old has a tab where the file has 4 spaces",
+		},
+		{
+			"a blank line in the block is excepted", "    a\n\n    b\n", "\ta\n\n\tb",
+			"every line of your old has a tab where the file has 4 spaces",
+		},
+		{
+			"and so is one whose whitespace differs", "    a\n    \n    b\n", "\ta\n\n\tb",
+			"every line of your old has a tab where the file has 4 spaces",
+		},
+		{
+			"one line of three", "a\n    b\nc\n", "a\n\tb\nc",
+			"line 2 of your old used a tab; the file uses 4 spaces, and no other line differs",
+		},
+		{
+			// Uniform in depth, but a tab per level is not one swap.
+			"nested tabs for nested spaces", "    a\n        b\n", "\ta\n\t\tb",
+			"line 1 of your old used a tab; the file uses 4 spaces, and the other lines do not all differ the same way",
+		},
+		{
+			"two lines shifted and one not", "a\n  b\n  c\n", "a\n    b\n    c",
+			"line 2 of your old used 4 spaces; the file uses 2 spaces, and the other lines do not all differ the same way",
+		},
+		{
+			"nesting that differs", "    a\n    b\n", "        a\n            b",
+			"line 1 of your old used 8 spaces; the file uses 4 spaces, and the other lines do not all differ the same way",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := diagnose(t, c.file, c.old, Options{})
+			if d.Cause != "indentation" {
+				t.Fatalf("cause %q, want indentation: %+v", d.Cause, d)
+			}
+			if d.Detail != c.want {
+				t.Errorf("detail:\n got %q\nwant %q", d.Detail, c.want)
+			}
+		})
+	}
+}
+
+// Row 2 only reaches detailIndent with a span as long as old that differs
+// somewhere, so the two guards below cannot be reached through the tool. They
+// are the function's own contract: nothing to describe is no sentence, and a
+// span shorter than old is no shift and no panic.
+func TestTheIndentationSentenceOnInputsRowTwoNeverSends(t *testing.T) {
+	lines := func(ss ...string) [][]byte {
+		var out [][]byte
+		for _, s := range ss {
+			out = append(out, []byte(s))
+		}
+		return out
+	}
+	if got := detailIndent(lines("\ta", "\tb"), lines("\ta", "\tb"), nil); got != "" {
+		t.Errorf("identical lines: %q", got)
+	}
+	if _, _, ok := uniformShift(lines("\ta", "\tb"), lines("    a")); ok {
+		t.Error("a span shorter than old was called a uniform shift")
+	}
+	if got := detailIndent(lines("\ta", "\tb"), lines("    a"), nil); got !=
+		"line 1 of your old used a tab; the file uses 4 spaces, and no other line differs" {
+		t.Errorf("a short span: %q", got)
+	}
+	// Only a blank line differs, which row 1 catches first through the tool. A
+	// swap of nothing for nothing is not a shift, or this would say "indented
+	// no indentation more".
+	if got := detailIndent(lines("a", "", "b"), lines("a", "  ", "b"), nil); got !=
+		"line 2 of your old used no indentation; the file uses 2 spaces, and no other line differs" {
+		t.Errorf("only a blank line differs: %q", got)
+	}
+}
+
 func TestDiagnoseGoldens(t *testing.T) {
 	cases := []struct {
 		name string
@@ -61,10 +167,25 @@ func TestDiagnoseGoldens(t *testing.T) {
 		opt  Options
 	}{
 		{
-			// §7's own first example: a tab that is spaces.
+			// §7's own first example: a tab that is spaces. One line of three
+			// differs, so it is not a shift, and since 2026-09-21 the sentence
+			// names the line.
 			name: "indentation-tab-vs-spaces",
 			file: "func f() {\n    return nil\n}\n",
 			old:  "func f() {\n\treturn nil\n}",
+		},
+		{
+			// The field's shape: a block copied four spaces deeper than it sits.
+			name: "indentation-uniform-shift",
+			file: "            a := 1\n                b := 2\n            c := 3\n",
+			old:  "                a := 1\n                    b := 2\n                c := 3",
+		},
+		{
+			// The same old against a file whose nesting differs. Shifting old
+			// four spaces left fixes line 1 and not line 2.
+			name: "indentation-not-uniform",
+			file: "            a := 1\n            b := 2\n            c := 3\n",
+			old:  "                a := 1\n                    b := 2\n                c := 3",
 		},
 		{
 			name: "trailing-whitespace",

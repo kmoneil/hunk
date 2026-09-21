@@ -2,4 +2,4 @@
       1 | func f() {
       2 |     return nil
       3 | }
-  your old used a tab; the file uses 4 spaces
+  line 2 of your old used a tab; the file uses 4 spaces, and no other line differs
