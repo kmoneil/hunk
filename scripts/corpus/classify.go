@@ -135,9 +135,10 @@ var (
 	// its text is whatever the OS said, so it is never guessed at.
 	reExitUsage = regexp.MustCompile(`(?m)^hunk: (?:patch line \d+:|--[a-z-]+ |unexpected argument|format (?:takes no arguments|is a subcommand))`)
 
-	// §5.1's note, and the only line hunk prints that a caller is routinely
-	// right to ignore. Anchored to the start of a line and matched on the half
-	// that does not vary: the tail names Edit, Write or rm by operation.
+	// The note hunk printed on a trivial success through v0.2.4, and the only
+	// line it printed that a caller was routinely right to ignore. Anchored to
+	// the start of a line and matched on the half that did not vary: the tail
+	// named Edit, Write or rm by operation.
 	reTrivialNote = regexp.MustCompile(`(?m)^note: one replacement in one file`)
 
 	// --marker's argument, read from the raw command rather than the skeleton,
@@ -404,12 +405,15 @@ func Paths(cmd string) []string {
 // signal §12's "calls per successful edit" is counting.
 func Failed(result string) bool { return reFailed.MatchString(result) }
 
-// PrintsTrivialNote reports whether hunk's output carried §5.1's note. It is
-// printed on a successful apply that bought nothing the tool offers, and it is
-// what the trivial-note decision is a rate of.
+// PrintsTrivialNote reports whether hunk's output carried the note it printed
+// on a successful apply that bought nothing the tool offers: one replacement
+// in one file, with no --verify. v0.1.0 through v0.2.4 printed it, and it was
+// dropped on 2026-09-21 after its rate here was about half of all successes.
+// Transcripts from those versions still carry it, so the rule stays: the rate
+// falling to zero on later versions is how the drop shows.
 //
-// --json carries the same verdict as "trivial": true and prints no prose. That
-// is deliberately not counted: the note's cost is that it is read, and a JSON
+// --json carried the same verdict as "trivial": true and printed no prose. That
+// is deliberately not counted: the note's cost was that it was read, and a JSON
 // field is not read by anybody. The field used --json five times, so the two
 // rules would differ by about that much.
 func PrintsTrivialNote(result string) bool { return reTrivialNote.MatchString(result) }
