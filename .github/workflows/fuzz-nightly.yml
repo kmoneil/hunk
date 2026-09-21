@@ -129,8 +129,17 @@ jobs:
               "assert properties, and a property failure matters more: that a batch" \
               "is all-or-nothing, that a resolved path stays inside the root, that" \
               "\\\"no anchor found\\\" is only said when no line of old is anywhere in" \
-              "the file, and that the ASCII fold agrees with the rune-by-rune one." \
-              "A wrong refusal and a missing refusal are both defects here." \
+              "the file, that the ASCII fold agrees with the rune-by-rune one, that" \
+              "an append adds whole lines, and that the near-miss prefilter never" \
+              "hides a cause a normalization would name. A wrong refusal and a" \
+              "missing refusal are both defects here." \
+              "" \
+              "**If a target's only failure line is \`context deadline exceeded\`**" \
+              "and no input was attached, nothing was found. That is the Go" \
+              "toolchain's fuzz coordinator racing its own -fuzztime deadline:" \
+              "\`golang/go#75804\`, fixed on Go's master by CL 774140 and in no" \
+              "release yet, so the go1.26 toolchain go.mod pins still has it. Re-run" \
+              "that target and commit nothing. Any other failure is a find." \
               "" \
               "If the target is FuzzResolveStaysInsideTheRoot, treat it as a" \
               "containment failure until proven otherwise and check govulncheck" \
