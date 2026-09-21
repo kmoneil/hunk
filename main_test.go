@@ -839,6 +839,98 @@ func TestSkillLoopExampleApplies(t *testing.T) {
 	})
 }
 
+// The skill's parts layout, decided 2026-09-21 as the answer to "one small miss
+// throws away the whole batch". It rests on one property, that parts piped
+// together are one batch, and on four limits the skill states. The pipe run
+// here is the skill's own, taken from its text, so the section cannot change
+// its command without this noticing.
+func TestSkillPartsLayoutIsOneBatch(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("skills", "hunk", "SKILL.md"))
+	if err != nil {
+		t.Skip("no skill shipped:", err)
+	}
+	const pipe = `cat "$d"/*.hunk | hunk`
+	if !strings.Contains(string(b), "$ "+pipe) {
+		t.Fatalf("the skill no longer shows %q", pipe)
+	}
+	// The same shell, the same glob and the same order the agent gets.
+	stream := func(t *testing.T, parts map[string]string) string {
+		t.Helper()
+		d := t.TempDir()
+		for name, body := range parts {
+			must(t, os.WriteFile(filepath.Join(d, name), []byte(body), 0o644))
+		}
+		cmd := exec.Command("sh", "-c", strings.TrimSuffix(pipe, " | hunk"))
+		cmd.Env = append(os.Environ(), "d="+d)
+		out, err := cmd.Output()
+		must(t, err)
+		return string(out)
+	}
+	files := map[string]string{"a.go": "const X = 1\n", "b.go": "const Y = 2\n"}
+	partA := "@@ file a.go\n@@ old\nconst X = 1\n@@ new\nconst X = 10\n"
+	partB := "@@ file b.go\n@@ old\nconst Y = 2\n@@ new\nconst Y = 20\n"
+
+	t.Run("a miss in one part writes nothing in any", func(t *testing.T) {
+		root := cliTree(t, files)
+		before := snapshot(t, root)
+		miss := "@@ file a.go\n@@ old\n    const X = 1\n@@ new\nconst X = 10\n"
+		code, _, errOut := runCLI(t, root, nil, stream(t, map[string]string{"1-a.hunk": miss, "2-b.hunk": partB}))
+		if code != exitNoMatch {
+			t.Fatalf("exit %d, want 2: %s", code, errOut)
+		}
+		assertUnchanged(t, root, before)
+	})
+
+	t.Run("rewriting that part alone and piping again applies both, together", func(t *testing.T) {
+		root := cliTree(t, files)
+		code, out, errOut := runCLI(t, root, nil, stream(t, map[string]string{"1-a.hunk": partA, "2-b.hunk": partB}))
+		if code != exitOK {
+			t.Fatalf("exit %d: %s", code, errOut)
+		}
+		if !strings.Contains(out, "2 files, 2 hunks") {
+			t.Errorf("not one batch: %q", out)
+		}
+		if readFile(t, root, "a.go") != "const X = 10\n" || readFile(t, root, "b.go") != "const Y = 20\n" {
+			t.Errorf("a.go %q, b.go %q", readFile(t, root, "a.go"), readFile(t, root, "b.go"))
+		}
+	})
+
+	t.Run("patch lines count through the stream", func(t *testing.T) {
+		root := cliTree(t, files)
+		missB := "@@ file b.go\n@@ old\nconst Y = 3\n@@ new\nconst Y = 20\n"
+		_, _, errOut := runCLI(t, root, nil, stream(t, map[string]string{"1-a.hunk": partA, "2-b.hunk": missB}))
+		if !strings.Contains(errOut, "hunk 2  b.go  (patch line 7)") {
+			t.Errorf("want the second part's hunk at line 7 of the stream:\n%s", errOut)
+		}
+	})
+
+	// The first limit, and the reason for it. Without its final newline the
+	// first part's last line runs into the second part's "@@ file", which
+	// becomes payload, so the second part's hunk is matched against a.go. Here
+	// that fails; with text a.go happened to contain, it would edit a.go.
+	t.Run("a part with no final newline welds onto the next", func(t *testing.T) {
+		root := cliTree(t, files)
+		before := snapshot(t, root)
+		code, _, errOut := runCLI(t, root, nil,
+			stream(t, map[string]string{"1-a.hunk": strings.TrimSuffix(partA, "\n"), "2-b.hunk": partB}))
+		if code != exitNoMatch || !strings.Contains(errOut, "hunk 2  a.go") {
+			t.Fatalf("exit %d, want 2 with the second part's hunk against a.go:\n%s", code, errOut)
+		}
+		assertUnchanged(t, root, before)
+	})
+
+	t.Run("an @@ end in a part ends the stream", func(t *testing.T) {
+		root := cliTree(t, files)
+		before := snapshot(t, root)
+		code, _, errOut := runCLI(t, root, nil,
+			stream(t, map[string]string{"1-a.hunk": partA + "@@ end\n", "2-b.hunk": partB}))
+		if code != exitUsage || !strings.Contains(errOut, `content after "@@ end"`) {
+			t.Fatalf("exit %d, want 1:\n%s", code, errOut)
+		}
+		assertUnchanged(t, root, before)
+	})
+}
+
 // The report is a page an agent reads, so the root has to be on the page and
 // not only in a struct. The shape is the one the field hit: a shell that had
 // moved into a subdirectory, so a path that is right for the repository is
