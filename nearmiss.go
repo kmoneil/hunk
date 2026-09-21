@@ -360,6 +360,8 @@ type oldForm struct {
 	joined []byte
 	norms  []normalization
 	normed [][]byte
+	// key is anchorKey of the whole of old, for the prefilter in explain.
+	key string
 }
 
 func newOldForm(oldLines [][]byte) *oldForm {
@@ -368,6 +370,7 @@ func newOldForm(oldLines [][]byte) *oldForm {
 	for i, n := range o.norms {
 		o.normed[i] = n.apply(o.joined)
 	}
+	o.key = anchorKey(o.joined)
 	return o
 }
 
@@ -380,6 +383,17 @@ func (o *oldForm) explain(span [][]byte, file []byte) *Diagnosis {
 	s := bytes.Join(span, lf)
 	if bytes.Equal(o.joined, s) {
 		return nil // it matches here; the miss is elsewhere
+	}
+	// A sound prefilter (§7.2). anchorKey is looser than every row below, so
+	// two texts any row makes equal have equal keys, and a span whose key
+	// differs from old's cannot be named by any of them. It is the whole
+	// span's key and not its lines': collapsing whitespace runs newlines into
+	// the rest, so "a b\nc" and "a\nb c" are equal whole and unequal line by
+	// line, and row 5 names that pair. It changes no output, only the cost of
+	// a span nothing explains, and it is still linear in the span: a constant
+	// factor, decided 2026-09-21 without a cap.
+	if anchorKey(s) != o.key {
+		return nil
 	}
 	for i, n := range o.norms {
 		if bytes.Equal(o.normed[i], n.apply(s)) {
