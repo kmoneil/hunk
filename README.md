@@ -84,7 +84,7 @@ hunk 1  server.go  (patch line 2)
      42 | →if err != nil {
      43 | →→return fmt.Errorf("listen: %w", err)
      44 | →}
-  your old used 4 spaces; the file uses a tab
+  line 1 of your old used 4 spaces; the file uses a tab, and the other lines do not all differ the same way
 ```
 
 The `→` are real tabs, made visible because the difference *is* whitespace and
@@ -158,15 +158,9 @@ Three rules worth knowing before the first patch:
 If it exits non-zero, every file goes back and so does the exit code. You do not
 need a backup and you do not need a cleanup step. To keep the changes instead,
 and read what broke before fixing forward, pass `--keep-on-fail`; the exit is
-still 3.
-
-`--try CMD` is for an edit you do not mean to keep: a print statement, a
-measurement, a deliberate hang to see what the logs say. It applies the batch,
-runs `CMD` the way `--verify` would, puts every file back whatever `CMD` says,
-and exits with `CMD`'s own status. The report starts `tried`, so a caller can
-tell `CMD`'s 2 from `hunk`'s own. If a file could not be put back, because
-`CMD` rewrote it, the exit is 4, and `--verify-may-format` puts it back
-anyway.
+still 3. If the command cannot start at all, with no `sh` on the `PATH` for
+instance, nothing is written and the exit is 5: an edit that was never checked
+is not kept.
 
 This is the flag worth reaching for whenever a batch touches more than one file
 of a compiled language. Every hunk can match, every file can be plausible on its
@@ -182,6 +176,14 @@ and silently discarding somebody else's work is worse than stopping. A file
 `hunk` created that is already gone is the exception: gone is what rolling a
 create back leaves, so it counts as rolled back and the exit stays 3, with one
 line naming the file as removed by something else.
+
+`--try CMD` is for an edit you do not mean to keep: a print statement, a
+measurement, a deliberate hang to see what the logs say. It applies the batch,
+runs `CMD` the way `--verify` would, puts every file back whatever `CMD` says,
+and exits with `CMD`'s own status. The report starts `tried`, so a caller can
+tell `CMD`'s 2 from `hunk`'s own. If a file could not be put back, because
+`CMD` rewrote it, the exit is 4, and `--verify-may-format` puts it back
+anyway.
 
 ## Exit codes
 
@@ -248,9 +250,10 @@ either stops being true.
 ## Development
 
 ```sh
-make check    # gofmt, vet, the dependency gate, tests
+make tools    # the pinned gofumpt, golangci-lint and govulncheck
+make check    # gofumpt, vet, golangci-lint, the dependency and network gates, tests
 make build    # ./hunk
-make hooks    # enable the commit-msg gate, once per clone
+make hooks    # enable the commit-msg and pre-commit hooks, once per clone
 ```
 
 The failure messages are the product here, not a byproduct of it, so they are
@@ -259,7 +262,7 @@ deliberate change to a contract, not a test that needs regenerating.
 
 ## Status
 
-All six directives work, with thirteen flags.
+All six directives work, with fifteen flags.
 
 Linux, macOS and Windows are tested. CI runs the suite on all three and a merge
 is blocked unless it passes on every one, along with the dependency, network,
