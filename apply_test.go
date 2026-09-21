@@ -2,10 +2,15 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"maps"
 	"math/rand/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -463,6 +468,168 @@ func TestCheckCatchesAWriterUnderneath(t *testing.T) {
 			assertUnchanged(t, root, before)
 		})
 	}
+}
+
+// The check phase is asserted at the phase level above, by calling Check
+// directly, because Run closes the window itself and nothing can write between
+// its phases from outside. So nothing asserted that Run calls it: deleting the
+// call failed no test, and the concurrency test below cannot see it either,
+// since two runs started together almost never meet the check anyway. A
+// mutation check found the gap on 2026-09-21. The order of Run's phases is a
+// claim the compiler does not check, so this does.
+func TestRunChecksBetweenValidatingAndCommitting(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "apply.go", nil, 0)
+	must(t, err)
+	var run *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "Run" && fd.Recv != nil {
+			run = fd
+		}
+	}
+	if run == nil {
+		t.Fatal("apply.go has no Txn.Run")
+	}
+	recv := run.Recv.List[0].Names[0].Name
+	var calls []string
+	ast.Inspect(run.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == recv {
+					calls = append(calls, sel.Sel.Name)
+				}
+			}
+		}
+		return true
+	})
+	if want := []string{"Load", "Validate", "Check", "Commit", "result"}; !slices.Equal(calls, want) {
+		t.Errorf("Run calls %v on the transaction, want %v: §6.1's phases, in order, each once", calls, want)
+	}
+
+	// And a phase that fails stops Run: each of these is called as
+	// "if err := x.Phase(); err != nil { return nil, err }". A call whose error
+	// is dropped keeps the order above and refuses nothing.
+	stops := map[string]bool{}
+	for _, st := range run.Body.List {
+		ifs, ok := st.(*ast.IfStmt)
+		if !ok || ifs.Init == nil || len(ifs.Body.List) == 0 {
+			continue
+		}
+		as, ok := ifs.Init.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			continue
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		ret, ok := ifs.Body.List[0].(*ast.ReturnStmt)
+		if !ok || len(ret.Results) == 0 {
+			continue
+		}
+		errName := as.Lhs[0].(*ast.Ident).Name
+		if last, ok := ret.Results[len(ret.Results)-1].(*ast.Ident); ok && last.Name == errName {
+			stops[sel.Sel.Name] = true
+		}
+	}
+	for _, phase := range []string{"Load", "Check", "Commit"} {
+		if !stops[phase] {
+			t.Errorf("Run does not return when %s fails", phase)
+		}
+	}
+}
+
+// §8.1's concurrency test, as §6.2 can keep it, decided 2026-09-21. Two hunk
+// processes started together on the same files, each replacing the same line in
+// every file with its own tag.
+//
+// The check above catches a writer that finished between a run's read and its
+// write. It does not catch one writing at the same time, and two processes
+// started together nearly always both pass it before either renames, after
+// which their renames interleave file by file. So neither "exactly one exits
+// 0" nor "every file came from the same process" is a property this tool has,
+// and a test asserting either would fail at random. What holds on every run is
+// asserted, and the rest is counted and logged.
+func TestTwoProcessesOnTheSameFiles(t *testing.T) {
+	exe, err := os.Executable()
+	must(t, err)
+	const nFiles, trials = 4, 40
+	var names []string
+	start := map[string]string{}
+	for i := range nFiles {
+		n := fmt.Sprintf("f%d.txt", i)
+		names = append(names, n)
+		start[n] = "base\n"
+	}
+	patch := func(tag string) string {
+		var b strings.Builder
+		for _, n := range names {
+			fmt.Fprintf(&b, "@@ file %s\n@@ old\nbase\n@@ new\n%s\n", n, tag)
+		}
+		return b.String()
+	}
+	launch := func(root, tag string) *exec.Cmd {
+		cmd := exec.Command(exe, "--root", root, "--quiet")
+		cmd.Env = append(os.Environ(), "HUNK_TEST_AS_HUNK=1")
+		cmd.Stdin = strings.NewReader(patch(tag))
+		must(t, cmd.Start())
+		return cmd
+	}
+	exitOf := func(err error) int {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode()
+		}
+		must(t, err)
+		return exitOK
+	}
+
+	seen := map[string]int{}
+	for trial := range trials {
+		root := cliTree(t, start)
+		a, b := launch(root, "A"), launch(root, "B")
+		ea, eb := exitOf(a.Wait()), exitOf(b.Wait())
+
+		// Every file is one process's whole version. Never a mix, and never
+		// the original, since at least one process always writes everything.
+		whose := map[string]int{}
+		for _, n := range names {
+			got := readFile(t, root, n)
+			if got != "A\n" && got != "B\n" {
+				t.Fatalf("trial %d: %s is %q, which is neither process's version (exits %d, %d)", trial, n, got, ea, eb)
+			}
+			whose[strings.TrimSpace(got)]++
+		}
+		// 2: it read the other's result, so its old was gone. 6: the other
+		// wrote between its read and its check.
+		for _, e := range []int{ea, eb} {
+			if e != exitOK && e != exitNoMatch && e != exitChanged {
+				t.Fatalf("trial %d: exits %d and %d; each should be 0, 2 or 6", trial, ea, eb)
+			}
+		}
+		switch {
+		case ea != exitOK && eb != exitOK:
+			t.Fatalf("trial %d: both refused (%d, %d), but a refusal needs a write to be refused for", trial, ea, eb)
+		case ea != exitOK || eb != exitOK:
+			// A refused process wrote nothing, so the tree is the other's.
+			winner := "A"
+			if ea != exitOK {
+				winner = "B"
+			}
+			if whose[winner] != nFiles {
+				t.Fatalf("trial %d: exits %d and %d, but the tree is %v, not all %s", trial, ea, eb, whose, winner)
+			}
+			seen["one refused"]++
+		case whose["A"] == nFiles || whose["B"] == nFiles:
+			seen["both wrote, one everywhere"]++
+		default:
+			seen["both wrote, a blend"]++
+		}
+	}
+	t.Logf("%d pairs of %d-file batches: %v", trials, nFiles, seen)
 }
 
 func TestEOL(t *testing.T) {
