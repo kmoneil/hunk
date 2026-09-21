@@ -198,6 +198,12 @@ type file struct {
 	// can unwind exactly the ones this tool created (§6.6).
 	madeDirs []string
 
+	// inFile is the file on disk this path runs through, when a directory
+	// above it is a file: as the patch spelled it, for the refusal, and as
+	// the tree names it, to tell whether the batch deletes it. Such a path
+	// cannot exist, and no hunk can make it.
+	inFile, inFileName string
+
 	// seamAdded records that append or prepend inserted a newline the patch did
 	// not contain (§3.3). Reported rather than done quietly, which is the whole
 	// reason normalizing the seam was acceptable.
@@ -295,7 +301,24 @@ func (x *Txn) Load(p *Patch) error {
 // after a delete in the same batch is legal (§6.6) and a replace after one is
 // not, and the message says an earlier hunk deleted it rather than "no such
 // file", which would send the agent looking at the disk.
-func requireState(f *file, h Hunk, root string) *PathRefusal {
+//
+// A path through a file on disk is refused for every op, and the reason names
+// the file. For a create, deleting that file in the same batch does not help:
+// the batch would have to make a directory where a file stood, which commit
+// and rollback cannot do in order, so it is refused rather than half-supported
+// and deletesAbove says so in the message.
+func requireState(f *file, h Hunk, root string, deletesAbove bool) *PathRefusal {
+	if f.inFile != "" {
+		reason := "no such file; " + f.inFile + " is a file, so nothing can be inside it"
+		if h.Op == OpCreate {
+			reason = "it is inside " + f.inFile + ", which is a file, not a directory"
+			if deletesAbove {
+				reason += "; deleting it in the same batch does not make room, " +
+					"because one batch cannot turn a file into a directory"
+			}
+		}
+		return &PathRefusal{Path: h.Path, Root: root, Reason: reason}
+	}
 	present := (f.existed || f.created) && !f.deleted
 	if h.Op == OpCreate {
 		if present {
@@ -351,12 +374,19 @@ func (x *Txn) load(h Hunk) (*file, error) {
 		f.mode = fi.Mode().Perm()
 		f.sum = sha256.Sum256(b)
 		f.eol = dominantEOL(b)
-	case errors.Is(err, fs.ErrNotExist):
-		// Not an error here. Whether its absence is legal is requireState's
-		// call, per hunk, because create needs it absent and the rest need it
-		// present.
 	default:
-		return nil, err
+		// Absent, or unreachable because a directory above it is a file.
+		// Neither is an error here: whether its absence is legal is
+		// requireState's call, per hunk, because create needs it absent and
+		// the rest need it present. A file in the way is refused there too,
+		// so it is reported beside the batch's other failures. Until
+		// 2026-09-21 it aborted load as exit 5, printing a syscall and hiding
+		// every other failure in the batch.
+		if shown, name, ok := x.tree.FileAbove(tg); ok {
+			f.inFile, f.inFileName = shown, name
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
 	}
 	x.index[tg.name] = f
 	x.files = append(x.files, f)
@@ -380,10 +410,18 @@ const createMode fs.FileMode = 0o644
 func (x *Txn) Validate(p *Patch) []Failure {
 	var failures []Failure
 	diagnosed := 0
+	// Every file the batch deletes, for the one refusal that has to say so: a
+	// create under a file on disk that the batch also deletes.
+	deletes := map[string]bool{}
+	for i, h := range p.Hunks {
+		if h.Op == OpDelete {
+			deletes[x.hunkFile[i].target.name] = true
+		}
+	}
 	for i, h := range p.Hunks {
 		n := i + 1
 		f := x.hunkFile[i]
-		if err := requireState(f, h, x.tree.Root()); err != nil {
+		if err := requireState(f, h, x.tree.Root(), deletes[f.inFileName]); err != nil {
 			// Load's classification is per hunk, because the same path can be
 			// legally absent for one hunk and present for the next.
 			f.failedAt = n

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -669,6 +670,55 @@ func TestStatAndReadFile(t *testing.T) {
 	must(t, err)
 	if string(b) != "in\n" {
 		t.Errorf("read %q", b)
+	}
+}
+
+// FileAbove names the file a path runs through, asking the directories rather
+// than reading the error, which Linux and macOS spell ENOTDIR and Windows
+// spells "does not exist". Every row runs confined and unconfined, and the
+// file is named as the patch spelled it in both.
+func TestFileAboveNamesTheFileInTheWay(t *testing.T) {
+	for _, unconfined := range []bool{false, true} {
+		root := mktree(t)
+		must(t, os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755))
+		must(t, os.Symlink("top.txt", filepath.Join(root, "link.txt")))
+		must(t, os.Symlink("sub", filepath.Join(root, "d")))
+		tree, err := OpenTree(root, unconfined)
+		must(t, err)
+		t.Cleanup(func() { tree.Close() })
+
+		for _, c := range []struct {
+			path, want string // want "" means no file is in the way
+		}{
+			{"top.txt/x", "top.txt"},
+			{"top.txt/deeper/x", "top.txt"},
+			{"./top.txt/x", "top.txt"},
+			{"sub/in.txt/x", "sub/in.txt"},
+			{"link.txt/x", "link.txt"},
+			{"d/in.txt/x", "d/in.txt"},
+			{"sub/deep/in.txt/x", ""},
+			{"sub/new.txt", ""},
+			{"new/deeper/x.txt", ""},
+			{"new.txt", ""},
+			{"top.txt", ""},
+		} {
+			t.Run(fmt.Sprintf("unconfined=%v/%s", unconfined, c.path), func(t *testing.T) {
+				tg, err := tree.Resolve(c.path)
+				must(t, err)
+				shown, name, ok := tree.FileAbove(tg)
+				if shown != c.want || ok != (c.want != "") {
+					t.Fatalf("FileAbove(%q) = %q, %v; want %q, %v", c.path, shown, ok, c.want, c.want != "")
+				}
+				if !ok {
+					return
+				}
+				// The name is the tree's, and is one a stat of the file finds.
+				fi, err := tree.stat(name)
+				if err != nil || fi.IsDir() {
+					t.Errorf("FileAbove's name %q is not the file in the way: %v", name, err)
+				}
+			})
+		}
 	}
 }
 

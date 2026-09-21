@@ -391,6 +391,196 @@ func TestAFileAndADirectoryAtOnePathIsGolden(t *testing.T) {
 	golden(t, "cli-a-file-and-a-directory", slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
 }
 
+// The mirror of the test above, for a file already on disk rather than one the
+// batch creates. Until 2026-09-21 every op on a path through a file aborted
+// load as exit 5, printing "statat a.go/x: not a directory" and hiding every
+// other failure in the batch. Now it is refused per hunk, beside them, naming
+// the file. A delete of that file in the same batch does not make room: one
+// batch cannot turn a file into a directory, and the refusal says so.
+func TestAPathThroughAFileOnDiskIsRefused(t *testing.T) {
+	type failure struct {
+		hunk, line int
+		path       string
+		says       string // a substring of the refusal; "" for a failure that is not one
+		skipped    int    // SkippedAfter
+	}
+	const inside = "it is inside a.go, which is a file, not a directory"
+	const noRoom = "deleting it in the same batch does not make room, because one batch cannot turn a file into a directory"
+	const nothingInside = "no such file; a.go is a file, so nothing can be inside it"
+	for _, c := range []struct {
+		name       string
+		patch      string
+		want       []failure // every failure, in order; nil means the batch applies
+		files      []string  // when it applies: regular files it leaves
+		dryRun     bool
+		unconfined bool
+	}{
+		{
+			name:  "a create inside a file",
+			patch: "@@ create a.go/x\nhi\n",
+			want:  []failure{{1, 1, "a.go/x", inside, 0}},
+		},
+		{
+			name:  "a create two levels inside a file",
+			patch: "@@ create a.go/deeper/x\nhi\n",
+			want:  []failure{{1, 1, "a.go/deeper/x", inside, 0}},
+		},
+		{
+			name:  "a create inside a link to a file",
+			patch: "@@ create link.go/x\nhi\n",
+			want:  []failure{{1, 1, "link.go/x", "it is inside link.go, which is a file, not a directory", 0}},
+		},
+		{
+			name:  "a replace inside a file",
+			patch: "@@ file a.go/x\n@@ old\na\n@@ new\nb\n",
+			want:  []failure{{1, 2, "a.go/x", nothingInside, 0}},
+		},
+		{
+			name:  "an append inside a file",
+			patch: "@@ append a.go/x\nhi\n",
+			want:  []failure{{1, 1, "a.go/x", nothingInside, 0}},
+		},
+		{
+			name:  "a delete inside a file",
+			patch: "@@ delete a.go/x\n",
+			want:  []failure{{1, 1, "a.go/x", nothingInside, 0}},
+		},
+		{
+			name:  "a create inside a file an earlier hunk deletes",
+			patch: "@@ delete a.go\n@@ create a.go/x\nhi\n",
+			want:  []failure{{2, 2, "a.go/x", noRoom, 0}},
+		},
+		{
+			name:  "a create inside a file a later hunk deletes",
+			patch: "@@ create a.go/x\nhi\n@@ delete a.go\n",
+			want:  []failure{{1, 1, "a.go/x", noRoom, 0}},
+		},
+		{
+			name:  "a modify of the file, and a create inside it",
+			patch: "@@ file a.go\n@@ old\npackage a\n@@ new\npackage b\n@@ create a.go/x\nhi\n",
+			want:  []failure{{2, 6, "a.go/x", inside, 0}},
+		},
+		{
+			// §5.2: one round trip fixes all of them. Load-aborting, this
+			// batch reported only the syscall.
+			name:  "reported beside the batch's other failures",
+			patch: "@@ create a.go/x\nhi\n@@ file sub/keep.txt\n@@ old\nabsent\n@@ new\ny\n",
+			want:  []failure{{1, 1, "a.go/x", inside, 0}, {2, 4, "sub/keep.txt", "", 0}},
+		},
+		{
+			// As a missing file's are: each hunk's refusal is true on its
+			// own, so none is a phantom to skip (§3.5).
+			name:  "every hunk on the path is refused",
+			patch: "@@ create a.go/x\nhi\n\n@@ append a.go/x\nmore\n",
+			want:  []failure{{1, 1, "a.go/x", inside, 0}, {2, 4, "a.go/x", nothingInside, 0}},
+		},
+		{
+			name:   "a dry run refuses it too",
+			patch:  "@@ create a.go/x\nhi\n",
+			want:   []failure{{1, 1, "a.go/x", inside, 0}},
+			dryRun: true,
+		},
+		{
+			name:       "an unconfined tree refuses it too",
+			patch:      "@@ create a.go/x\nhi\n",
+			want:       []failure{{1, 1, "a.go/x", inside, 0}},
+			unconfined: true,
+		},
+		{
+			name:  "a create beside the file",
+			patch: "@@ create sub/new.txt\nhi\n",
+			files: []string{"sub/new.txt"},
+		},
+		{
+			name:  "the file deleted and created again at its own path",
+			patch: "@@ delete a.go\n@@ create a.go\npackage c\n",
+			files: []string{"a.go"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			if r, err := filepath.EvalSymlinks(root); err == nil {
+				root = r
+			}
+			must(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n"), 0o644))
+			must(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+			must(t, os.WriteFile(filepath.Join(root, "sub", "keep.txt"), []byte("x\n"), 0o644))
+			must(t, os.Symlink("a.go", filepath.Join(root, "link.go")))
+			tree, err := OpenTree(root, c.unconfined)
+			must(t, err)
+			t.Cleanup(func() { tree.Close() })
+			p, err := Parse([]byte(c.patch), DefaultMarker)
+			must(t, err)
+
+			before := snapshot(t, root)
+			if c.dryRun {
+				_, err = NewTxn(tree, Options{}).Preview(p)
+			} else {
+				_, err = NewTxn(tree, Options{}).Run(p)
+			}
+			if c.want == nil {
+				must(t, err)
+				for _, name := range c.files {
+					if fi, err := os.Stat(filepath.Join(root, name)); err != nil || !fi.Mode().IsRegular() {
+						t.Errorf("%s should be a file: %v", name, err)
+					}
+				}
+				return
+			}
+
+			if got := ExitCode(err); got != exitNoMatch {
+				t.Fatalf("exit %d, want %d: %v", got, exitNoMatch, err)
+			}
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("want *ValidationError, got %T: %v", err, err)
+			}
+			if len(ve.Failures) != len(c.want) {
+				t.Fatalf("%d failures, want %d: %+v", len(ve.Failures), len(c.want), ve.Failures)
+			}
+			for i, w := range c.want {
+				f := ve.Failures[i]
+				if f.Hunk != w.hunk || f.PatchLine != w.line || f.Path != w.path || f.SkippedAfter != w.skipped {
+					t.Errorf("failure %d is hunk %d, line %d, %q, skipped after %d; want hunk %d, line %d, %q, skipped after %d",
+						i, f.Hunk, f.PatchLine, f.Path, f.SkippedAfter, w.hunk, w.line, w.path, w.skipped)
+				}
+				switch {
+				case w.says == "" && f.Refusal != "":
+					t.Errorf("hunk %d was refused and should not have been: %s", f.Hunk, f.Refusal)
+				case w.says != "" && !strings.Contains(f.Refusal, w.says):
+					t.Errorf("hunk %d: refusal = %q, want it to say %q", f.Hunk, f.Refusal, w.says)
+				case w.says != "" && !strings.Contains(f.Refusal, root):
+					t.Errorf("hunk %d: refusal = %q, want it to name the root %q", f.Hunk, f.Refusal, root)
+				}
+				// The clause belongs only to a create under a file the batch
+				// deletes.
+				if w.says != noRoom && strings.Contains(f.Refusal, "does not make room") {
+					t.Errorf("hunk %d: refusal = %q, which says the batch deletes a file it does not", f.Hunk, f.Refusal)
+				}
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
+}
+
+// The page an agent reads for a path through a file on disk: all three
+// sentences, and an ordinary miss reported beside them in the same round.
+func TestAPathThroughAFileIsGolden(t *testing.T) {
+	root := cliTree(t, map[string]string{"a.go": "package a\n", "b.go": "package b\n", "sub/keep.txt": "x\n"})
+	patch := "@@ create a.go/x\nhi\n\n" +
+		"@@ delete b.go\n@@ create b.go/x\nhi\n\n" +
+		"@@ append a.go/y\nmore\n\n" +
+		"@@ file sub/keep.txt\n@@ old\nabsent\n@@ new\ny\n"
+	code, out, errOut := runCLI(t, root, nil, patch)
+	if code != exitNoMatch {
+		t.Fatalf("exit %d, want %d: %s", code, exitNoMatch, errOut)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
+	}
+	golden(t, "cli-a-path-through-a-file", slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
+}
+
 // A file is read once and written once (§3.5), and that has to mean the file,
 // not the spelling. Until 2026-09-17 a directory link made one file two: with
 // d -> sub, a batch naming sub/b.go and d/b.go loaded it twice and wrote it
