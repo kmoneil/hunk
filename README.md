@@ -170,7 +170,10 @@ dangerous. If your verify command rewrites files (`gofmt -w`, `prettier
 --write`, `make fmt`), pass `--verify-may-format`. Without it, a file that
 changed after `hunk` wrote it is left alone rather than reverted, and the exit
 is 4. `hunk` cannot tell a formatter from another process writing the same tree,
-and silently discarding somebody else's work is worse than stopping.
+and silently discarding somebody else's work is worse than stopping. A file
+`hunk` created that is already gone is the exception: gone is what rolling a
+create back leaves, so it counts as rolled back and the exit stays 3, with one
+line naming the file as removed by something else.
 
 ## Exit codes
 

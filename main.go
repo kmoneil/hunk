@@ -342,7 +342,7 @@ func runVerify(txn *Txn, tree *Tree, command string, lines int, keep, mayFormat 
 		v.Kept = true
 		return v, nil
 	}
-	v.RolledBack, v.NotRestored = txn.Rollback(mayFormat)
+	v.RolledBack, v.NotRestored, v.Gone = txn.Rollback(mayFormat)
 	return v, nil
 }
 

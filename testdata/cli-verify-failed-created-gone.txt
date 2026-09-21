@@ -1,0 +1,7 @@
+hunk: applied 1 hunk, verify failed, rolled back 1 file
+
+$ rm new/x.go; printf 'FAIL\n'; false
+FAIL
+(last 1 of 1 lines)
+
+new/x.go, which hunk created, was already gone: something else removed it.
