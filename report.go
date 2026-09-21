@@ -51,6 +51,11 @@ type Verify struct {
 	// Kept means --keep-on-fail left the changes in place. The exit is still 3
 	// (§4): the code reports what the verify said, not what was done about it.
 	Kept bool
+
+	// Try means this is --try's command rather than a verify: the batch is put
+	// back whatever it does, and the exit is its Status (§4.1).
+	Try    bool
+	Status int
 }
 
 // A NotRestored is a file rollback left alone because something rewrote it
@@ -121,7 +126,17 @@ func NewReport(res *Result, err error, v *Verify, dryRun bool, hunks int) *Repor
 	if errors.As(err, &ve) {
 		r.Failures = ve.Failures
 	}
-	if v != nil && v.Ran && !v.OK {
+	switch {
+	case v != nil && v.Try:
+		// §4.1: under --try the exit is the command's own status once the tree
+		// is back, and 4 when it is not, whatever the command returned.
+		if v.Ran {
+			r.Exit = v.Status
+		}
+		if len(v.NotRestored) > 0 {
+			r.Exit = exitRollbackFailed
+		}
+	case v != nil && v.Ran && !v.OK:
 		r.Exit = exitVerifyFailed
 		if len(v.NotRestored) > 0 {
 			r.Exit = exitRollbackFailed
@@ -137,6 +152,19 @@ func NewReport(res *Result, err error, v *Verify, dryRun bool, hunks int) *Repor
 // --quiet says "print nothing on success", and a caller who wanted no output at
 // all would not have run the tool.
 func (r *Report) Text(out, errOut io.Writer, quiet bool) {
+	// --try's report is its command's transcript, whatever the command said,
+	// since that is what the caller ran it for. On exit 0 it is a success
+	// report, on stdout and subject to --quiet; otherwise it goes to stderr.
+	if v := r.Verify; v != nil && v.Try && v.Ran {
+		if r.Exit == exitOK {
+			if !quiet {
+				r.writeTry(out, "")
+			}
+			return
+		}
+		r.writeTry(errOut, "hunk: ")
+		return
+	}
 	if r.Exit == exitOK {
 		if quiet {
 			return
@@ -156,6 +184,11 @@ func (r *Report) Text(out, errOut io.Writer, quiet bool) {
 		var ce *CommitError
 		if errors.As(r.Err, &ce) {
 			writeNotRestored(errOut, ce.NotRestored)
+		}
+		// A --try command that could not start, after which the batch
+		// could not all be put back.
+		if v := r.Verify; v != nil && v.Try {
+			writeNotRestored(errOut, v.NotRestored)
 		}
 	}
 }
@@ -187,6 +220,8 @@ func (r *Report) writeSuccess(w io.Writer) {
 	fmt.Fprintf(w, "%s, %s, +%d -%d",
 		count(len(res.Files), "file"), count(res.Hunks, "hunk"), res.Added(), res.Removed())
 	switch {
+	case r.DryRun && r.Verify != nil && r.Verify.Try:
+		fmt.Fprint(w, " (dry run: nothing written, command not run)")
 	case r.DryRun && r.Verify != nil:
 		// §4: --dry-run writes nothing and runs no verify. Both are said,
 		// because a caller who passed --verify and sees only "nothing written"
@@ -257,6 +292,24 @@ func (r *Report) writeVerifyFailure(w io.Writer) {
 	default:
 		fmt.Fprintf(w, ", rolled back %s\n", count(v.RolledBack, "file"))
 	}
+	writeTranscript(w, v)
+}
+
+// writeTry is --try's report: what was tried, what was put back, and what
+// the command said, which is the whole reason it ran.
+func (r *Report) writeTry(w io.Writer, prefix string) {
+	v := r.Verify
+	fmt.Fprintf(w, "%stried %s and put back %s", prefix, count(v.Applied, "hunk"), count(v.RolledBack, "file"))
+	if len(v.NotRestored) > 0 {
+		fmt.Fprintf(w, ", %s left alone", count(len(v.NotRestored), "file"))
+	}
+	fmt.Fprintf(w, "; the command exited %d (%.1fs)\n", v.Status, v.Seconds)
+	writeTranscript(w, v)
+}
+
+// writeTranscript is the command, its output's tail, and what rolling back
+// could not do, shared by a failed verify and --try.
+func writeTranscript(w io.Writer, v *Verify) {
 	fmt.Fprintf(w, "\n$ %s\n", v.Command)
 	for _, l := range v.Tail {
 		fmt.Fprintln(w, l)
@@ -317,6 +370,7 @@ type jsonReport struct {
 	Files    []jsonFile    `json:"files,omitempty"`
 	Hunks    int           `json:"hunks,omitempty"`
 	Verify   *jsonVerify   `json:"verify,omitempty"`
+	Try      *jsonTry      `json:"try,omitempty"`
 	Failures []jsonFailure `json:"failures,omitempty"`
 	Error    string        `json:"error,omitempty"`
 	DryRun   bool          `json:"dry_run,omitempty"`
@@ -332,6 +386,20 @@ type jsonFile struct {
 	Removed        int    `json:"removed"`
 	SeamAdded      bool   `json:"added_final_newline,omitempty"`
 	NoFinalNewline bool   `json:"no_final_newline,omitempty"`
+}
+
+// jsonTry is --try's result. It is there when --try was given, and ran says
+// whether the command did; status is its exit, which the top-level exit
+// repeats unless the tree could not all be put back (§4.1).
+type jsonTry struct {
+	Ran         bool          `json:"ran"`
+	Status      int           `json:"status"`
+	Seconds     float64       `json:"seconds"`
+	Command     string        `json:"command"`
+	Output      []string      `json:"output,omitempty"`
+	RolledBack  int           `json:"rolled_back"`
+	NotRestored []jsonRestore `json:"not_restored,omitempty"`
+	Gone        []string      `json:"already_gone,omitempty"`
 }
 
 type jsonVerify struct {
@@ -387,7 +455,16 @@ func (r *Report) JSON(w io.Writer) error {
 			out.Files = append(out.Files, jsonFile{f.Path, f.Op, f.Added, f.Removed, f.SeamAdded, f.NoFinalNewline})
 		}
 	}
-	if v := r.Verify; v != nil {
+	if v := r.Verify; v != nil && v.Try {
+		jt := &jsonTry{
+			Ran: v.Ran, Status: v.Status, Seconds: v.Seconds, Command: v.Command,
+			Output: v.Tail, RolledBack: v.RolledBack, Gone: v.Gone,
+		}
+		for _, n := range v.NotRestored {
+			jt.NotRestored = append(jt.NotRestored, jsonRestore{n.Path, n.Reason})
+		}
+		out.Try = jt
+	} else if v != nil {
 		jv := &jsonVerify{
 			Ran: v.Ran, OK: v.OK, Seconds: v.Seconds, Command: v.Command,
 			Output: v.Tail, RolledBack: v.RolledBack, Kept: v.Kept, Gone: v.Gone,

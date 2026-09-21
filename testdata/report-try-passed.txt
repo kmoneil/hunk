@@ -1,0 +1,6 @@
+tried 2 hunks and put back 1 file; the command exited 0 (4.2s)
+
+$ zig build test
+All 12 tests passed.
+FBA_USED 1320
+(last 2 of 2 lines)

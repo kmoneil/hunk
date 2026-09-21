@@ -1,0 +1,10 @@
+hunk: tried 2 hunks and put back 0 files, 1 file left alone; the command exited 0 (4.2s)
+
+$ zig build test
+All 12 tests passed.
+FBA_USED 1320
+(last 2 of 2 lines)
+
+src/faults.zig was not restored.
+  Something rewrote it after hunk did.
+  hunk did not write its original bytes back; they are in version control.

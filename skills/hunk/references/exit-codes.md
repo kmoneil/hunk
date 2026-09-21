@@ -16,6 +16,10 @@ guarantee.
 | 5 | I/O error | see the message |
 | 6 | a file changed on disk between read and write | untouched |
 
+**Under `--try CMD` the exit is `CMD`'s own status** once every file is back,
+and 4 if one could not be put back. The report starts `tried` when `CMD` ran;
+without that word, the exit is `hunk`'s own, and `CMD` never ran.
+
 `--json` gives the same information as one object, including the near-miss span,
 so a program never has to parse the text.
 

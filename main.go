@@ -120,6 +120,10 @@ FLAGS
   --verify-lines N      Tail of the verify output printed on failure. (40)
   --keep-on-fail        Leave the applied changes in place when verify fails,
                         for inspection. Still exits 3.
+  --try CMD             Apply, run CMD as --verify would, then put every file
+                        back whatever it says, and exit with its status. For a
+                        print statement or a measurement you do not mean to
+                        keep. 4 if a file could not be put back.
   --dry-run             Validate and print the diffstat. Write nothing.
   --root DIR            Resolve relative paths and run --verify here. (cwd)
   --marker STR          Directive prefix. (@@)
@@ -182,6 +186,7 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	var (
 		verify       = fs.String("verify", "", "")
+		try          = fs.String("try", "", "")
 		verifyFormat = fs.Bool("verify-may-format", false, "")
 		verifyLines  = fs.Int("verify-lines", 40, "")
 		keepOnFail   = fs.Bool("keep-on-fail", false, "")
@@ -238,14 +243,21 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "hunk: --verify-lines must be at least 1, not %d\n", *verifyLines)
 		return exitUsage
 	}
-	for name, set := range map[string]bool{
-		"--verify-may-format": *verifyFormat,
-		"--keep-on-fail":      *keepOnFail,
-	} {
-		if set && *verify == "" {
-			fmt.Fprintf(stderr, "hunk: %s does nothing without --verify\n", name)
-			return exitUsage
-		}
+	// --try always puts the tree back, and --verify keeps it when the check
+	// passes, so the pair asks for two outcomes of one run (§4.1).
+	if *try != "" && *verify != "" {
+		fmt.Fprintln(stderr, "hunk: --try and --verify cannot both be set; "+
+			"--try always puts the tree back, so there is nothing for --verify to keep")
+		return exitUsage
+	}
+	if *keepOnFail && *verify == "" {
+		fmt.Fprintln(stderr, "hunk: --keep-on-fail does nothing without --verify")
+		return exitUsage
+	}
+	// --verify-may-format governs putting files back, which --try does too.
+	if *verifyFormat && *verify == "" && *try == "" {
+		fmt.Fprintln(stderr, "hunk: --verify-may-format does nothing without --verify or --try")
+		return exitUsage
 	}
 
 	opt := Options{Context: *context}
@@ -301,7 +313,12 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	var v *Verify
-	if err == nil && *verify != "" {
+	switch {
+	case err == nil && *try != "" && *dryRun:
+		v = &Verify{Command: *try, Try: true}
+	case err == nil && *try != "":
+		v, err = runTry(txn, tree, *try, *verifyLines, *verifyFormat)
+	case err == nil && *verify != "":
 		if *dryRun {
 			// §4: --dry-run writes nothing and runs no verify. The report says
 			// so rather than leaving the caller to assume it passed.
@@ -309,7 +326,7 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		} else {
 			v, err = runVerify(txn, tree, *verify, *verifyLines, *keepOnFail, *verifyFormat)
 			if err != nil {
-				fmt.Fprintf(stderr, "hunk: %v\n", err)
+				fmt.Fprintf(stderr, "hunk: could not run the verify command: %v\n", err)
 				return exitIO
 			}
 		}
@@ -348,6 +365,27 @@ func runVerify(txn *Txn, tree *Tree, command string, lines int, keep, mayFormat 
 	}
 	v.RolledBack, v.NotRestored, v.Gone = txn.Rollback(mayFormat)
 	return v, nil
+}
+
+// runTry is --try (§4.1): run the command, then put the batch back whatever it
+// said. A command that cannot start still gets the batch put back, and is exit
+// 5 through the error, reported like any other.
+func runTry(txn *Txn, tree *Tree, command string, lines int, mayFormat bool) (*Verify, error) {
+	v, err := RunVerify(command, tree.Root(), lines)
+	if err != nil {
+		v = &Verify{Command: command}
+	}
+	v.Try = true
+	v.Applied = txn.Applied()
+	v.RolledBack, v.NotRestored, v.Gone = txn.Rollback(mayFormat)
+	if err != nil {
+		back := "the batch was put back"
+		if len(v.NotRestored) > 0 {
+			back = fmt.Sprintf("%s could not be put back", count(len(v.NotRestored), "file"))
+		}
+		err = fmt.Errorf("could not run the --try command: %w; %s", err, back)
+	}
+	return v, err
 }
 
 // readPatch reads the patch from -f or from stdin.

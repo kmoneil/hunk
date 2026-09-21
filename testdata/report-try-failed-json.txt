@@ -1,0 +1,24 @@
+{
+  "ok": false,
+  "exit": 1,
+  "files": [
+    {
+      "path": "src/faults.zig",
+      "op": "modify",
+      "added": 1,
+      "removed": 0
+    }
+  ],
+  "hunks": 2,
+  "try": {
+    "ran": true,
+    "status": 1,
+    "seconds": 4.2,
+    "command": "zig build test",
+    "output": [
+      "All 12 tests passed.",
+      "FBA_USED 1320"
+    ],
+    "rolled_back": 1
+  }
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -339,4 +340,238 @@ func TestVerifyCoverageEdges(t *testing.T) {
 			t.Errorf("err = %q", errOut)
 		}
 	})
+}
+
+// --try (§4.1, decided 2026-09-21): apply, run the command, put the batch back
+// whatever it says, and exit with its status. It replaces the shape §1 was
+// measured on, a backup, an edit, a run and a restore, which a field session
+// wrote three times in a day. Each outcome asserts the exit, the stream the
+// report went to, and the tree, which is back in every row but the one where
+// the command rewrote the file itself.
+func TestTryPutsTheTreeBackWhateverTheCommandSays(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		args   []string
+		patch  string
+		exit   int
+		stdout string // a line the stdout report carries, or "" for none
+		stderr string // likewise for stderr
+		after  string // a.txt afterwards
+	}{
+		{
+			"the command passes",
+			[]string{"--try", "grep -c ONE a.txt"},
+			vPatch,
+			exitOK, "tried 1 hunk and put back 1 file; the command exited 0", "", "one\n",
+		},
+		{
+			// The command's output is the point, so it is printed on success too.
+			"its output is printed on success",
+			[]string{"--try", "echo measured 424"},
+			vPatch,
+			exitOK, "measured 424", "", "one\n",
+		},
+		{
+			"the command fails",
+			[]string{"--try", "grep -c ONE a.txt; exit 3"},
+			vPatch,
+			3, "", "hunk: tried 1 hunk and put back 1 file; the command exited 3", "one\n",
+		},
+		{
+			// The command's 2, told apart from hunk's own by the report.
+			"the command exits 2",
+			[]string{"--try", "exit 2"},
+			vPatch,
+			exitNoMatch, "", "hunk: tried 1 hunk", "one\n",
+		},
+		{
+			// hunk's own 2: the command never ran, so it wrote no marker.
+			"the patch does not match",
+			[]string{"--try", "touch ran"},
+			"@@ file a.txt\n@@ old\nabsent\n@@ new\nx\n",
+			exitNoMatch, "", "did not match", "one\n",
+		},
+		{
+			"the command rewrites the file",
+			[]string{"--try", "echo other > a.txt"},
+			vPatch,
+			exitRollbackFailed, "", "put back 0 files, 1 file left alone; the command exited 0", "other\n",
+		},
+		{
+			"and --verify-may-format puts it back anyway",
+			[]string{"--try", "echo other > a.txt", "--verify-may-format"},
+			vPatch,
+			exitOK, "tried 1 hunk and put back 1 file", "", "one\n",
+		},
+		{
+			"--dry-run runs nothing",
+			[]string{"--try", "touch ran", "--dry-run"},
+			vPatch,
+			exitOK, "(dry run: nothing written, command not run)", "", "one\n",
+		},
+		{
+			"--quiet silences a success",
+			[]string{"--try", "echo hidden", "--quiet"},
+			vPatch,
+			exitOK, "", "", "one\n",
+		},
+		{
+			"--verify-lines caps the tail",
+			[]string{"--try", "printf '1\\n2\\n3\\n'; exit 1", "--verify-lines", "2"},
+			vPatch,
+			1, "", "(last 2 of 3 lines)", "one\n",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"a.txt": "one\n"})
+			code, out, errOut := runCLI(t, root, c.args, c.patch)
+			if code != c.exit {
+				t.Fatalf("exit %d, want %d\n%s%s", code, c.exit, out, errOut)
+			}
+			for _, s := range []struct{ got, want, stream string }{{out, c.stdout, "stdout"}, {errOut, c.stderr, "stderr"}} {
+				switch {
+				case s.want == "" && s.got != "":
+					t.Errorf("%s = %q, want nothing", s.stream, s.got)
+				case s.want != "" && !strings.Contains(s.got, s.want):
+					t.Errorf("%s = %q, want it to carry %q", s.stream, s.got, s.want)
+				}
+			}
+			if got := readFile(t, root, "a.txt"); got != c.after {
+				t.Errorf("a.txt = %q, want %q", got, c.after)
+			}
+			if _, err := os.Stat(filepath.Join(root, "ran")); err == nil {
+				t.Error("the command ran")
+			}
+		})
+	}
+
+	// sh itself killed has no exit code, so the status is the shell's 128 plus
+	// the signal. Windows has no signal for kill -9 $$ to send.
+	t.Run("a killed command is 128 plus the signal", func(t *testing.T) {
+		needsSignals(t)
+		root := cliTree(t, map[string]string{"a.txt": "one\n"})
+		code, _, errOut := runCLI(t, root, []string{"--try", "kill -9 $$"}, vPatch)
+		if code != 137 || !strings.Contains(errOut, "the command exited 137") {
+			t.Errorf("exit %d: %s", code, errOut)
+		}
+		if got := readFile(t, root, "a.txt"); got != "one\n" {
+			t.Errorf("a.txt = %q", got)
+		}
+	})
+
+	t.Run("a command that cannot start is 5, with the batch put back", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"a.txt": "one\n"})
+		t.Setenv("PATH", t.TempDir()) // no sh to be found
+		code, _, errOut := runCLI(t, root, []string{"--try", "true"}, vPatch)
+		if code != exitIO || !strings.Contains(errOut, "could not run the --try command") ||
+			!strings.HasSuffix(errOut, "; the batch was put back\n") {
+			t.Errorf("exit %d: %q", code, errOut)
+		}
+		if got := readFile(t, root, "a.txt"); got != "one\n" {
+			t.Errorf("a.txt = %q", got)
+		}
+	})
+
+	t.Run("--json carries the command's status and the put-back", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"a.txt": "one\n"})
+		code, js, _ := runCLI(t, root, []string{"--json", "--try", "echo out; exit 3"}, vPatch)
+		var v struct {
+			OK   bool
+			Exit int
+			Try  struct {
+				Ran        bool
+				Status     int
+				Output     []string
+				RolledBack int `json:"rolled_back"`
+			}
+		}
+		must(t, json.Unmarshal([]byte(js), &v))
+		if code != 3 || v.Exit != 3 || v.OK || !v.Try.Ran || v.Try.Status != 3 ||
+			v.Try.RolledBack != 1 || len(v.Try.Output) != 1 || v.Try.Output[0] != "out" {
+			t.Errorf("exit %d: %s", code, js)
+		}
+	})
+}
+
+// A command that cannot start, after which a file cannot be put back because
+// something changed it: the message must not claim the batch was put back.
+// Nothing through the CLI can change a file between the apply and the put
+// back, so the phases are driven here.
+func TestTryThatCannotStartDoesNotClaimAPutBack(t *testing.T) {
+	tree, root := fixture(t, map[string]string{"a.txt": "one\n"})
+	txn := NewTxn(tree, Options{})
+	p, err := Parse([]byte(vPatch), DefaultMarker)
+	must(t, err)
+	_, err = txn.Run(p)
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("somebody else\n"), 0o644))
+	t.Setenv("PATH", t.TempDir())
+
+	v, err := runTry(txn, tree, "true", 40, false)
+	if err == nil || !strings.HasSuffix(err.Error(), "; 1 file could not be put back") {
+		t.Fatalf("err = %v", err)
+	}
+	rep := NewReport(nil, err, v, false, 1)
+	if rep.Exit != exitRollbackFailed {
+		t.Errorf("exit %d, want 4", rep.Exit)
+	}
+	var out, errOut bytes.Buffer
+	rep.Text(&out, &errOut, false)
+	if !strings.Contains(errOut.String(), "a.txt was not restored.") {
+		t.Errorf("does not name the file:\n%s", errOut.String())
+	}
+	if got := readFile(t, root, "a.txt"); got != "somebody else\n" {
+		t.Errorf("a.txt = %q; the other writer's work was overwritten", got)
+	}
+}
+
+func TestTryFlagInteractions(t *testing.T) {
+	root := cliTree(t, map[string]string{"a.txt": "one\n"})
+	for _, c := range []struct {
+		name string
+		args []string
+		msg  string
+	}{
+		{"--try with --verify", []string{"--try", "true", "--verify", "true"}, "--try and --verify cannot both be set"},
+		{"--verify-may-format with neither", []string{"--verify-may-format"}, "does nothing without --verify or --try"},
+		{"--keep-on-fail with --try", []string{"--try", "true", "--keep-on-fail"}, "--keep-on-fail does nothing without --verify"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			before := snapshot(t, root)
+			code, _, errOut := runCLI(t, root, c.args, vPatch)
+			if code != exitUsage || !strings.Contains(errOut, c.msg) {
+				t.Errorf("exit %d, err %q, want 1 and %q", code, errOut, c.msg)
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
+}
+
+// The three report shapes, from fixed timings so the goldens are stable.
+func TestTryGoldens(t *testing.T) {
+	v := func(status int, notRestored ...NotRestored) *Verify {
+		return &Verify{
+			Ran: true, Try: true, Status: status, OK: status == 0, Command: "zig build test",
+			Seconds: 4.2, Tail: []string{"All 12 tests passed.", "FBA_USED 1320"}, TotalLines: 2,
+			Applied: 2, RolledBack: 1 - len(notRestored), NotRestored: notRestored,
+		}
+	}
+	res := &Result{Files: []FileResult{{Path: "src/faults.zig", Op: "modify", Added: 1}}, Hunks: 2}
+	for _, c := range []struct {
+		name string
+		v    *Verify
+	}{
+		{"report-try-passed", v(0)},
+		{"report-try-failed", v(1)},
+		{"report-try-left-alone", v(0, NotRestored{Path: "src/faults.zig", Reason: "Something rewrote it after hunk did."})},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rep := NewReport(res, nil, c.v, false, 2)
+			var out, errOut, js bytes.Buffer
+			rep.Text(&out, &errOut, false)
+			golden(t, c.name, out.String()+errOut.String())
+			must(t, rep.JSON(&js))
+			golden(t, c.name+"-json", js.String())
+		})
+	}
 }

@@ -57,6 +57,16 @@ func needsPOSIXPerms(t *testing.T) {
 	}
 }
 
+// needsSignals skips a test that kills a process with a signal to see how its
+// exit is reported. Windows has no signal for "kill -9 $$" to send, and a
+// process there always ends with an exit code.
+func needsSignals(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows processes end with an exit code, not a signal")
+	}
+}
+
 // assertMode checks a permission bit set on the platforms that have one.
 //
 // Preferred over needsPOSIXPerms wherever the mode is one assertion inside a

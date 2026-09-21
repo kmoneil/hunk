@@ -282,6 +282,12 @@ decision.
 `--keep-on-fail`. The changes stay on disk, the tail of the verify's output is
 printed, and the exit is still 3.
 
+**For an edit you mean to throw away**, a print statement to see a value, a
+measurement, a deliberate hang, use `--try CMD` instead of a backup and a
+restore. It applies the batch, runs `CMD`, puts every file back whatever `CMD`
+does, prints `CMD`'s output, and exits with `CMD`'s own status. The report
+starts `tried`, which is how its exit 2 differs from a refused patch.
+
 **Prefer the repository's own gate** (`make check`, `npm test`) over a command
 you compose. `--verify` decides on the exit code, and some tools report a
 problem and exit 0 anyway: `gofmt -l .` prints every unformatted file and
