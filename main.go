@@ -112,15 +112,15 @@ FLAGS
                         rolls everything back. Optional: 58% of the measured
                         calls this tool was designed from bundled one, and
                         requiring it would be obnoxious for documentation edits.
-  --verify-may-format   On verify failure, restore original bytes even for files
-                        the verify command rewrote. Set this when --verify
-                        formats. Without it, a file that changed after hunk
-                        wrote it is left alone and the exit is 4, because
-                        silently reverting another writer's work is the one
-                        behaviour that would make this tool dangerous. With it,
-                        you are asserting nothing else writes the tree during
-                        the verify.
-  --verify-lines N      Tail of the verify output printed on failure. (40)
+  --verify-may-format   On verify failure, or after --try, restore original
+                        bytes even for files the command rewrote. Set this when
+                        the command formats. Without it, a file that changed
+                        after hunk wrote it is left alone and the exit is 4,
+                        because silently reverting another writer's work is the
+                        one behaviour that would make this tool dangerous. With
+                        it, you are asserting nothing else writes the tree
+                        during the verify.
+  --verify-lines N      Tail of the --verify or --try output to print. (40)
   --keep-on-fail        Leave the applied changes in place when verify fails,
                         for inspection. Still exits 3.
   --try CMD             Apply, run CMD as --verify would, then put every file
@@ -128,12 +128,14 @@ FLAGS
                         print statement or a measurement you do not mean to
                         keep. 4 if a file could not be put back.
   --dry-run             Validate and print the diffstat. Write nothing.
-  --root DIR            Resolve relative paths and run --verify here. (cwd)
+  --root DIR            Resolve relative paths and run --verify or --try here.
+                        (cwd)
   --marker STR          Directive prefix. (@@)
   -f FILE               Read the patch from a file instead of stdin.
   --json                Emit the result as one JSON object on stdout.
   --quiet               Print nothing on success. Failures are still reported.
-  --context N           Max lines of file text echoed in a near-miss report. (20)
+  --context N           Max lines of file text echoed in a near-miss report.
+                        (20)
   --eol auto|strict     auto converts payload line endings to the file's
                         dominant ending before matching and on write. (auto)
   --allow-outside-root  Permit paths that resolve outside --root.
