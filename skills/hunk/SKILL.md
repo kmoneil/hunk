@@ -151,6 +151,43 @@ exit is still 2 when a hunk does not match. A twelve-hunk batch can be made
 right before a byte is written. It does **not** run `--verify`, because there is
 nothing applied to verify.
 
+## Retrying a large batch: parts
+
+A refusal writes nothing, so it costs the whole batch again. A batch is a
+concatenation, though, so a large one can be kept as parts, one per target
+file, and piped in together:
+
+```
+$ d=$(mktemp -d)
+$ cat > "$d/1-client.hunk" <<'HUNK'
+@@ file src/client.go
+@@ old
+...
+HUNK
+$ cat > "$d/2-server.hunk" <<'HUNK'
+...
+HUNK
+$ cat "$d"/*.hunk | hunk --verify 'go build ./...'
+```
+
+It is still one batch and one transaction: a miss in any part writes nothing in
+any. After a refusal, rewrite only the part that missed and run the same pipe
+again. Splitting the batch into separate `hunk` calls gives up exactly that,
+because the halves can land apart, and files that depend on each other do not
+build in between.
+
+Four limits:
+
+- **End every part with a newline.** A heredoc always does. A part whose last
+  line has none welds onto the next part's `@@ file` line, and the next part's
+  hunks are then matched against the wrong file.
+- **No `@@ end` in a part.** It ends the whole stream, and what follows is
+  exit 1.
+- **"patch line N" counts through the whole stream**, not within a part. The
+  report names the file as well, so one part per file is enough to find it.
+- **A fresh directory per batch.** The glob takes every part in it, a leftover
+  one included.
+
 ## The same edit in many files
 
 A version bump, a copyright year, a changed URL: one literal edit, repeated. It
