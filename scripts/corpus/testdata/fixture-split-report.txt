@@ -27,6 +27,7 @@ tool mix overall           Bash 5    Edit 0
     patch from a file (-f)      2   directives unknown for those
   flags used               
   verify rewrites files           0   exit 4 needs one of these
+  another agent at once           0   hunk runs overlapping, 0 edits overlapping
 
 §12, this repository (-workspace-lab, 1 session), whose calls test the tool rather than use it
   edit episodes                   0
@@ -44,3 +45,4 @@ tool mix overall           Bash 5    Edit 0
     patch from a file (-f)      3   directives unknown for those
   flags used                --verify 1
   verify rewrites files           1   exit 4 needs one of these
+  another agent at once           0   hunk runs overlapping, 0 edits overlapping
