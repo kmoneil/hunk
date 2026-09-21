@@ -568,6 +568,13 @@ func detailIndent(oldLines, span [][]byte, _ []byte) string {
 		}
 		return fmt.Sprintf("every line of your old has %s where the file has %s", describeIndent(a), describeIndent(b))
 	}
+	if width, oldSpaces, ok := tabConversion(oldLines, span); ok {
+		styles := "tabs and the file with spaces"
+		if oldSpaces {
+			styles = "spaces and the file with tabs"
+		}
+		return fmt.Sprintf("your old indents with %s, %s to a tab", styles, plural(width, "space"))
+	}
 	rest := "no other line differs"
 	for i := first + 1; i < len(oldLines) && i < len(span); i++ {
 		if !bytes.Equal(oldLines[i], span[i]) {
@@ -593,12 +600,7 @@ func uniformShift(oldLines, span [][]byte) (a, b []byte, ok bool) {
 		if isBlank(o) {
 			continue
 		}
-		yours, theirs := indentOf(o), indentOf(span[i])
-		n := 0
-		for n < len(yours) && n < len(theirs) && yours[len(yours)-1-n] == theirs[len(theirs)-1-n] {
-			n++
-		}
-		sa, sb := yours[:len(yours)-n], theirs[:len(theirs)-n]
+		sa, sb := swapOf(o, span[i])
 		if !seen {
 			a, b, seen = sa, sb, true
 			continue
@@ -608,6 +610,64 @@ func uniformShift(oldLines, span [][]byte) (a, b []byte, ok bool) {
 		}
 	}
 	return a, b, seen && (len(a) > 0 || len(b) > 0)
+}
+
+// swapOf is what one line of old trades for the file's line at its start: the
+// two indentations less the longest suffix they share, since whatever follows
+// the swap, alignment included, is common to both.
+func swapOf(yours, theirs []byte) (a, b []byte) {
+	yours, theirs = indentOf(yours), indentOf(theirs)
+	n := 0
+	for n < len(yours) && n < len(theirs) && yours[len(yours)-1-n] == theirs[len(theirs)-1-n] {
+		n++
+	}
+	return yours[:len(yours)-n], theirs[:len(theirs)-n]
+}
+
+// tabConversion finds the other systematic difference, added 2026-09-22: one
+// side indents with spaces and the other with tabs, at the same number of
+// spaces to a tab on every line that differs. uniformShift cannot see it,
+// because a block two levels deep trades 4 spaces for a tab on one line and 8
+// for 2 on the next. Reported as one shift, it read as though the block's
+// nesting had changed. Lines whose indentation is the same on both sides are
+// consistent with any width. At least two lines must differ, so that a single
+// differing line is still named rather than summarized.
+func tabConversion(oldLines, span [][]byte) (width int, oldSpaces, ok bool) {
+	differing := 0
+	for i, o := range oldLines {
+		if i >= len(span) {
+			return 0, false, false
+		}
+		if isBlank(o) {
+			continue
+		}
+		a, b := swapOf(o, span[i])
+		if len(a) == 0 && len(b) == 0 {
+			continue
+		}
+		spaces, tabs, thisOldSpaces := a, b, true
+		if !onlyOf(a, ' ') || !onlyOf(b, '\t') {
+			spaces, tabs, thisOldSpaces = b, a, false
+			if !onlyOf(a, '\t') || !onlyOf(b, ' ') {
+				return 0, false, false
+			}
+		}
+		if len(spaces)%len(tabs) != 0 {
+			return 0, false, false
+		}
+		w := len(spaces) / len(tabs)
+		if differing > 0 && (w != width || thisOldSpaces != oldSpaces) {
+			return 0, false, false
+		}
+		width, oldSpaces = w, thisOldSpaces
+		differing++
+	}
+	return width, oldSpaces, differing >= 2
+}
+
+// onlyOf reports whether b is non-empty and every byte of it is c.
+func onlyOf(b []byte, c byte) bool {
+	return len(b) > 0 && len(bytes.Trim(b, string(c))) == 0
 }
 
 func indentOf(line []byte) []byte {

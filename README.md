@@ -84,7 +84,7 @@ hunk 1  server.go  (patch line 2)
      42 | →if err != nil {
      43 | →→return fmt.Errorf("listen: %w", err)
      44 | →}
-  line 1 of your old used 4 spaces; the file uses a tab, and the other lines do not all differ the same way
+  your old indents with spaces and the file with tabs, 4 spaces to a tab
 ```
 
 The `→` are real tabs, made visible because the difference *is* whitespace and
