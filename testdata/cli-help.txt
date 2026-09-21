@@ -26,6 +26,10 @@ FLAGS
   --verify-lines N      Tail of the verify output printed on failure. (40)
   --keep-on-fail        Leave the applied changes in place when verify fails,
                         for inspection. Still exits 3.
+  --try CMD             Apply, run CMD as --verify would, then put every file
+                        back whatever it says, and exit with its status. For a
+                        print statement or a measurement you do not mean to
+                        keep. 4 if a file could not be put back.
   --dry-run             Validate and print the diffstat. Write nothing.
   --root DIR            Resolve relative paths and run --verify here. (cwd)
   --marker STR          Directive prefix. (@@)

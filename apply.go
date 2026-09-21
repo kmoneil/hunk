@@ -34,6 +34,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -798,6 +799,17 @@ func cause(err error) error {
 // ran and said no; a missing shell means nothing was verified at all, and
 // reporting that as "the tests failed" would be a lie about the tree. That case
 // returns an error, which the CLI maps to exit 5.
+// exitStatus is the status a shell would report: the exit code, or 128 plus
+// the signal when the command was killed by one, which is what --try exits
+// with (§4.1). A command sh runs and a signal kills already comes back from sh
+// as 128 plus the signal; this is for when sh itself is the one killed.
+func exitStatus(e *exec.ExitError) int {
+	if ws, ok := e.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return e.ExitCode()
+}
+
 func RunVerify(command, root string, tailLines int) (*Verify, error) {
 	v := &Verify{Ran: true, Command: command}
 	cmd := exec.Command("sh", "-c", command)
@@ -812,8 +824,9 @@ func RunVerify(command, root string, tailLines int) (*Verify, error) {
 		v.OK = true
 	case errors.As(err, &exitErr):
 		v.OK = false
+		v.Status = exitStatus(exitErr)
 	default:
-		return nil, fmt.Errorf("could not run the verify command: %w", err)
+		return nil, err
 	}
 
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")

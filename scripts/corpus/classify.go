@@ -128,8 +128,18 @@ var (
 	// question about --verify-may-format turns on, so they are separate rules
 	// rather than one rule and a substring test.
 	reExitRollbackIncomplete = regexp.MustCompile(`(?m)^hunk: applied .*verify failed.*left alone`)
-	reExitVerifyFailed       = regexp.MustCompile(`(?m)^hunk: applied .*verify failed`)
-	reExitChanged            = regexp.MustCompile(`changed on disk between being read and being written`)
+	// --try's report, from 2026-09-22. Its exit is the command's status, which
+	// is not hunk's verdict, so it is classified by what hunk did: the tree put
+	// back is 0, and a file left alone is 4, as it is after a verify. The JSON
+	// form is found by its "try" object before "exit" is read, since that exit
+	// is the command's.
+	reExitTried          = regexp.MustCompile(`(?m)^(?:hunk: )?tried \d+ hunks? and put back`)
+	reExitTriedAlone     = regexp.MustCompile(`(?m)^(?:hunk: )?tried \d+ hunks? and put back .*left alone`)
+	reTryJSON            = regexp.MustCompile(`(?m)^\s*"try":\s*\{`)
+	reTryJSONNotRestored = regexp.MustCompile(`"not_restored"`)
+	reExitTryCannotStart = regexp.MustCompile(`(?m)^hunk: could not run the --try command`)
+	reExitVerifyFailed   = regexp.MustCompile(`(?m)^hunk: applied .*verify failed`)
+	reExitChanged        = regexp.MustCompile(`changed on disk between being read and being written`)
 	// Exit 1 is enumerable: a parse error carries its patch line, and the usage
 	// errors are fixed strings in main.go. Exit 5 is not enumerable, because
 	// its text is whatever the OS said, so it is never guessed at.
@@ -307,6 +317,15 @@ func HunkExit(cmd, result string) int {
 	if reHunkProbe.MatchString(commandSkeleton(cmd)) {
 		return ExitProbe
 	}
+	if reTryJSON.MatchString(result) {
+		if reTryJSONNotRestored.MatchString(result) {
+			return 4
+		}
+		if m := reExitJSON.FindStringSubmatch(result); m != nil && m[1] == "5" && strings.Contains(result, `"error"`) {
+			return 5 // the command could not start
+		}
+		return ExitOK
+	}
 	if m := reExitJSON.FindStringSubmatch(result); m != nil {
 		// An unparseable number is not an exit code. Falling through to the
 		// text rules is right: --json and the human report are not both
@@ -316,6 +335,12 @@ func HunkExit(cmd, result string) int {
 		}
 	}
 	switch {
+	case reExitTriedAlone.MatchString(result):
+		return 4
+	case reExitTried.MatchString(result):
+		return ExitOK
+	case reExitTryCannotStart.MatchString(result):
+		return 5
 	case reExitChanged.MatchString(result):
 		return 6
 	case reExitRollbackIncomplete.MatchString(result):

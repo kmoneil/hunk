@@ -160,6 +160,14 @@ need a backup and you do not need a cleanup step. To keep the changes instead,
 and read what broke before fixing forward, pass `--keep-on-fail`; the exit is
 still 3.
 
+`--try CMD` is for an edit you do not mean to keep: a print statement, a
+measurement, a deliberate hang to see what the logs say. It applies the batch,
+runs `CMD` the way `--verify` would, puts every file back whatever `CMD` says,
+and exits with `CMD`'s own status. The report starts `tried`, so a caller can
+tell `CMD`'s 2 from `hunk`'s own. If a file could not be put back, because
+`CMD` rewrote it, the exit is 4, and `--verify-may-format` puts it back
+anyway.
+
 This is the flag worth reaching for whenever a batch touches more than one file
 of a compiled language. Every hunk can match, every file can be plausible on its
 own, and the batch can still not build, because what broke is *between* the

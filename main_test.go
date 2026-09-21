@@ -443,7 +443,7 @@ func TestHelpCarriesWhatTheSpecCommitsItTo(t *testing.T) {
 
 // specFlags is §4's flag table: every flag the spec commits --help to.
 var specFlags = []string{
-	"--verify", "--verify-may-format", "--verify-lines", "--keep-on-fail",
+	"--verify", "--verify-may-format", "--verify-lines", "--keep-on-fail", "--try",
 	"--dry-run", "--root", "--marker", "-f", "--json", "--quiet",
 	"--context", "--eol", "--allow-outside-root", "--version",
 }
