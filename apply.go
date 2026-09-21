@@ -30,6 +30,7 @@ import (
 	"io/fs"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -724,8 +725,8 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored)
 			continue
 		}
 		if op == "create" {
-			// Rollback of a create removes the file, and any directory the
-			// commit made that is empty afterward (§6.6).
+			// Rollback of a create removes the file. The directories its
+			// commit made go after every file is back, in removeMadeDirs.
 			if !mayFormat {
 				now, err := x.tree.ReadFile(f.target)
 				if err != nil || sha256.Sum256(now) != f.wrote {
@@ -744,12 +745,6 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored)
 					Path: f.target.Orig(), Reason: "It could not be removed: " + err.Error(),
 				})
 				continue
-			}
-			// Deepest first, stopping at the first that is not empty.
-			for _, d := range f.madeDirs {
-				if err := x.tree.RemoveDir(d); err != nil {
-					break
-				}
 			}
 			restored++
 			continue
@@ -809,7 +804,33 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored)
 		}
 		restored++
 	}
+	x.removeMadeDirs()
 	return restored, notRestored
+}
+
+// removeMadeDirs removes every directory commit made that is empty now that
+// the files are back (§6.6).
+//
+// It runs once, after every file, rather than beside each create. Two creates
+// can share a directory the first of them made, and until 2026-09-21 that
+// directory was tried beside the first create's file, while it still held the
+// second's, and never again: exit 3 said the tree was untouched, and the
+// directory stayed.
+//
+// Reverse commit order is deepest first across creates as well as within one.
+// MkdirAll makes only what is missing when it runs, and an earlier create has
+// already made every ancestor of its own directories, so a later create never
+// made an ancestor of an earlier one's.
+func (x *Txn) removeMadeDirs() {
+	for _, f := range slices.Backward(x.files) {
+		for _, d := range f.madeDirs {
+			// One that will not go keeps every directory above it, since
+			// each of those holds it.
+			if err := x.tree.RemoveDir(d); err != nil {
+				break
+			}
+		}
+	}
 }
 
 // Applied is how many hunks actually changed something, for §5.3's first line:

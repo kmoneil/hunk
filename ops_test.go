@@ -1033,6 +1033,88 @@ func TestRollbackOfTheNewOps(t *testing.T) {
 	})
 }
 
+// Two creates can share a directory the first of them made. Until 2026-09-21
+// rollback tried each create's directories beside its own file, in commit
+// order, so a shared one was tried while it still held the other file and
+// never again: exit 3, and the directory stayed, on any filesystem. Two rows
+// tell reverse commit order from forward, the shallow create first and the two
+// new directories inside one: with every file already gone, forward order
+// still tries a directory before one a later create made inside it.
+func TestRollbackRemovesEveryDirectoryItMade(t *testing.T) {
+	for _, c := range []struct{ name, patch string }{
+		{
+			"two creates in one new directory",
+			"@@ create new/x.go\none\n\n@@ create new/y.go\ntwo\n\n",
+		},
+		{
+			"two new directories inside one new directory",
+			"@@ create new/a/x.go\none\n\n@@ create new/b/y.go\ntwo\n\n",
+		},
+		{
+			"a deep create, then a shallow one at its top",
+			"@@ create a/b/c/x.go\none\n\n@@ create a/y.go\ntwo\n\n",
+		},
+		{
+			"a shallow create, then a deep one beneath it",
+			"@@ create a/y.go\ntwo\n\n@@ create a/b/c/x.go\none\n\n",
+		},
+		{
+			"two creates in a new directory inside one that existed",
+			"@@ create sub/new/x.go\none\n\n@@ create sub/new/y.go\ntwo\n\n",
+		},
+		{
+			"a modify between two creates",
+			"@@ create new/x.go\none\n\n@@ file keep.txt\n@@ old\nkeep\n@@ new\nKEEP\n@@ create new/y.go\ntwo\n\n",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"keep.txt": "keep\n", "sub/keep.txt": "keep\n"})
+			before := snapshot(t, root)
+			code, _, errOut := runCLI(t, root, []string{"--verify", "false"}, c.patch)
+			if code != exitVerifyFailed {
+				t.Fatalf("exit %d, want 3: %s", code, errOut)
+			}
+			if !strings.Contains(errOut, "verify failed, rolled back") {
+				t.Errorf("err = %q", errOut)
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
+
+	// §6.6 removes a directory hunk made only if it is empty afterward, so
+	// what the verify wrote into one keeps it.
+	t.Run("a directory the verify wrote into stays, with what it wrote", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"keep.txt": "keep\n"})
+		code, _, errOut := runCLI(t, root, []string{"--verify", "printf 'built\\n' > new/out.txt; false"},
+			"@@ create new/x.go\none\n\n@@ create new/y.go\ntwo\n\n")
+		if code != exitVerifyFailed {
+			t.Fatalf("exit %d, want 3: %s", code, errOut)
+		}
+		absent(t, root, "new/x.go")
+		absent(t, root, "new/y.go")
+		if got := readFile(t, root, "new/out.txt"); got != "built\n" {
+			t.Errorf("the verify's own file = %q", got)
+		}
+	})
+
+	// A created file the verify deleted is exit 4, and was before this: hunk
+	// did not remove it and says so. The directory hunk made for it is empty
+	// either way, and §6.6 has no exception for it. Until 2026-09-21 it stayed.
+	t.Run("a created file the verify deleted leaves no directory", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"keep.txt": "keep\n"})
+		before := snapshot(t, root)
+		code, _, errOut := runCLI(t, root, []string{"--verify", "rm new/x.go; false"},
+			"@@ create new/x.go\none\n\n")
+		if code != exitRollbackFailed {
+			t.Fatalf("exit %d, want 4: %s", code, errOut)
+		}
+		if !strings.Contains(errOut, "new/x.go was not restored") {
+			t.Errorf("err = %q", errOut)
+		}
+		assertUnchanged(t, root, before)
+	})
+}
+
 // §5.1's first column. A and D have existed in opLetter since the report card
 // and nothing has ever produced them.
 func TestDiffstatLetters(t *testing.T) {
