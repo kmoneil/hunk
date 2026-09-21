@@ -258,6 +258,33 @@ func TestIsHunkCall(t *testing.T) {
 		{"a grep pattern", "grep -rn '| hunk ' .", false},
 		{"a quoted mention in an echo", "echo '; hunk -f p.txt'", false},
 		{"an unterminated heredoc swallows the rest", "cat <<'EOF'\n; hunk -f p.txt", false},
+		// Command position also comes after do, then and else, after
+		// assignments, after timeout and its duration, and inside a brace
+		// group or a function body. Every one of these was invisible until
+		// 2026-09-21, and the field's mutation loops are among them.
+		{"in a for loop", "for p in m/*.patch; do hunk -f \"$p\"; done", true},
+		{"in a while loop, by path", "while read p; do ./hunk -f $p; done < list", true},
+		{"do on its own line", "for p in a b\ndo hunk -f $p\ndone", true},
+		{"after then", "if test -f p; then hunk -f p; fi", true},
+		{"after else", "if false; then :; else hunk -f p; fi", true},
+		{"with an assignment in front", "GODEBUG=gctrace=1 /tmp/hunk -f p.txt", true},
+		{"with two", "A=1 B=2 hunk -f p.txt", true},
+		{"with an assignment whose quoted value the skeleton drops", "BIN=\"x y\" hunk -f p.txt", true},
+		{"inside a substitution, with an assignment", "x=$(GODEBUG=a /tmp/hunk -f p.txt)", true},
+		{"behind timeout", "out=$(timeout 600 hunk --verify 'zig build' -f p)", true},
+		{"behind timeout, with an assignment for it", "A=1 timeout 60 hunk -f p", true},
+		{"in a brace group", "{ hunk -f p.txt; } 2>&1", true},
+		{"in a function body", "run() { hunk --verify x -f \"$1\"; }; run a; run b", true},
+		// And the rejections that keep the anchor an anchor.
+		{"an expansion is not a brace group", "ls ${HOME}/go/bin/hunk", false},
+		{"do as an argument", "echo do hunk", false},
+		{"a word that ends in do", "echo; todo hunk", false},
+		{"a command whose name ends in hunk", "dohunk -f p.txt", false},
+		{"the list a for loop walks", "for bin in hunk other; do echo $bin; done", false},
+		{"an assignment that is an argument", "make VAR=1 hunk", false},
+		{"timeout running something else", "timeout 60 make hunk", false},
+		{"a repository argument", "gh release view v0.2.4 --repo kmoneil/hunk", false},
+		{"a directory argument", "git -C /workspace/hunk status", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := IsHunkCall(c.cmd); got != c.want {
@@ -316,6 +343,18 @@ func TestHunkExit(t *testing.T) {
 		{"a probe is not an application", "hunk --help", "hunk applies literal text edits\n", ExitProbe},
 		{"so is the grammar", "hunk format", "@@ file PATH\n", ExitProbe},
 		{"and --version", "hunk --version", "hunk 0.1.0\n", ExitProbe},
+		// The probe rule shares the call rule's anchor. Without that, the call
+		// rule would see these and the probe rule would not, and each would be
+		// counted as an application.
+		{"a probe with an assignment in front", "GODEBUG=x hunk --version", "hunk v0.2.4\n", ExitProbe},
+		{"a probe in a loop", "for v in a b; do hunk --help; done", "hunk applies literal text edits\n", ExitProbe},
+		// A loop is one call, one round trip, and its exit is the worst the
+		// text shows (IsHunkCall's comment has the argument).
+		{
+			"a loop of applications is one call, and the worst exit wins",
+			"for p in a b; do hunk -f $p; done",
+			"M a.go +1 -1\n1 file, 1 hunk, +1 -1\nhunk: applied 1 hunk, verify failed, rolled back 1 file\n", 3,
+		},
 		{"an I/O error is not guessed at", "hunk -f p", "hunk: open a.go: permission denied\n", ExitUnclassified},
 		{"nor is silence, which --quiet produces", "hunk --quiet -f p", "", ExitUnclassified},
 		{"nor is an exit code too large to be one", "hunk --json -f p", "{\n  \"exit\": 99999999999999999999,\n}\n", ExitUnclassified},
@@ -786,6 +825,11 @@ func TestHunkFlags(t *testing.T) {
 		},
 		{"short flags are not counted, and are not adoption", "hunk -f p.txt", nil},
 		{"not a hunk call at all", "ls --color=auto", nil},
+		// The invocation starts at the name, not at the anchor, so what stands
+		// between them is not read as hunk's.
+		{"an assignment's value is not a flag", "X=--dry-run hunk -f p.txt", nil},
+		{"flags in a loop body", "for p in a b; do hunk --verify x -f $p; done", []string{"--verify"}},
+		{"flags behind timeout", "out=$(timeout 600 hunk --json -f p)", []string{"--json"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := HunkFlags(c.cmd); !reflect.DeepEqual(got, c.want) {
