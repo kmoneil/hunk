@@ -600,6 +600,74 @@ func TestAllocationsPerCandidateSpanStayBudgeted(t *testing.T) {
 	}
 }
 
+// The prefilter in explain changes no output, so no golden and no behavioural
+// test can see it go. This can: a span that no row of §7.1's table can name
+// costs 6 allocations in explain with the prefilter and 12 without, measured
+// 2026-09-21, because the five normalizations are never run. The budget sits
+// between. The shape is BenchmarkDiagnose's drifted block, where it halves
+// the time and the bytes of a whole diagnosis.
+func TestThePrefilterSkipsWhatNoRowCanName(t *testing.T) {
+	const budget = 8
+	var old, file strings.Builder
+	for range 14 {
+		old.WriteString("    if err != nil {\n        return err\n    }\n")
+	}
+	for range 500 {
+		file.WriteString("\tif err != nil {\n\t\treturn err\n\t}\n")
+	}
+	oldLines := splitLines([]byte(drifted(old.String() + "x\n")))
+	o := newOldForm(oldLines)
+	span := spanAt(splitLines([]byte(file.String())), 0, len(oldLines))
+	if d := o.explain(span, nil); d != nil {
+		t.Fatalf("the drifted block was named %q, so this measures the wrong path", d.Cause)
+	}
+	if got := testing.AllocsPerRun(50, func() { o.explain(span, nil) }); got > budget {
+		t.Errorf("%.0f allocations to rule out a span nothing can name, budget %d: "+
+			"the normalizations are running again, so the prefilter is gone (§7.2)", got, budget)
+	}
+}
+
+// The prefilter compares the whole span's key, not each line's. The per-line
+// keys are already in the anchor index and would cost nothing, but they are
+// unsound: collapsing whitespace runs newlines into the rest, so these two are
+// equal whole and unequal line by line, and row 5 names them. The fuzz target
+// below checks the rows and cannot see which key explain compares; this can.
+func TestThePrefilterComparesTheWholeSpan(t *testing.T) {
+	d := Diagnose([]byte("x\na b\nc"), []byte("x\na\nb c\n"), DefaultContext)
+	if d.Kind != DiagNamed || d.Cause != "whitespace" {
+		t.Errorf("kind %v, cause %q: want the span at line 1 named by whitespace", d.Kind, d.Cause)
+	}
+}
+
+// The prefilter is sound only if no row of §7.1's table makes two texts equal
+// whose anchorKeys differ, which is an argument about five functions. This
+// checks it on the functions themselves, not through explain, which would
+// stop at the prefilter and prove nothing. The first seed is the pair that
+// makes the per-line version of the same idea unsound: its lines' keys differ
+// and its whole keys do not, and row 5 names it.
+func FuzzThePrefilterNeverHidesANamedCause(f *testing.F) {
+	for _, c := range [][2]string{
+		{"a b\nc", "a\nb c"},
+		{"\tx\n\ty", "    x\n    y"},
+		{"x  \ny", "x\ny"},
+		{"x\r\ny", "x\ny"},
+		{"\u201cq\u201d", "\"q\""},
+		{"a\u00a0b", "a b"},
+		{"1\u201310", "1-10"},
+	} {
+		f.Add(c[0], c[1])
+	}
+	f.Fuzz(func(t *testing.T, old, span string) {
+		o, s := []byte(old), []byte(span)
+		for _, n := range normalizations() {
+			if bytes.Equal(n.apply(o), n.apply(s)) && anchorKey(o) != anchorKey(s) {
+				t.Fatalf("%s makes %q and %q equal, but their keys differ: %q against %q",
+					n.cause, old, span, anchorKey(o), anchorKey(s))
+			}
+		}
+	})
+}
+
 // bytesPerRun is testing.AllocsPerRun for bytes: the heap bytes f allocates
 // on average over runs, after one warm run, with GOMAXPROCS at 1 as
 // AllocsPerRun has it, so no other goroutine's allocations are counted.
@@ -1119,14 +1187,32 @@ func BenchmarkDiagnose(b *testing.B) {
 	}{
 		{"a 3-line old in a 1500-line file", []byte("func f() {\n\treturn nil\n}"), []byte(file.String())},
 		{"a 90-line old of lines the file repeats 500 times", []byte(old.String()), []byte(file.String())},
+		// bound-the-span-loop's shape: a pasted block whose indentation is
+		// wrong and one of whose lines has drifted, so no row names any span
+		// and every candidate is tried against all five before the floor.
+		{"a 42-line old, reindented, one line drifted", []byte(drifted(old.String())), []byte(file.String())},
 	}
 	for _, s := range shapes {
 		b.Run(s.name, func(b *testing.B) {
+			if strings.Contains(s.name, "drifted") {
+				if d := Diagnose(s.old, s.file, DefaultContext); d.Kind != DiagClosest {
+					b.Fatalf("the drifted shape was explained (%q), so it does not try every span", d.Cause)
+				}
+			}
 			for i := 0; i < b.N; i++ {
 				Diagnose(s.old, s.file, DefaultContext)
 			}
 		})
 	}
+}
+
+// drifted is old cut to 42 lines with its middle line changed, which is how a
+// pasted block goes stale: every other line still anchors, and none of the
+// normalizations can explain the one that moved.
+func drifted(old string) string {
+	lines := strings.Split(old, "\n")[:42]
+	lines[21] = "        return fmt.Errorf(\"wrapped: %w\", err)"
+	return strings.Join(lines, "\n")
 }
 
 // assertNoLineInCommon is the DiagNoAnchor message written as an assertion.
