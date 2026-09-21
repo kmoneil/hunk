@@ -521,19 +521,99 @@ func describeTrailing(line []byte) string {
 	}
 }
 
+// detailIndent says whether the difference is a uniform shift, because the fix
+// is different. Row 2 equates any two blocks whose lines differ only in leading
+// whitespace, uniform or not. Until 2026-09-21 this sentence described the
+// first line that differed as though it described old, so an agent that moved
+// its whole old by that amount fixed a uniform shift and met a second refusal
+// on anything else.
+//
+// One non-blank line is its own description. From two up, the sentence either
+// says every line differs the same way, or names the line it describes.
 func detailIndent(oldLines, span [][]byte, _ []byte) string {
+	first := -1
 	for i := range oldLines {
-		if i >= len(span) || bytes.Equal(oldLines[i], span[i]) {
+		if i < len(span) && !bytes.Equal(oldLines[i], span[i]) {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
+		return ""
+	}
+	yours, theirs := describeIndent(oldLines[first]), describeIndent(span[first])
+	if nonBlank(oldLines) < 2 {
+		return fmt.Sprintf("your old used %s; the file uses %s", yours, theirs)
+	}
+	if a, b, ok := uniformShift(oldLines, span); ok {
+		switch {
+		case len(b) == 0:
+			return fmt.Sprintf("every line of your old is indented %s more than the file", describeIndent(a))
+		case len(a) == 0:
+			return fmt.Sprintf("every line of your old is indented %s less than the file", describeIndent(b))
+		}
+		return fmt.Sprintf("every line of your old has %s where the file has %s", describeIndent(a), describeIndent(b))
+	}
+	rest := "no other line differs"
+	for i := first + 1; i < len(oldLines) && i < len(span); i++ {
+		if !bytes.Equal(oldLines[i], span[i]) {
+			rest = "the other lines do not all differ the same way"
+			break
+		}
+	}
+	return fmt.Sprintf("line %d of your old used %s; the file uses %s, and %s", first+1, yours, theirs, rest)
+}
+
+// uniformShift finds the one swap that turns every non-blank line of old into
+// the file's line, if there is one: a prefix of old's indentation traded for a
+// prefix of the file's. Each line's swap is its two indentations less the
+// longest suffix they share, because the swap happens at the start of the line
+// and whatever follows it is common to both. Blank lines are excepted, since a
+// blank line has no depth. A swap of nothing for nothing is no shift at all.
+func uniformShift(oldLines, span [][]byte) (a, b []byte, ok bool) {
+	seen := false
+	for i, o := range oldLines {
+		if i >= len(span) {
+			return nil, nil, false
+		}
+		if isBlank(o) {
 			continue
 		}
-		return fmt.Sprintf("your old used %s; the file uses %s",
-			describeIndent(oldLines[i]), describeIndent(span[i]))
+		yours, theirs := indentOf(o), indentOf(span[i])
+		n := 0
+		for n < len(yours) && n < len(theirs) && yours[len(yours)-1-n] == theirs[len(theirs)-1-n] {
+			n++
+		}
+		sa, sb := yours[:len(yours)-n], theirs[:len(theirs)-n]
+		if !seen {
+			a, b, seen = sa, sb, true
+			continue
+		}
+		if !bytes.Equal(sa, a) || !bytes.Equal(sb, b) {
+			return nil, nil, false
+		}
 	}
-	return ""
+	return a, b, seen && (len(a) > 0 || len(b) > 0)
+}
+
+func indentOf(line []byte) []byte {
+	return line[:len(line)-len(bytes.TrimLeft(line, " \t"))]
+}
+
+func isBlank(line []byte) bool { return len(bytes.TrimLeft(line, " \t")) == 0 }
+
+func nonBlank(lines [][]byte) int {
+	n := 0
+	for _, l := range lines {
+		if !isBlank(l) {
+			n++
+		}
+	}
+	return n
 }
 
 func describeIndent(line []byte) string {
-	lead := line[:len(line)-len(bytes.TrimLeft(line, " \t"))]
+	lead := indentOf(line)
 	tabs := bytes.Count(lead, []byte("\t"))
 	spaces := bytes.Count(lead, []byte(" "))
 	switch {
