@@ -30,6 +30,12 @@ type Stats struct {
 	Sessions int            `json:"sessions"`
 	Projects map[string]int `json:"heredoc_edits_by_project"`
 
+	// The two arms WalkSplit keeps: every project but Lab, and Lab, the
+	// transcript directory of this repository. Nil when there is no lab.
+	Lab   string `json:"lab,omitempty"`
+	Field *Stats `json:"field,omitempty"`
+	Here  *Stats `json:"this_repository,omitempty"`
+
 	// §1's table.
 	BashCalls        int `json:"bash_calls"`
 	ToolCalls        int `json:"tool_calls"`
@@ -139,9 +145,11 @@ func (s Stats) CallsPerSuccessfulEdit() float64 {
 func main() {
 	root := flag.String("root", defaultRoot(), "transcript root")
 	asJSON := flag.Bool("json", false, "emit JSON")
+	lab := flag.String("lab", "-workspace-hunk",
+		"the transcript directory of this repository, whose calls §12 keeps apart from the field's; empty keeps them together")
 	flag.Parse()
 
-	s, err := Walk(*root)
+	s, err := WalkSplit(*root, *lab)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "corpus:", err)
 		os.Exit(1)
@@ -174,9 +182,8 @@ type call struct {
 	command string
 }
 
-// Walk measures every transcript under root.
-func Walk(root string) (*Stats, error) {
-	s := &Stats{
+func newStats(root string) *Stats {
+	return &Stats{
 		Date:           "",
 		Root:           root,
 		Projects:       map[string]int{},
@@ -184,15 +191,47 @@ func Walk(root string) (*Stats, error) {
 		HunkDirectives: map[string]int{},
 		HunkFlagUse:    map[string]int{},
 	}
+}
+
+// Walk measures every transcript under root.
+func Walk(root string) (*Stats, error) { return WalkSplit(root, "") }
+
+// WalkSplit is Walk, with every figure also kept for two arms: the field, and
+// lab, the transcript directory of this repository.
+//
+// The lab's calls test the tool rather than use it. Its sessions build hunk,
+// and probe refusals on purpose, so counting them with the field's put this
+// repository's failure shapes into §12's score of how agents fare: on
+// 2026-09-21 the one exit-2 recovery printed was 0.87, the field's was 0.92,
+// and the lab's was 0.67 (the-lab-is-inside-the-field-score). The arms are
+// whole sessions, and a session is in one project, so the recovery pairing,
+// which runs within a session, is never cut in two.
+//
+// An empty lab keeps no arms, and the report prints one §12 block as before.
+func WalkSplit(root, lab string) (*Stats, error) {
+	s := newStats(root)
+	if lab != "" {
+		s.Lab, s.Field, s.Here = lab, newStats(root), newStats(root)
+	}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
 			return err
 		}
 		project := projectOf(root, path)
-		if err := s.session(path, project); err != nil {
-			return err
+		arms := []*Stats{s}
+		switch {
+		case lab == "":
+		case project == lab:
+			arms = append(arms, s.Here)
+		default:
+			arms = append(arms, s.Field)
 		}
-		s.Sessions++
+		for _, a := range arms {
+			if err := a.session(path, project); err != nil {
+				return err
+			}
+			a.Sessions++
+		}
 		return nil
 	})
 	return s, err
@@ -424,63 +463,14 @@ func (s *Stats) Report() string {
 	}
 	fmt.Fprintf(&b, "\ntool mix overall           Bash %d    Edit %d\n\n", s.BashCalls, s.EditToolCalls)
 
-	fmt.Fprintf(&b, "§12, which §1 does not have\n")
-	fmt.Fprintf(&b, "  edit episodes           %9d\n", s.Episodes)
-	fmt.Fprintf(&b, "  failed attempts         %9d\n", s.FailedAttempts)
-	fmt.Fprintf(&b, "  calls per successful edit  %6.2f\n", s.CallsPerSuccessfulEdit())
-	fmt.Fprintf(&b, "  hunk calls              %9d\n", s.HunkCalls)
-	if s.HunkCalls > 0 {
-		fmt.Fprintf(&b, "    applications          %7d\n", s.HunkApplications)
-		fmt.Fprintf(&b, "    probes                %7d\n", s.HunkProbes)
-		var codes []int
-		for c := range s.HunkExits {
-			codes = append(codes, c)
-		}
-		sort.Ints(codes)
-		for _, c := range codes {
-			fmt.Fprintf(&b, "      exit %d              %7d\n", c, s.HunkExits[c])
-		}
-		// Printed even at zero. A silent zero is what hid an unwritten map
-		// behind an omitempty for a day.
-		fmt.Fprintf(&b, "      unclassified        %7d\n", s.HunkUnclassified)
-		fmt.Fprintf(&b, "  exit-2 recovery            %6.2f   %d of %d\n",
-			s.Exit2RecoveryRate(), s.Exit2Recovered, s.Exit2Followed)
-
-		// Adoption. The zeros are the point, so the directives are printed in
-		// the tool's own order rather than only the ones somebody used.
-		applied := s.HunkExits[ExitOK]
-		fmt.Fprintf(&b, "  trivial note printed    %9d   of %d that applied\n",
-			s.HunkTrivialNotes, applied)
-		fmt.Fprintf(&b, "  directives used          ")
-		for _, d := range []string{"file", "old", "new", "create", "delete", "append", "prepend"} {
-			fmt.Fprintf(&b, " %s %d", d, s.HunkDirectives[d])
-		}
+	if s.Field == nil {
+		s.writeTwelve(&b, "§12, which §1 does not have")
+	} else {
+		s.Field.writeTwelve(&b, fmt.Sprintf("§12, the field (every project but %s, %s)",
+			s.Lab, sessions(s.Field.Sessions)))
 		fmt.Fprintln(&b)
-		if s.HunkPatchFromFile > 0 {
-			fmt.Fprintf(&b, "    patch from a file (-f)%7d   directives unknown for those\n",
-				s.HunkPatchFromFile)
-		}
-		fmt.Fprintf(&b, "  flags used               ")
-		type fu struct {
-			flag string
-			n    int
-		}
-		var flags []fu
-		for f, n := range s.HunkFlagUse {
-			flags = append(flags, fu{f, n})
-		}
-		sort.Slice(flags, func(i, j int) bool {
-			if flags[i].n != flags[j].n {
-				return flags[i].n > flags[j].n
-			}
-			return flags[i].flag < flags[j].flag
-		})
-		for _, f := range flags {
-			fmt.Fprintf(&b, " %s %d", f.flag, f.n)
-		}
-		fmt.Fprintln(&b)
-		fmt.Fprintf(&b, "  verify rewrites files   %9d   exit 4 needs one of these\n",
-			s.HunkFormattingVerify)
+		s.Here.writeTwelve(&b, fmt.Sprintf("§12, this repository (%s, %s), whose calls test the tool rather than use it",
+			s.Lab, sessions(s.Here.Sessions)))
 	}
 
 	if len(s.Projects) > 0 {
@@ -504,4 +494,75 @@ func (s *Stats) Report() string {
 		}
 	}
 	return b.String()
+}
+
+// writeTwelve is §12's block: the figures §1 does not have. With a lab, the
+// report prints it once per arm, the field first, because §7 is scored on
+// agents using the tool, and its recovery line is the one to quote.
+func (s *Stats) writeTwelve(b *strings.Builder, title string) {
+	fmt.Fprintf(b, "%s\n", title)
+	fmt.Fprintf(b, "  edit episodes           %9d\n", s.Episodes)
+	fmt.Fprintf(b, "  failed attempts         %9d\n", s.FailedAttempts)
+	fmt.Fprintf(b, "  calls per successful edit  %6.2f\n", s.CallsPerSuccessfulEdit())
+	fmt.Fprintf(b, "  hunk calls              %9d\n", s.HunkCalls)
+	if s.HunkCalls > 0 {
+		fmt.Fprintf(b, "    applications          %7d\n", s.HunkApplications)
+		fmt.Fprintf(b, "    probes                %7d\n", s.HunkProbes)
+		var codes []int
+		for c := range s.HunkExits {
+			codes = append(codes, c)
+		}
+		sort.Ints(codes)
+		for _, c := range codes {
+			fmt.Fprintf(b, "      exit %d              %7d\n", c, s.HunkExits[c])
+		}
+		// Printed even at zero. A silent zero is what hid an unwritten map
+		// behind an omitempty for a day.
+		fmt.Fprintf(b, "      unclassified        %7d\n", s.HunkUnclassified)
+		fmt.Fprintf(b, "  exit-2 recovery            %6.2f   %d of %d\n",
+			s.Exit2RecoveryRate(), s.Exit2Recovered, s.Exit2Followed)
+
+		// Adoption. The zeros are the point, so the directives are printed in
+		// the tool's own order rather than only the ones somebody used.
+		applied := s.HunkExits[ExitOK]
+		fmt.Fprintf(b, "  trivial note printed    %9d   of %d that applied\n",
+			s.HunkTrivialNotes, applied)
+		fmt.Fprintf(b, "  directives used          ")
+		for _, d := range []string{"file", "old", "new", "create", "delete", "append", "prepend"} {
+			fmt.Fprintf(b, " %s %d", d, s.HunkDirectives[d])
+		}
+		fmt.Fprintln(b)
+		if s.HunkPatchFromFile > 0 {
+			fmt.Fprintf(b, "    patch from a file (-f)%7d   directives unknown for those\n",
+				s.HunkPatchFromFile)
+		}
+		fmt.Fprintf(b, "  flags used               ")
+		type fu struct {
+			flag string
+			n    int
+		}
+		var flags []fu
+		for f, n := range s.HunkFlagUse {
+			flags = append(flags, fu{f, n})
+		}
+		sort.Slice(flags, func(i, j int) bool {
+			if flags[i].n != flags[j].n {
+				return flags[i].n > flags[j].n
+			}
+			return flags[i].flag < flags[j].flag
+		})
+		for _, f := range flags {
+			fmt.Fprintf(b, " %s %d", f.flag, f.n)
+		}
+		fmt.Fprintln(b)
+		fmt.Fprintf(b, "  verify rewrites files   %9d   exit 4 needs one of these\n",
+			s.HunkFormattingVerify)
+	}
+}
+
+func sessions(n int) string {
+	if n == 1 {
+		return "1 session"
+	}
+	return fmt.Sprintf("%d sessions", n)
 }
