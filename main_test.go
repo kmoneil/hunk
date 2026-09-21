@@ -1063,7 +1063,8 @@ func TestJSONOnEveryPath(t *testing.T) {
 			"hunk: format is a subcommand and takes no flags; run \"hunk format\"\n",
 		},
 		{"inert flags", []string{"--keep-on-fail"}, vPatch, exitUsage, "hunk: --keep-on-fail does nothing without --verify\n"},
-		{"a missing -f", []string{"-f", missing}, "", exitUsage, "hunk: open " + missing + ": " + notExistPhrase()},
+		// The OS words a missing file its own way, so only the prefix is ours.
+		{"a missing -f", []string{"-f", missing}, "", exitUsage, "hunk: open " + missing + ": "},
 		{"a parse error", nil, "@@ bogus\n", exitUsage, "hunk: patch line 1: "},
 		{"an unopenable root", []string{"--root", missing}, vPatch, exitIO, "hunk: "},
 	} {
