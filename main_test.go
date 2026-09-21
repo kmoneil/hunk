@@ -402,7 +402,9 @@ func TestHelpCarriesWhatTheSpecCommitsItTo(t *testing.T) {
 	// And the concurrency limit beside it, which until 2026-09-21 it stated as
 	// a window "narrowed to microseconds". Two runs started together nearly
 	// always both pass the check; TestTwoProcessesOnTheSameFiles counts it.
-	if !strings.Contains(got, "not one writing at the same time") {
+	// Compared with the page's whitespace collapsed, so where a line wraps is
+	// not part of the assertion.
+	if flat := strings.Join(strings.Fields(got), " "); !strings.Contains(flat, "not one writing at the same time") {
 		t.Error("--help does not state that a concurrent writer is not caught (§6.2)")
 	}
 	// §6.3: the flag and the reason together, not just the behaviour.

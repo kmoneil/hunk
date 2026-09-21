@@ -467,14 +467,17 @@ func (t *Tree) MkdirAll(tg Target) ([]string, error) {
 	// missing is deepest first; create shallowest first.
 	for i := len(missing) - 1; i >= 0; i-- {
 		if err := t.mkdir(missing[i]); err != nil {
+			// Deepest first on this path too. It returned shallowest first
+			// until 2026-09-22, which nothing noticed while nothing unwound a
+			// failed MkdirAll: rollback stops at the first directory that will
+			// not go, and the shallowest will not while it holds the rest.
+			slices.Reverse(made)
 			return made, err
 		}
 		made = append(made, missing[i])
 	}
 	// Report deepest first, which is removal order.
-	for i, j := 0, len(made)-1; i < j; i, j = i+1, j-1 {
-		made[i], made[j] = made[j], made[i]
-	}
+	slices.Reverse(made)
 	return made, nil
 }
 

@@ -148,13 +148,14 @@ fix is usually a paste rather than a re-read.
 
 WHAT THIS DOES NOT PROMISE
 
-Replacing one file is atomic, via rename(2). The batch is not. A crash or a
-full disk part-way through leaves the files before it written. Nor is there a
-lock. Every file is re-read just before writing, which catches a writer that
-finished in between, not one writing at the same time: two runs on the same
-files at once usually both succeed, and can leave some files as one wrote them
-and some as the other did. Both gaps are repaired by the version control the
-tree is already under.
+Replacing one file is atomic, via rename(2). The batch is not. A write that
+fails part-way through, such as a full disk or a name the filesystem refuses,
+puts the files before it back and exits 5, but a crash part-way through leaves
+them written. Nor is there a lock. Every file is re-read just before writing,
+which catches a writer that finished in between, not one writing at the same
+time: two runs on the same files at once usually both succeed, and can leave
+some files as one wrote them and some as the other did. Both gaps are repaired
+by the version control the tree is already under.
 
 Run "hunk format" for the patch grammar.
 `
