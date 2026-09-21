@@ -151,7 +151,9 @@ Three rules worth knowing before the first patch:
 
 `--verify CMD` runs after a successful apply, from `--root`, through `sh -c`.
 If it exits non-zero, every file goes back and so does the exit code. You do not
-need a backup and you do not need a cleanup step.
+need a backup and you do not need a cleanup step. To keep the changes instead,
+and read what broke before fixing forward, pass `--keep-on-fail`; the exit is
+still 3.
 
 This is the flag worth reaching for whenever a batch touches more than one file
 of a compiled language. Every hunk can match, every file can be plausible on its

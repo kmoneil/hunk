@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -396,14 +400,15 @@ func TestHelpCarriesWhatTheSpecCommitsItTo(t *testing.T) {
 	if !strings.Contains(got, "58%") {
 		t.Error("--help does not quote §11's figure for why --verify is optional")
 	}
-	// Every flag in §4's table appears.
-	for _, f := range []string{
-		"--verify", "--verify-may-format", "--verify-lines", "--keep-on-fail",
-		"--dry-run", "--root", "--marker", "-f", "--json", "--quiet",
-		"--context", "--eol", "--allow-outside-root", "--version",
-	} {
-		if !strings.Contains(got, f) {
-			t.Errorf("--help does not mention %s", f)
+	// Every flag in §4's table has an entry of its own. Until 2026-09-21 this
+	// was strings.Contains over the whole page, and deleting the -f or the
+	// --root entry and regenerating the golden failed nothing: "-f" is also in
+	// the synopsis and inside --keep-on-fail, and "--root" is in
+	// --allow-outside-root's description.
+	listed := helpFlags(got)
+	for _, f := range specFlags {
+		if !slices.Contains(listed, f) {
+			t.Errorf("--help has no entry for %s", f)
 		}
 	}
 	// And every exit code.
@@ -415,6 +420,150 @@ func TestHelpCarriesWhatTheSpecCommitsItTo(t *testing.T) {
 	if errOut.String() != "" {
 		t.Errorf("--help wrote to stderr: %q", errOut.String())
 	}
+}
+
+// specFlags is §4's flag table: every flag the spec commits --help to.
+var specFlags = []string{
+	"--verify", "--verify-may-format", "--verify-lines", "--keep-on-fail",
+	"--dry-run", "--root", "--marker", "-f", "--json", "--quiet",
+	"--context", "--eol", "--allow-outside-root", "--version",
+}
+
+// An entry in --help's FLAGS section starts with the flag at column two. The
+// lines between entries continue a description and start at column
+// twenty-four, so they cannot match.
+var reHelpFlag = regexp.MustCompile(`(?m)^  (--?[a-z][a-z-]*)`)
+
+// helpFlags reads the flags --help has entries for, in order. Only the FLAGS
+// section counts: the synopsis above it mentions -f too, and a flag mentioned
+// is not a flag documented.
+func helpFlags(help string) []string {
+	_, section, ok := strings.Cut(help, "\nFLAGS\n")
+	if !ok {
+		return nil
+	}
+	section, _, _ = strings.Cut(section, "\nEXIT CODES\n")
+	var flags []string
+	for _, m := range reHelpFlag.FindAllStringSubmatch(section, -1) {
+		flags = append(flags, m[1])
+	}
+	return flags
+}
+
+// namesFlag reports whether text names flag as a word of its own. A substring
+// is not enough: "--verify-may-format" contains "--verify", and
+// "--keep-on-fail" contains "-f".
+func namesFlag(text, flag string) bool {
+	return regexp.MustCompile(`(^|[^A-Za-z0-9-])` + regexp.QuoteMeta(flag) + `($|[^A-Za-z0-9-])`).
+		MatchString(text)
+}
+
+func TestHelpFlagsReadsOnlyTheFlagsSection(t *testing.T) {
+	const help = "hunk applies edits.\n\n" +
+		"  hunk [flags] -f patch.txt    patch from a file\n\n" +
+		"FLAGS\n\n" +
+		"  --verify CMD          Shell command run after a successful apply. Non-zero\n" +
+		"                        --rolls everything back.\n" +
+		"  -f FILE               Read the patch from a file.\n" +
+		"  --eol auto|strict     auto converts line endings. (auto)\n\n" +
+		"EXIT CODES\n\n" +
+		"  0  applied\n" +
+		"  --not-a-flag\n"
+	for _, c := range []struct {
+		name, help string
+		want       []string
+	}{
+		{"an entry each, the synopsis, a continuation and exit codes skipped", help, []string{"--verify", "-f", "--eol"}},
+		{"no FLAGS section", "hunk applies edits.\n  --verify CMD  a flag outside any section\n", nil},
+		{"no EXIT CODES after it, so it runs to the end", "x\nFLAGS\n  --json   JSON.\n", []string{"--json"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := helpFlags(c.help); !slices.Equal(got, c.want) {
+				t.Errorf("helpFlags = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestNamesFlagNeedsAWordOfItsOwn(t *testing.T) {
+	for _, c := range []struct {
+		text, flag string
+		want       bool
+	}{
+		{"hunk --verify 'go test ./...'", "--verify", true},
+		{"runs in `--root`, via sh", "--root", true},
+		{"--json at the start", "--json", true},
+		{"at the end, --json", "--json", true},
+		{"the flag (--json).", "--json", true},
+		{"hunk --dry-run -f patch.txt", "-f", true},
+		{"pass --verify-may-format", "--verify", false},
+		{"pass --keep-on-fail", "-f", false},
+		{"--jsonl is another flag", "--json", false},
+		{"x--json", "--json", false},
+		{"", "--json", false},
+	} {
+		if got := namesFlag(c.text, c.flag); got != c.want {
+			t.Errorf("namesFlag(%q, %q) = %v, want %v", c.text, c.flag, got, c.want)
+		}
+	}
+}
+
+// skillOmits is every flag --help lists that SKILL.md leaves out on purpose,
+// each with the reason.
+var skillOmits = map[string]string{
+	"--verify-lines":       "the 40-line tail is enough to act on, and the whole output is a rerun away",
+	"--quiet":              "an agent reads the success report, and printing nothing saves one line and loses the confirmation",
+	"--context":            "the near-miss span is bounded by old, so the 20-line cap rarely binds (§11)",
+	"--eol":                "auto is the default and translates a CRLF file for an LF heredoc; strict is the byte-exact exception",
+	"--allow-outside-root": "it is the way out of §6.5's path safety, and the skill should not be where an agent learns it",
+	"--version":            "it describes the binary and edits nothing",
+}
+
+// The skill is the one document most agents read before their first call, and
+// three things have now shipped in --help and stayed out of it: --dry-run and
+// four of the five directives until 2026-09-06, and --keep-on-fail until
+// 2026-09-21, when a field report asked for "a keep-changes-and-report mode"
+// that had existed since the CLI was wired. TestTheSkillDocumentsEveryDirective
+// closed the directive half of that. This is the flag half.
+//
+// A flag may stay out of the skill, but only by being in skillOmits with its
+// reason, so that leaving one out is a decision somebody wrote down. The flags
+// come from --help, so a flag the FlagSet defines and --help leaves out is
+// invisible here, as it is to TestHelpCarriesWhatTheSpecCommitsItTo.
+func TestTheSkillNamesEveryFlagOrSaysWhyNot(t *testing.T) {
+	var out bytes.Buffer
+	if code := cli([]string{"--help"}, strings.NewReader(""), &out, io.Discard); code != exitOK {
+		t.Fatalf("--help: exit %d", code)
+	}
+	listed := helpFlags(out.String())
+	if len(listed) == 0 {
+		t.Fatal("read no flags from --help; every check below would pass")
+	}
+	b, err := os.ReadFile(filepath.Join("skills", "hunk", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read the skill: %v", err)
+	}
+	skill := string(b)
+
+	for _, f := range listed {
+		t.Run(f, func(t *testing.T) {
+			why, omitted := skillOmits[f]
+			switch named := namesFlag(skill, f); {
+			case !named && !omitted:
+				t.Errorf("SKILL.md never names %s; a flag an agent cannot see is one it will not use. "+
+					"Name it, or add it to skillOmits with the reason", f)
+			case named && omitted:
+				t.Errorf("SKILL.md names %s, which skillOmits leaves out because %s; drop the entry", f, why)
+			}
+		})
+	}
+	t.Run("every omission is a flag --help lists", func(t *testing.T) {
+		for f := range skillOmits {
+			if !slices.Contains(listed, f) {
+				t.Errorf("skillOmits leaves out %s, which --help has no entry for", f)
+			}
+		}
+	})
 }
 
 func TestFormatSubcommand(t *testing.T) {
@@ -588,6 +737,89 @@ func TestSkillExampleApplies(t *testing.T) {
 	if !strings.HasSuffix(readFile(t, root, "internal/cli/scope.go"), "\n") {
 		t.Error("the created file has no final newline")
 	}
+}
+
+// The skill's second example is shell that writes a patch, which is the more
+// fragile kind: it has to run, the patch it prints has to apply, and a tree
+// where one file is not as expected has to be refused whole. Added 2026-09-21,
+// when a field agent did five release bumps with hunk one day and three with a
+// Python loop the next, because the skill had filed a repeated literal edit
+// under "computed". Its heredocs are run by sh as the skill prints them; only
+// the pipe into hunk is replaced by an in-process run.
+func TestSkillLoopExampleApplies(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("skills", "hunk", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read the skill: %v", err)
+	}
+	skill := string(b)
+	i := strings.Index(skill, "\n{\n  for f in ")
+	if i < 0 {
+		t.Fatal("the skill no longer shows a patch written by a loop, or its opening changed")
+	}
+	rest := skill[i+1:]
+	j := strings.Index(rest, "\n} | hunk ")
+	if j < 0 {
+		t.Fatal("the skill's loop is not piped into hunk")
+	}
+	script := rest[:j] + "\n}\n"
+
+	generate := func(t *testing.T, root string) string {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Dir = root
+		var out, errOut bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &errOut
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("the skill's loop does not run: %v\n%s\n--- script ---\n%s", err, errOut.String(), script)
+		}
+		return out.String()
+	}
+	const before, after = "package main\n\nconst Version = \"1.4.0\"\n", "package main\n\nconst Version = \"1.5.0\"\n"
+	changelog := "# Changelog\n\n## 1.5.0 (unreleased)\n\n- one thing\n"
+
+	t.Run("every file has the text once, so all of them change", func(t *testing.T) {
+		root := cliTree(t, map[string]string{
+			"cmd/a/version.go": before,
+			"cmd/b/version.go": before,
+			"CHANGELOG.md":     changelog,
+		})
+		code, out, errOut := runCLI(t, root, nil, generate(t, root))
+		if code != exitOK {
+			t.Fatalf("exit %d\n%s%s", code, out, errOut)
+		}
+		for _, f := range []string{"cmd/a/version.go", "cmd/b/version.go"} {
+			if got := readFile(t, root, f); got != after {
+				t.Errorf("%s = %q, want %q", f, got, after)
+			}
+		}
+		if got := readFile(t, root, "CHANGELOG.md"); !strings.Contains(got, "## 1.5.0 (2026-09-21)\n") {
+			t.Errorf("CHANGELOG.md was not dated:\n%s", got)
+		}
+		if !strings.Contains(out, "3 files, 3 hunks, +3 -3") {
+			t.Errorf("report = %q", out)
+		}
+	})
+
+	t.Run("one file is not as expected, so nothing is written", func(t *testing.T) {
+		files := map[string]string{
+			"cmd/a/version.go": before,
+			"cmd/b/version.go": "package main\n\nconst Version = \"1.3.9\"\n",
+			"CHANGELOG.md":     changelog,
+		}
+		root := cliTree(t, files)
+		code, _, errOut := runCLI(t, root, nil, generate(t, root))
+		if code != exitNoMatch {
+			t.Fatalf("exit %d, want %d\n%s", code, exitNoMatch, errOut)
+		}
+		if !strings.Contains(errOut, "cmd/b/version.go") || !strings.Contains(errOut, "nothing was written") {
+			t.Errorf("the refusal does not name the file that missed, or does not say nothing was written:\n%s", errOut)
+		}
+		for name, body := range files {
+			if got := readFile(t, root, name); got != body {
+				t.Errorf("%s changed under a refusal: %q", name, got)
+			}
+		}
+	})
 }
 
 // The report is a page an agent reads, so the root has to be on the page and

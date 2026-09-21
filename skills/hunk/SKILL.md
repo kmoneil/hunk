@@ -118,6 +118,12 @@ func foo(ctx context.Context) {
 
 ```
 
+The same blank line is what gives a file you create or append to its final
+newline. There the payload is the end of the file, so if its last line runs
+straight into `HUNK`, the file has no final newline, and a formatter run as a
+check (`zig fmt --check`) refuses it. The `@@ create` in the example at the top
+leaves that blank line on purpose.
+
 **2. `@@ old` means exactly one occurrence.** `@@ old x3` means exactly three,
 and replaces all three. There is no "one or more". If you do not know the count,
 that is the thing `hunk` is here to refuse: add context until it is unique.
@@ -144,6 +150,39 @@ exit is still 2 when a hunk does not match. A twelve-hunk batch can be made
 right before a byte is written. It does **not** run `--verify`, because there is
 nothing applied to verify.
 
+## The same edit in many files
+
+A version bump, a copyright year, a changed URL: one literal edit, repeated. It
+is still a patch. Let a loop write it and pipe it in, and the batch keeps the
+count guard and the transaction: if any file does not have the text exactly
+once, nothing is written.
+
+```sh
+{
+  for f in cmd/*/version.go; do
+    echo "@@ file $f"
+    cat <<'P'
+@@ old
+const Version = "1.4.0"
+@@ new
+const Version = "1.5.0"
+P
+  done
+  cat <<'P'
+@@ file CHANGELOG.md
+@@ old
+## 1.5.0 (unreleased)
+@@ new
+## 1.5.0 (2026-09-21)
+P
+} | hunk --verify 'go build ./...'
+```
+
+The loop computes only the list of files. Each payload is a quoted heredoc, so
+nothing in it is escaped. A Python loop that asserts and writes one file at a
+time rebuilds the guard and loses the transaction: an assert that fails on the
+fourth file leaves the first three changed.
+
 ## When to reach for it, and when not
 
 `hunk` earns its keep when an edit has something to go wrong: several changes
@@ -160,7 +199,8 @@ mirror of the habit this replaces, and it costs the same thing: round trips.
 | Situation | Use |
 | --- | --- |
 | You are about to write `python3 - <<'PY'` that reads a file, replaces text and writes it back | `hunk`, always |
-| An edit that has to be **computed**: a block built from a list, one substitution looped over a set of files, a file split at an index | Python or the shell. `hunk` takes literal bytes in and literal bytes out, and has no expression language. Compute the patch if it helps, then pipe it in |
+| An edit that has to be **computed**: a block built from a list, a file split at an index | Python or the shell. `hunk` takes literal bytes in and literal bytes out, and has no expression language. Compute the patch if it helps, then pipe it in |
+| One literal edit repeated across files: a version bump, a year | `hunk`, with a loop that writes the patch (above) |
 | Several replacements, or several files, that must land together | `hunk` |
 | An edit that must be undone if the tests fail | `hunk --verify '...'` |
 | More than one file of a compiled language in one batch | `hunk --verify 'go build ./...'` |
@@ -199,6 +239,10 @@ tree would be expensive, and earns least when you were about to run the same
 command yourself and read the error anyway. A cheap verify (`go vet ./...`, one
 package's tests) is the one to reach for reflexively; a five-minute one is a
 decision.
+
+**When you expect the verify to fail and want to fix forward**, add
+`--keep-on-fail`. The changes stay on disk, the tail of the verify's output is
+printed, and the exit is still 3.
 
 **Prefer the repository's own gate** (`make check`, `npm test`) over a command
 you compose. `--verify` decides on the exit code, and some tools report a
