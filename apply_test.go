@@ -819,6 +819,11 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 		// Found by fuzzing the fix for it: a NUL byte under a directory the
 		// batch creates, which load's stat never reached.
 		"@@ create 0\n@@ create 1/\x00",
+		// A path through a file already on disk, which aborted load as exit 5
+		// until 2026-09-21 and is refused per hunk now, with and without the
+		// batch deleting the file.
+		"@@ create a.go/0\n",
+		"@@ delete a.go\n@@ create a.go/0\n",
 	} {
 		f.Add(s)
 	}

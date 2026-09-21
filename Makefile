@@ -85,8 +85,12 @@ fuzz:
 		$(GO) test -run='^$$' -fuzz="^$$t$$" -fuzztime=$(FUZZTIME) . || exit 1; \
 	done
 
+# -count=1, as the pre-commit hook and CI run them. A cached result is keyed on
+# what a test read, and a test that globs a directory does not see a file added
+# to it: on 2026-09-21 `make check` passed on a new report golden that the
+# corpus module's own test refused, and only the hook caught it.
 test:
-	$(GO) test ./...
+	$(GO) test -count=1 ./...
 
 # The claims the spec makes that the compiler does not enforce.
 gates: deps-gate
@@ -127,7 +131,7 @@ skill-grade-test:
 # still run under `make check`, because the classifier it holds is what §12's
 # comparison rests on.
 corpus-test:
-	cd scripts/corpus && $(GO) vet ./... && $(GO) test ./...
+	cd scripts/corpus && $(GO) vet ./... && $(GO) test -count=1 ./...
 
 # Re-derive §1's table and §12's figures. Writes a dated report to _reports/,
 # which is gitignored: the method is tracked, the measurement is not.

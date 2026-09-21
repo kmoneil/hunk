@@ -1,0 +1,16 @@
+hunk: 4 of 5 hunks did not match; nothing was written
+
+hunk 1  a.go/x  (patch line 1)
+  it is inside a.go, which is a file, not a directory; the root is /the/root
+
+hunk 3  b.go/x  (patch line 5)
+  it is inside b.go, which is a file, not a directory; deleting it in the same batch does not make room, because one batch cannot turn a file into a directory; the root is /the/root
+
+hunk 4  a.go/y  (patch line 8)
+  no such file; a.go is a file, so nothing can be inside it; the root is /the/root
+
+hunk 5  sub/keep.txt  (patch line 12)
+  expected 1 occurrence, found 0
+
+  no anchor found: not one line of your old appears in the file,
+  even ignoring whitespace. The text is not there.

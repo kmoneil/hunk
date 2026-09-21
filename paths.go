@@ -398,10 +398,49 @@ func (t *Tree) readlink(name string) (string, error) {
 // Stat reports the target's mode. Rollback restores it, so it is read at load
 // rather than guessed at commit.
 func (t *Tree) Stat(tg Target) (fs.FileInfo, error) {
+	return t.stat(tg.name)
+}
+
+func (t *Tree) stat(name string) (fs.FileInfo, error) {
 	if t.r == nil {
-		return os.Stat(tg.name)
+		return os.Stat(name)
 	}
-	return t.r.Stat(tg.name)
+	return t.r.Stat(name)
+}
+
+// FileAbove reports the file a path runs through, if it runs through one: the
+// nearest directory above tg that exists, when that is not a directory. It
+// returns the file as the patch spelled it, for a report, and as the tree names
+// it, for comparing with other targets.
+//
+// The directories are asked rather than the error read, because the error
+// differs by platform. Linux and macOS say ENOTDIR for a path through a file,
+// and Windows says the path does not exist, which reads as a file that is
+// merely absent.
+//
+// It walks tg's name and its spelling in the patch in step. The two can differ
+// only where Resolve replaced a link with its destination, and the file in the
+// way is always below the link that led to it, so they stay in step as far as
+// the walk goes. On Linux and macOS they do not differ at all: Resolve returns
+// a path it could not traverse as it stands. Stat follows a link where
+// resolution stopped, so a link to a file is the file in the way.
+func (t *Tree) FileAbove(tg Target) (shown, name string, ok bool) {
+	name, spelled := tg.name, filepath.Clean(filepath.FromSlash(tg.orig))
+	for {
+		parent := filepath.Dir(name)
+		if parent == name || parent == "." {
+			return "", "", false
+		}
+		name, spelled = parent, filepath.Dir(spelled)
+		fi, err := t.stat(name)
+		if err != nil {
+			continue // absent or unreachable: the answer is further up
+		}
+		if fi.IsDir() {
+			return "", "", false
+		}
+		return filepath.ToSlash(spelled), name, true
+	}
 }
 
 // ReadFile reads the target.
