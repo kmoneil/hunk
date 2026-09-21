@@ -92,12 +92,15 @@ var (
 	// and requiring the bare name undercounted this repository's own calls by
 	// 65 of 397 on 2026-09-07. The anchor is what keeps that safe: the name has
 	// to be in command position, so "cat /tmp/notes/hunk" is still not a call.
-	reHunkCall = regexp.MustCompile(`(?:^|[;&|(]|\n)\s*(?:\S*/)?hunk(?:\s|$)`)
+	// The group is the invocation's name, which is where its flags start.
+	reHunkCall = regexp.MustCompile(hunkAnchor + `((?:\S*/)?hunk)(?:\s|$)`)
 
 	// The invocations that ask hunk what it is rather than to edit anything.
 	// An agent checking what is available is not an application, and counting
-	// it as one puts --help in the denominator of every rate in §12.
-	reHunkProbe = regexp.MustCompile(`(?:^|[;&|(]|\n)\s*(?:\S*/)?hunk\s+(?:format|--help|-h|--version)\b`)
+	// it as one puts --help in the denominator of every rate in §12. It shares
+	// the call's anchor: a probe the call rule saw and this rule did not would
+	// be counted as an application.
+	reHunkProbe = regexp.MustCompile(hunkAnchor + `(?:\S*/)?hunk\s+(?:format|--help|-h|--version)\b`)
 
 	// hunk's own report, exit by exit. Every one of these is goldened in
 	// testdata/, and classify_test.go reads the golden files rather than copies
@@ -167,6 +170,26 @@ var (
 
 // defaultMarker is the tool's, duplicated for the reason hunkDirectives is.
 const defaultMarker = "@@"
+
+// hunkAnchor is command position: the start of the command, a separator, a
+// newline, or "{" and whitespace, which opens a brace group or a function
+// body. Then what the shell lets stand between that and a command's name, as
+// far as the corpus uses it: one of do, then or else; NAME=value assignments;
+// and timeout with its duration.
+//
+// Until 2026-09-21 it was the separators alone, and every call in a loop, an
+// assignment's scope or a function body was invisible: the field's own
+// mutation-testing loops, `for p in mutants/*.patch; do hunk ...` and
+// `out=$(timeout 600 hunk ...)`, and this repository's `GODEBUG=... hunk`.
+// Each word is here because a transcript has it; time, env, nice and nohup
+// are not, because none does.
+//
+// "{" needs the whitespace, because "${HOME}/go/bin/hunk" is an expansion, not
+// a command.
+const hunkAnchor = `(?:^|[;&|(]|\n|\{\s)\s*` +
+	`(?:(?:do|then|else)\s+)?` +
+	`(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*` +
+	`(?:timeout\s+\S+\s+)?`
 
 // hunkDirectives mirrors the tool's own set, because scripts/corpus is a
 // separate module on purpose and cannot import it.
@@ -242,6 +265,16 @@ func stripQuoted(s string) string {
 
 // IsHunkCall reports whether a Bash command runs hunk, as opposed to merely
 // mentioning it.
+//
+// A command that runs hunk more than once, in a loop, a function body or on
+// two lines, is one call. §1.2 measures calls per successful edit, and a call
+// is a round trip, which is what an agent spends: a loop over twenty mutants is
+// one round trip. Its exit is whichever HunkExit's order of rules finds first,
+// which for the text report is the worst the result shows. A loop that sent
+// its output elsewhere is unclassified, and so is a call that never ran because
+// the command before its && failed: the text cannot tell those two apart, and
+// the report prints the unclassified count beside the exits for that reason.
+// Decided 2026-09-21, by the card that widened the anchor.
 func IsHunkCall(cmd string) bool { return reHunkCall.MatchString(commandSkeleton(cmd)) }
 
 // HunkExit is the exit code a hunk invocation ended with, read from its output
@@ -380,16 +413,18 @@ func Marker(cmd string) string {
 // command, and a patch payload is not a flag at all.
 func hunkInvocation(cmd string) string {
 	sk := commandSkeleton(cmd)
-	loc := reHunkCall.FindStringIndex(sk)
+	loc := reHunkCall.FindStringSubmatchIndex(sk)
 	if loc == nil {
 		return ""
 	}
-	line := sk[loc[0]:]
+	// From the name, not the anchor. What stands between them, an
+	// assignment's value or timeout's duration, is not hunk's.
+	line := sk[loc[2]:]
 	// Stop at the end of this command rather than the end of the line. A
 	// `hunk -f p.patch && git status --porcelain` is two commands, and
 	// --porcelain is not hunk's: the corpus had three of exactly that shape,
 	// and they put git's flags in the adoption table on their first run.
-	rest := loc[1] - loc[0]
+	rest := loc[3] - loc[2]
 	if i := strings.IndexAny(line[rest:], "\n;&|"); i >= 0 {
 		line = line[:rest+i]
 	}
