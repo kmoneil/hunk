@@ -894,6 +894,34 @@ func TestVerifyRewritesFiles(t *testing.T) {
 			"the shell formats before the call, the verify is a test run",
 			"make fmt && hunk --verify 'go test ./...' -f p.txt", false,
 		},
+		// A formatter's check is not a rewrite. Until 2026-09-21 every one of
+		// these counted as one, and the first row is the field's commonest:
+		// 11 of the 17 formatting verifies it had were zig fmt --check.
+		{"zig fmt --check", "hunk --verify 'zig fmt --check runtime/program/program.zig' -f p.txt", false},
+		{"cargo fmt --check", "hunk --verify 'cargo fmt --check' -f p.txt", false},
+		{"cargo fmt -- --check, the older spelling", "hunk --verify 'cargo fmt -- --check' -f p.txt", false},
+		{"ruff format --check", "hunk --verify 'ruff format --check .' -f p.txt", false},
+		{"ruff format --diff", "hunk --verify 'ruff format --diff .' -f p.txt", false},
+		{"black --check", "hunk --verify 'black --check .' -f p.txt", false},
+		{"black --diff", "hunk --verify 'black --diff .' -f p.txt", false},
+		{"a make check target named after the formatter", "hunk --verify 'make fmt-check vet lint gates' -f p.txt", false},
+		{"an npm check script named after the formatter", "hunk --verify 'npm run format-check' -f p.txt", false},
+		// And the writing forms of the same formatters still count.
+		{"zig fmt", "hunk --verify 'zig fmt src' -f p.txt", true},
+		{"ruff format", "hunk --verify 'ruff format .' -f p.txt", true},
+		{"black", "hunk --verify 'black .' -f p.txt", true},
+		{"make fmt, then more targets", "hunk --verify 'make fmt vet' -f p.txt", true},
+		{"make format in a subshell", "hunk --verify '(make format)' -f p.txt", true},
+		{"npm run fmt", "hunk --verify 'npm run fmt && npm test' -f p.txt", true},
+		// Only a rule that reads the verify command by command gets this right.
+		{
+			"one command checks and the next rewrites",
+			"hunk --verify 'zig fmt --check a.zig && gofmt -w b.go' -f p.txt", true,
+		},
+		{
+			"one command rewrites and the next checks",
+			"hunk --verify 'gofmt -w b.go; zig fmt --check a.zig' -f p.txt", true,
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := VerifyRewritesFiles(c.cmd); got != c.want {

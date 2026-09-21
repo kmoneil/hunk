@@ -163,9 +163,23 @@ var (
 	// reachable when the verify is one of these, so a corpus with none in it
 	// cannot produce one, and its zero exit-4s says nothing at all about the
 	// default §11's second open question asks about.
+	//
+	// A make or npm target has to end where the word does: until 2026-09-21
+	// `make fmt-check`, this repository's own check target, read as a rewrite,
+	// because \b matched at the hyphen.
 	reFormattingVerify = regexp.MustCompile(`\bgofmt\s[^|;&]*-w|\bgo\s+fmt\b|\bgoimports\s[^|;&]*-w|` +
-		`\bprettier\s[^|;&]*--write|\bmake\s+(?:fmt|format)\b|\bcargo\s+fmt\b|\bruff\s+format\b|` +
-		`\bblack\s|\bsed\s+-i|\bnpm\s+run\s+(?:fmt|format)\b|\bdprint\s+fmt\b|\bzig\s+fmt\b`)
+		`\bprettier\s[^|;&]*--write|\bmake\s+(?:fmt|format)(?:$|[\s)])|\bcargo\s+fmt\b|\bruff\s+format\b|` +
+		`\bblack\s|\bsed\s+-i|\bnpm\s+run\s+(?:fmt|format)(?:$|[\s)])|\bdprint\s+fmt\b|\bzig\s+fmt\b`)
+
+	// The non-writing modes of the formatters reFormattingVerify names: zig
+	// fmt, cargo fmt, ruff format and black all take --check, and ruff and
+	// black take --diff. A command that passes one checks its files and
+	// leaves them alone. Until 2026-09-21 these counted as rewrites, and 11 of
+	// the field's 17 formatting verifies were zig fmt --check.
+	reCheckMode = regexp.MustCompile(`(?:^|\s)--(?:check|diff)\b`)
+
+	// Where a verify command is cut into the commands it runs.
+	reCommandBreak = regexp.MustCompile(`&&|\|\||;|\|`)
 )
 
 // defaultMarker is the tool's, duplicated for the reason hunkDirectives is.
@@ -489,5 +503,13 @@ func VerifyRewritesFiles(cmd string) bool {
 	if m == nil {
 		return false
 	}
-	return reFormattingVerify.MatchString(strings.Trim(m[1], `'"`))
+	// Command by command, because one verify can check one file and rewrite
+	// another: in `zig fmt --check a.zig && gofmt -w b.go`, the first
+	// command's --check does not excuse the second.
+	for _, c := range reCommandBreak.Split(strings.Trim(m[1], `'"`), -1) {
+		if reFormattingVerify.MatchString(c) && !reCheckMode.MatchString(c) {
+			return true
+		}
+	}
+	return false
 }
