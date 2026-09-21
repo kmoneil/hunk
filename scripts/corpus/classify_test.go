@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1010,6 +1011,152 @@ func TestAdoptionReportIsStable(t *testing.T) {
 	s.Root = "<root>"
 	got := s.Report()
 	path := filepath.Join("testdata", "fixture-adoption-report.txt")
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (UPDATE_GOLDEN=1 go test ./... to create it, then read it)", err)
+	}
+	if got != string(want) {
+		t.Errorf("the report changed. That is a contract change: §12 compares two of these.\n--- want ---\n%s\n--- got ---\n%s", want, got)
+	}
+}
+
+// A corpus with a field project and a lab. The field's one refusal is followed
+// by a success, and the lab refuses twice and fails a verify, which is the
+// shape of a session probing the tool on purpose.
+func fixtureSplitCorpus(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	write := func(project string, calls ...[2]string) {
+		dir := filepath.Join(root, project)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var sb strings.Builder
+		for i, c := range calls {
+			id := fmt.Sprintf("%s-%d", project, i)
+			for _, rec := range []map[string]any{
+				{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]any{"command": c[0]}},
+				{"type": "tool_result", "tool_use_id": id, "content": c[1]},
+			} {
+				b, err := json.Marshal(map[string]any{"message": map[string]any{"content": []any{rec}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				sb.Write(append(b, '\n'))
+			}
+		}
+		if err := os.WriteFile(filepath.Join(dir, "s.jsonl"), []byte(sb.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused := "hunk: 1 hunk did not match; nothing was written\n"
+	write("-workspace-demo",
+		[2]string{"hunk -f p.txt", refused},
+		[2]string{"hunk -f p.txt", "M a.go +1 -1\n1 file, 1 hunk, +1 -1\n"},
+	)
+	write("-workspace-lab",
+		[2]string{"./hunk -f p.txt", refused},
+		[2]string{"./hunk -f p.txt", refused},
+		[2]string{
+			"./hunk --verify 'gofmt -w a.go && false' -f p.txt",
+			"hunk: applied 1 hunk, verify failed, rolled back 1 file\n",
+		},
+	)
+	return root
+}
+
+// §12's figures are kept apart for the field and for this repository, and the
+// two arms add up to what the aggregate would have been.
+func TestWalkSplitKeepsTheLabApart(t *testing.T) {
+	root := fixtureSplitCorpus(t)
+	s, err := WalkSplit(root, "-workspace-lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Field == nil || s.Here == nil || s.Lab != "-workspace-lab" {
+		t.Fatalf("no arms: lab %q, field %v, here %v", s.Lab, s.Field, s.Here)
+	}
+	for _, c := range []struct {
+		name             string
+		field, here, all int
+	}{
+		{"sessions", s.Field.Sessions, s.Here.Sessions, s.Sessions},
+		{"hunk calls", s.Field.HunkCalls, s.Here.HunkCalls, s.HunkCalls},
+		{"applications", s.Field.HunkApplications, s.Here.HunkApplications, s.HunkApplications},
+		{"exit 0", s.Field.HunkExits[0], s.Here.HunkExits[0], s.HunkExits[0]},
+		{"exit 2", s.Field.HunkExits[2], s.Here.HunkExits[2], s.HunkExits[2]},
+		{"exit 3", s.Field.HunkExits[3], s.Here.HunkExits[3], s.HunkExits[3]},
+		{"refusals with a classified next call", s.Field.Exit2Followed, s.Here.Exit2Followed, s.Exit2Followed},
+		{"refusals recovered", s.Field.Exit2Recovered, s.Here.Exit2Recovered, s.Exit2Recovered},
+		{"verify rewrites files", s.Field.HunkFormattingVerify, s.Here.HunkFormattingVerify, s.HunkFormattingVerify},
+	} {
+		if c.field+c.here != c.all {
+			t.Errorf("%s: field %d + this repository %d != all %d", c.name, c.field, c.here, c.all)
+		}
+	}
+	for _, c := range []struct {
+		name      string
+		got, want int
+	}{
+		{"field calls", s.Field.HunkCalls, 2},
+		{"field refusals", s.Field.HunkExits[2], 1},
+		{"field recoveries", s.Field.Exit2Recovered, 1},
+		{"lab calls", s.Here.HunkCalls, 3},
+		{"lab refusals", s.Here.HunkExits[2], 2},
+		{"lab recoveries", s.Here.Exit2Recovered, 0},
+		{"lab verifies that rewrite files", s.Here.HunkFormattingVerify, 1},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+	// The point of the card: the aggregate reads 0.33 while the field reads 1.
+	if got := s.Field.Exit2RecoveryRate(); got != 1 {
+		t.Errorf("field recovery = %v, want 1", got)
+	}
+	if got := s.Exit2RecoveryRate(); got >= s.Field.Exit2RecoveryRate() {
+		t.Errorf("aggregate recovery %v is not below the field's %v; the fixture shows nothing", got, s.Field.Exit2RecoveryRate())
+	}
+
+	// No lab, no arms, and the same aggregate.
+	plain, err := Walk(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Field != nil || plain.Here != nil || plain.Lab != "" {
+		t.Error("Walk with no lab kept arms")
+	}
+	if plain.HunkCalls != s.HunkCalls || plain.Exit2Recovered != s.Exit2Recovered {
+		t.Error("splitting changed the aggregate")
+	}
+}
+
+// The split report prints §12 once per arm, the field first, and not the
+// aggregate block, which is the figure the card says not to quote.
+func TestSplitReportIsStable(t *testing.T) {
+	s, err := WalkSplit(fixtureSplitCorpus(t), "-workspace-lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Root = "<root>"
+	got := s.Report()
+	field := strings.Index(got, "§12, the field (every project but -workspace-lab, 1 session)")
+	here := strings.Index(got, "§12, this repository (-workspace-lab, 1 session)")
+	switch {
+	case field < 0 || here < 0:
+		t.Fatalf("an arm's block is missing:\n%s", got)
+	case field > here:
+		t.Errorf("the field's block is not first:\n%s", got)
+	case strings.Contains(got, "§12, which §1 does not have"):
+		t.Errorf("the aggregate block is still printed:\n%s", got)
+	}
+	path := filepath.Join("testdata", "fixture-split-report.txt")
 	if os.Getenv("UPDATE_GOLDEN") != "" {
 		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
 			t.Fatal(err)
