@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -216,6 +217,11 @@ type file struct {
 	// it to tell a formatter from a second writer (§6.3), which is
 	// verify-and-rollback's card and the reason this is recorded here.
 	wrote [sha256.Size]byte
+	// committed means commit finished this file's operation: the rename or the
+	// remove happened. Rollback undoes only these, which is what lets a commit
+	// that fails part-way undo itself (§6.2) without calling the files it never
+	// reached "rewritten by something else".
+	committed bool
 }
 
 // A Txn is one invocation's transaction over a Tree.
@@ -686,26 +692,94 @@ func (x *Txn) Check() error {
 // so a symlinked target is written through rather than replaced (§6.5).
 func (x *Txn) Commit() error {
 	for _, f := range x.files {
-		switch f.finalOp() {
-		case "delete":
-			if err := x.tree.Remove(f.target); err != nil {
-				return err
+		if err := x.commit(f); err != nil {
+			// Undo what this commit wrote, decided 2026-09-21: a write that
+			// fails part-way, a full disk or a name the filesystem refuses, used
+			// to leave every file before it written, deletes included. The hash
+			// check stays on, because the verify has not run, so a file that
+			// changed since commit wrote it is somebody else's and is named
+			// rather than overwritten. A crash cannot be undone this way: the
+			// process has to be alive (§6.2).
+			restored, notRestored, _ := x.Rollback(false)
+			return &CommitError{
+				Path: f.target.Orig(), Op: f.finalOp(), Err: cause(err),
+				Restored: restored, NotRestored: notRestored,
 			}
-		case "create":
-			made, err := x.tree.MkdirAll(f.target)
-			f.madeDirs = made // recorded even on failure, so rollback unwinds what was made
-			if err != nil {
-				return err
-			}
-			fallthrough
-		case "modify":
-			if err := x.tree.WriteAtomic(f.target, f.cur, f.mode); err != nil {
-				return err
-			}
-			f.wrote = sha256.Sum256(f.cur)
 		}
 	}
 	return nil
+}
+
+// commit writes one file's final state and marks it committed once it is on
+// disk, which is what Rollback undoes.
+func (x *Txn) commit(f *file) error {
+	switch f.finalOp() {
+	case "delete":
+		if err := x.tree.Remove(f.target); err != nil {
+			return err
+		}
+	case "create":
+		made, err := x.tree.MkdirAll(f.target)
+		f.madeDirs = made // recorded even on failure, so rollback unwinds what was made
+		if err != nil {
+			return err
+		}
+		fallthrough
+	case "modify":
+		if err := x.tree.WriteAtomic(f.target, f.cur, f.mode); err != nil {
+			return err
+		}
+		f.wrote = sha256.Sum256(f.cur)
+	default:
+		return nil
+	}
+	f.committed = true
+	return nil
+}
+
+// A CommitError is a write that failed part-way through commit. Commit has
+// already put back what it wrote before it (§6.2), so the tree is as it was,
+// unless NotRestored names a file it could not put back. It is exit 5 either
+// way: the tree is fine or the message says where it is not.
+type CommitError struct {
+	Path        string // as the patch wrote it
+	Op          string // "create", "modify" or "delete"
+	Err         error  // the cause, without the syscall and the temp file's name
+	Restored    int
+	NotRestored []NotRestored
+}
+
+func (e *CommitError) Error() string {
+	verb := map[string]string{"create": "creating", "modify": "writing", "delete": "deleting"}[e.Op]
+	msg := fmt.Sprintf("%s %s failed: %v; ", verb, e.Path, e.Err)
+	written := e.Restored + len(e.NotRestored)
+	switch {
+	case len(e.NotRestored) > 0:
+		return msg + fmt.Sprintf("%d of the %s written before it could not be put back",
+			len(e.NotRestored), count(written, "file"))
+	case written == 1:
+		return msg + "the file written before it was put back, so nothing was written"
+	case written > 1:
+		return msg + fmt.Sprintf("the %d files written before it were put back, so nothing was written", written)
+	}
+	return msg + "nothing was written"
+}
+
+func (e *CommitError) Unwrap() error { return e.Err }
+
+// cause strips the operation and the paths from a filesystem error. The path
+// in a failed rename is a temp file's, ".hunk-2wmz7zih4mhgx.tmp", which names
+// nothing the caller wrote; CommitError names the file instead.
+func cause(err error) error {
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		return le.Err
+	}
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
 }
 
 // RunVerify is phase 6 (§6.1 step 6): run cmd via sh -c with cwd root and
@@ -771,7 +845,7 @@ func RunVerify(command, root string, tailLines int) (*Verify, error) {
 func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored, gone []string) {
 	for _, f := range x.files {
 		op := f.finalOp()
-		if op == "" {
+		if op == "" || !f.committed {
 			continue
 		}
 		if op == "create" {

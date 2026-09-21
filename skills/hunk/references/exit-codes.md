@@ -22,7 +22,9 @@ so a program never has to parse the text.
 ## What it does not promise
 
 Replacing one file is atomic. **The batch is not**: a crash part-way through
-leaves the files before it written. **Nor is there a lock.** A writer that
+leaves the files before it written. A write that fails part-way, such as a full
+disk or a name the filesystem refuses, is put back instead, at exit 5, and the
+message names the file that failed. **Nor is there a lock.** A writer that
 finished between `hunk`'s read and its write is caught, at exit 6, but one
 writing at the same time is not: two `hunk` runs on the same files at once
 usually both succeed, and can leave some files as one wrote them and some as

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -77,18 +79,6 @@ func snapshot(t *testing.T, root string) map[string]string {
 		return nil
 	})
 	must(t, err)
-	return out
-}
-
-// filesOnly is a snapshot without its directories. FuzzApplyIsAllOrNothing is
-// the one place that wants it, and says why.
-func filesOnly(s map[string]string) map[string]string {
-	out := map[string]string{}
-	for name, v := range s {
-		if v != "directory" {
-			out[name] = v
-		}
-	}
 	return out
 }
 
@@ -169,8 +159,8 @@ func TestSnapshotRecordsDirectories(t *testing.T) {
 	if _, ok := got["."]; ok {
 		t.Error("snapshot records the root itself, which every tree has")
 	}
-	if len(filesOnly(got)) != 1 {
-		t.Errorf("filesOnly(snapshot) = %q, want only a.txt", filesOnly(got))
+	if len(got) != 3 {
+		t.Errorf("snapshot = %q, want a.txt and the two directories", got)
 	}
 }
 
@@ -467,6 +457,138 @@ func TestCheckCatchesAWriterUnderneath(t *testing.T) {
 			}
 			assertUnchanged(t, root, before)
 		})
+	}
+}
+
+// A commit that fails part-way puts back what it wrote, decided 2026-09-21.
+// What a filesystem refuses, such as a name too long for it or a full disk, is
+// not knowable before asking it, so the refusal comes at the rename, after
+// every file before it was written. Until then those files stayed written,
+// deletes included, and the message named a temp file.
+//
+// A 300-byte name forces it portably: every filesystem the suite runs on caps
+// a name at 255, and under a directory the batch creates, load cannot see it.
+func TestACommitThatFailsPutsBackWhatItWrote(t *testing.T) {
+	long := strings.Repeat("n", 300)
+	for _, c := range []struct {
+		name, patch, says string
+	}{
+		{
+			"a create into a directory it makes", "@@ create newdir/" + long + "\nx\n\n",
+			"; nothing was written",
+		},
+		{
+			"two directories deep", "@@ create a/b/" + long + "\nx\n\n",
+			"; nothing was written",
+		},
+		{
+			// A directory's name, not the file's: MkdirAll makes a and a/b and
+			// then fails, and what it made has to come back deepest first.
+			// Found by fuzzing this card's change.
+			"a directory name too long, under two it makes", "@@ create a/b/" + long + "/x.go\nx\n\n",
+			"; nothing was written",
+		},
+		{
+			"after a create", "@@ create first.txt\nf\n\n@@ create newdir/" + long + "\nx\n\n",
+			"; the file written before it was put back, so nothing was written",
+		},
+		{
+			"after a modify and a delete", "@@ file keep.txt\n@@ old\nkeep\n@@ new\nKEEP\n@@ delete gone.txt\n" +
+				"@@ create newdir/" + long + "\nx\n\n",
+			"; the 2 files written before it were put back, so nothing was written",
+		},
+		{
+			// Commit stops at the failure, so what comes after was never written.
+			"before a modify", "@@ create newdir/" + long + "\nx\n\n@@ file keep.txt\n@@ old\nkeep\n@@ new\nKEEP\n",
+			"; nothing was written",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"keep.txt": "keep\n", "gone.txt": "gone\n"})
+			must(t, os.Chmod(filepath.Join(root, "gone.txt"), 0o640))
+			before := snapshot(t, root)
+			code, _, errOut := runCLI(t, root, nil, c.patch)
+			if code != exitIO {
+				t.Fatalf("exit %d, want 5: %s", code, errOut)
+			}
+			// The path the patch wrote for the create that failed.
+			failed := c.patch[strings.LastIndex(c.patch, "@@ create ")+len("@@ create "):]
+			failed = failed[:strings.Index(failed, "\n")]
+			if !strings.HasPrefix(errOut, "hunk: creating "+failed+" failed: ") {
+				t.Errorf("does not name %s as the file that failed:\n%s", failed, errOut)
+			}
+			if !strings.HasSuffix(errOut, c.says+"\n") {
+				t.Errorf("want it to end %q:\n%s", c.says, errOut)
+			}
+			if strings.Contains(errOut, ".hunk-") {
+				t.Errorf("names the temp file:\n%s", errOut)
+			}
+			assertUnchanged(t, root, before) // directories and modes included
+		})
+	}
+
+	t.Run("--json carries the same sentence", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"keep.txt": "keep\n"})
+		_, js, _ := runCLI(t, root, []string{"--json"}, "@@ create first.txt\nf\n\n@@ create newdir/"+long+"\nx\n\n")
+		var v struct {
+			Exit  int
+			Error string
+		}
+		must(t, json.Unmarshal([]byte(js), &v))
+		if v.Exit != exitIO || !strings.HasSuffix(v.Error, "the file written before it was put back, so nothing was written") {
+			t.Errorf("%s", js)
+		}
+	})
+}
+
+// The one way the undo can fall short is the way rollback can: a file commit
+// wrote that something else changed before commit could put it back, or a put
+// back that fails itself. Neither can be arranged between two renames from
+// outside, so the report is asserted on the error the transaction returns.
+func TestACommitThatCannotPutBackSaysWhere(t *testing.T) {
+	err := &CommitError{
+		Path: "newdir/x.go", Op: "create", Err: errors.New("no space left on device"), Restored: 1,
+		NotRestored: []NotRestored{{Path: "a.go", Reason: "It could not be written: no space left on device"}},
+	}
+	want := "creating newdir/x.go failed: no space left on device; 1 of the 2 files written before it could not be put back"
+	if err.Error() != want {
+		t.Errorf("got  %q\nwant %q", err.Error(), want)
+	}
+	rep := NewReport(nil, err, nil, false, 2)
+	if rep.Exit != exitIO {
+		t.Errorf("exit %d, want 5", rep.Exit)
+	}
+	var out, errOut bytes.Buffer
+	rep.Text(&out, &errOut, false)
+	for _, line := range []string{
+		"hunk: " + want,
+		"a.go was not restored.",
+		"  It could not be written: no space left on device",
+	} {
+		if !strings.Contains(errOut.String(), line+"\n") {
+			t.Errorf("missing %q:\n%s", line, errOut.String())
+		}
+	}
+	var js bytes.Buffer
+	must(t, rep.JSON(&js))
+	var v struct {
+		NotRestored []struct{ Path, Reason string } `json:"not_restored"`
+	}
+	must(t, json.Unmarshal(js.Bytes(), &v))
+	if len(v.NotRestored) != 1 || v.NotRestored[0].Path != "a.go" {
+		t.Errorf("--json does not carry what was not put back: %s", js.String())
+	}
+	// The cause, without the operation and the paths: a rename names the temp
+	// file, a remove the target, and an error of hunk's own names neither.
+	boom := errors.New("boom")
+	for _, err := range []error{
+		&os.LinkError{Op: "rename", Old: ".hunk-x.tmp", New: "x", Err: boom},
+		&fs.PathError{Op: "remove", Path: "x", Err: boom},
+		boom,
+	} {
+		if got := cause(err); got != boom {
+			t.Errorf("cause(%v) = %v, want %v", err, got, boom)
+		}
 	}
 }
 
@@ -1017,26 +1139,34 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 		defer tree.Close()
 
 		before := snapshot(t, root)
+		// A dry run first, on the same tree, since it writes nothing.
+		preview, previewErr := NewTxn(tree, Options{}).Preview(p)
+		assertUnchanged(t, root, before)
 		r, err := NewTxn(tree, Options{}).Run(p)
+
+		// A dry run is a promise, as far as validation can make one. Where it
+		// refuses, the apply refuses the same way. Where it succeeds, the apply
+		// succeeds with the same diffstat, or fails in commit at exit 5, which
+		// is what a filesystem refusing a name looks like: nothing before the
+		// rename can know.
+		switch {
+		case previewErr != nil && ExitCode(err) != ExitCode(previewErr):
+			t.Errorf("the dry run exits %d and the apply %d", ExitCode(previewErr), ExitCode(err))
+		case previewErr == nil && err == nil && !slices.Equal(preview.Files, r.Files):
+			t.Errorf("the dry run reports %+v and the apply %+v", preview.Files, r.Files)
+		case previewErr == nil && err != nil && ExitCode(err) != exitIO:
+			t.Errorf("the dry run succeeds and the apply exits %d: %v", ExitCode(err), err)
+		}
+
 		if err != nil {
-			// Every failure path leaves the tree exactly as it was,
-			// directories included. The one exception §6.2 admits is a commit
-			// that fails part-way, and this comment used to say that needs a
-			// write to fail and cannot happen here. The patch alone can make
-			// one fail. A file and then a file inside it did, and so did a NUL
-			// byte under a directory the batch creates, until each was refused
-			// before commit (issue #11). A name too long for the filesystem,
-			// in the same place, still does, and leaves the directory it was
-			// to go in: a-name-the-filesystem-refuses-is-found-in-commit's
-			// card, waiting on a decision. So where a failed commit ends, at
-			// exit 5, directories are left out of the comparison and files are
-			// not. The exemption goes when that card is decided.
-			if ExitCode(err) == exitIO {
-				for _, d := range snapshotDiff(filesOnly(before), filesOnly(snapshot(t, root))) {
-					t.Errorf("%s; a failed commit may leave a directory, and nothing else", d)
-				}
-				return
-			}
+			// Every failure path leaves the tree exactly as it was, directories
+			// included. A commit that fails part-way used to be the exception
+			// §6.2 admitted, and the patch alone can make one: a file and then
+			// a file inside it did, and a NUL byte under a directory the batch
+			// creates, until each was refused before commit (issue #11). A name
+			// too long for the filesystem still fails there. Since 2026-09-21
+			// commit puts back what it wrote first, so exit 5 has no exemption
+			// here any more.
 			assertUnchanged(t, root, before)
 			return
 		}

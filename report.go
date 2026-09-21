@@ -151,6 +151,12 @@ func (r *Report) Text(out, errOut io.Writer, quiet bool) {
 		r.writeVerifyFailure(errOut)
 	default:
 		fmt.Fprintf(errOut, "hunk: %v\n", r.Err)
+		// A commit that failed part-way and could not put everything back
+		// names what it left, as exit 4 does (§6.2).
+		var ce *CommitError
+		if errors.As(r.Err, &ce) {
+			writeNotRestored(errOut, ce.NotRestored)
+		}
 	}
 }
 
@@ -261,7 +267,11 @@ func (r *Report) writeVerifyFailure(w io.Writer) {
 	for _, p := range v.Gone {
 		fmt.Fprintf(w, "\n%s, which hunk created, was already gone: something else removed it.\n", p)
 	}
-	for _, n := range v.NotRestored {
+	writeNotRestored(w, v.NotRestored)
+}
+
+func writeNotRestored(w io.Writer, notRestored []NotRestored) {
+	for _, n := range notRestored {
 		fmt.Fprintf(w, "\n%s was not restored.\n", n.Path)
 		for _, line := range strings.Split(n.Reason, "\n") {
 			fmt.Fprintf(w, "  %s\n", line)
@@ -310,6 +320,9 @@ type jsonReport struct {
 	Failures []jsonFailure `json:"failures,omitempty"`
 	Error    string        `json:"error,omitempty"`
 	DryRun   bool          `json:"dry_run,omitempty"`
+	// NotRestored is what a commit that failed part-way could not put back.
+	// The verify's own list is inside Verify.
+	NotRestored []jsonRestore `json:"not_restored,omitempty"`
 }
 
 type jsonFile struct {
@@ -409,6 +422,12 @@ func (r *Report) JSON(w io.Writer) error {
 	}
 	if r.Exit != exitOK && len(r.Failures) == 0 && r.Err != nil {
 		out.Error = r.Err.Error()
+		var ce *CommitError
+		if errors.As(r.Err, &ce) {
+			for _, n := range ce.NotRestored {
+				out.NotRestored = append(out.NotRestored, jsonRestore{n.Path, n.Reason})
+			}
+		}
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")

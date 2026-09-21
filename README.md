@@ -196,8 +196,11 @@ program never has to parse the text.
 
 ## What it does not promise
 
-Replacing one file is atomic, via `rename(2)`. **The batch is not.** A crash or
-a full disk part-way through leaves the files before it written.
+Replacing one file is atomic, via `rename(2)`. **The batch is not.** A write
+that fails part-way through, such as a full disk or a name the filesystem
+refuses, puts back the files written before it and exits 5, naming the file
+that failed. A crash part-way through cannot be undone that way, since undoing
+needs the process alive, so the files before it stay written.
 
 Every target is re-hashed between validation and writing, so a process that
 wrote the tree in between is caught, and the exit is 6 with nothing written.
