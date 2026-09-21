@@ -42,6 +42,12 @@ type Verify struct {
 	RolledBack  int
 	NotRestored []NotRestored
 
+	// Gone are files hunk created that something else removed before rollback
+	// could. Absence is what rolling a create back leaves, so they are counted
+	// in RolledBack and are not NotRestored, but something other than hunk
+	// touched the tree during the verify, and the report says so (§6.3).
+	Gone []string
+
 	// Kept means --keep-on-fail left the changes in place. The exit is still 3
 	// (§4): the code reports what the verify said, not what was done about it.
 	Kept bool
@@ -252,6 +258,9 @@ func (r *Report) writeVerifyFailure(w io.Writer) {
 	if v.TotalLines > 0 {
 		fmt.Fprintf(w, "(last %d of %d lines)\n", len(v.Tail), v.TotalLines)
 	}
+	for _, p := range v.Gone {
+		fmt.Fprintf(w, "\n%s, which hunk created, was already gone: something else removed it.\n", p)
+	}
 	for _, n := range v.NotRestored {
 		fmt.Fprintf(w, "\n%s was not restored.\n", n.Path)
 		for _, line := range strings.Split(n.Reason, "\n") {
@@ -321,6 +330,7 @@ type jsonVerify struct {
 	RolledBack  int           `json:"rolled_back,omitempty"`
 	Kept        bool          `json:"kept,omitempty"`
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
+	Gone        []string      `json:"already_gone,omitempty"`
 }
 
 type jsonRestore struct {
@@ -367,7 +377,7 @@ func (r *Report) JSON(w io.Writer) error {
 	if v := r.Verify; v != nil {
 		jv := &jsonVerify{
 			Ran: v.Ran, OK: v.OK, Seconds: v.Seconds, Command: v.Command,
-			Output: v.Tail, RolledBack: v.RolledBack, Kept: v.Kept,
+			Output: v.Tail, RolledBack: v.RolledBack, Kept: v.Kept, Gone: v.Gone,
 		}
 		for _, n := range v.NotRestored {
 			jv.NotRestored = append(jv.NotRestored, jsonRestore{n.Path, n.Reason})

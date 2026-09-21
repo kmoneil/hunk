@@ -1539,21 +1539,169 @@ func TestRollbackRemovesEveryDirectoryItMade(t *testing.T) {
 		}
 	})
 
-	// A created file the verify deleted is exit 4, and was before this: hunk
-	// did not remove it and says so. The directory hunk made for it is empty
-	// either way, and §6.6 has no exception for it. Until 2026-09-21 it stayed.
+	// The directory hunk made for a created file the verify deleted is empty,
+	// and §6.6 has no exception for it. Until 2026-09-21 it stayed, and until
+	// later the same day the file itself was exit 4:
+	// TestACreatedFileTheVerifyDeletedIsRolledBack has that.
 	t.Run("a created file the verify deleted leaves no directory", func(t *testing.T) {
 		root := cliTree(t, map[string]string{"keep.txt": "keep\n"})
 		before := snapshot(t, root)
 		code, _, errOut := runCLI(t, root, []string{"--verify", "rm new/x.go; false"},
 			"@@ create new/x.go\none\n\n")
-		if code != exitRollbackFailed {
-			t.Fatalf("exit %d, want 4: %s", code, errOut)
-		}
-		if !strings.Contains(errOut, "new/x.go was not restored") {
-			t.Errorf("err = %q", errOut)
+		if code != exitVerifyFailed {
+			t.Fatalf("exit %d, want 3: %s", code, errOut)
 		}
 		assertUnchanged(t, root, before)
+	})
+}
+
+// contentsOnly is a snapshot with each file's mode dropped, for a comparison
+// that is about what is in the tree rather than how it is permitted.
+func contentsOnly(s map[string]string) map[string]string {
+	out := map[string]string{}
+	for name, v := range s {
+		if _, body, ok := strings.Cut(v, "\x00"); ok && v != "directory" {
+			v = body
+		}
+		out[name] = v
+	}
+	return out
+}
+
+// Rolling a create back means the path is absent. A created file the verify
+// already removed is absent, so it is rolled back, under either flag, and the
+// exit is 3 if nothing else failed, decided 2026-09-21. Until then it was exit
+// 4, "rollback was incomplete", on a tree exactly as it was before, and the
+// message called a missing file "something else". Something other than hunk
+// did remove it, which is worth knowing, so one line says so.
+func TestACreatedFileTheVerifyDeletedIsRolledBack(t *testing.T) {
+	const gone = "new/x.go, which hunk created, was already gone: something else removed it."
+	create := "@@ create new/x.go\none\n\n"
+	for _, c := range []struct {
+		name   string
+		args   []string
+		patch  string
+		exit   int
+		header string // the report's first line, after "hunk: applied "
+		says   string // and a line it must carry, or "" for none
+		after  map[string]string
+	}{
+		{
+			"by default",
+			[]string{"--verify", "rm new/x.go; false"},
+			create,
+			exitVerifyFailed, "1 hunk, verify failed, rolled back 1 file", gone, nil,
+		},
+		{
+			// It used to try the removal and print the syscall's ENOENT.
+			"under --verify-may-format",
+			[]string{"--verify", "rm new/x.go; false", "--verify-may-format"},
+			create,
+			exitVerifyFailed, "1 hunk, verify failed, rolled back 1 file", gone, nil,
+		},
+		{
+			"the directory hunk made went with it",
+			[]string{"--verify", "rm -r new; false"},
+			create,
+			exitVerifyFailed, "1 hunk, verify failed, rolled back 1 file", gone, nil,
+		},
+		{
+			"one of two creates",
+			[]string{"--verify", "rm new/x.go; false"},
+			"@@ create new/x.go\none\n\n@@ create new/y.go\ntwo\n\n",
+			exitVerifyFailed, "2 hunks, verify failed, rolled back 2 files", gone, nil,
+		},
+		{
+			// Gone is not a pass for the rest of the batch. The modify the
+			// verify rewrote is still left alone, and still exit 4.
+			"beside a modify something rewrote",
+			[]string{"--verify", "rm new/x.go; echo changed > keep.txt; false"},
+			create + "@@ file keep.txt\n@@ old\nkeep\n@@ new\nKEEP\n",
+			exitRollbackFailed, "2 hunks, verify failed, rolled back 1 file, 1 file left alone", gone,
+			map[string]string{"keep.txt": "changed\n"},
+		},
+		{
+			// A created file that is there and is not what hunk wrote is the
+			// case exit 4 is for, and it is unchanged.
+			"a created file something rewrote",
+			[]string{"--verify", "echo other > new/x.go; false"},
+			create,
+			exitRollbackFailed, "1 hunk, verify failed, rolled back 0 files, 1 file left alone",
+			"it is now something else",
+			map[string]string{"new": "directory", "new/x.go": "other\n"},
+		},
+		{
+			// Not a file, and not gone either.
+			"a directory where the file was",
+			[]string{"--verify", "rm new/x.go; mkdir new/x.go; false"},
+			create,
+			exitRollbackFailed, "1 hunk, verify failed, rolled back 0 files, 1 file left alone",
+			"it is now something else",
+			map[string]string{"new": "directory", "new/x.go": "directory"},
+		},
+		{
+			// Nothing is rolled back, so nothing is found gone.
+			"--keep-on-fail looks at nothing",
+			[]string{"--verify", "rm new/x.go; false", "--keep-on-fail"},
+			create,
+			exitVerifyFailed, "1 hunk, verify failed, changes left in place for inspection (--keep-on-fail)", "",
+			map[string]string{"new": "directory"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"keep.txt": "keep\n"})
+			before := snapshot(t, root)
+			code, _, errOut := runCLI(t, root, c.args, c.patch)
+			if code != c.exit {
+				t.Fatalf("exit %d, want %d: %s", code, c.exit, errOut)
+			}
+			if head, _, _ := strings.Cut(errOut, "\n"); head != "hunk: applied "+c.header {
+				t.Errorf("header = %q, want %q", head, "hunk: applied "+c.header)
+			}
+			if c.says != "" && !strings.Contains(errOut, c.says) {
+				t.Errorf("the report does not say %q:\n%s", c.says, errOut)
+			}
+			if c.says != gone && strings.Contains(errOut, "already gone") {
+				t.Errorf("said a file was gone that was not:\n%s", errOut)
+			}
+			if strings.Contains(errOut, "could not be removed") {
+				t.Errorf("a missing file is not a failed removal:\n%s", errOut)
+			}
+
+			// The tree: as it was, apart from what the verify left there.
+			// Compared by kind and content, since modes are not this rule's.
+			want := maps.Clone(before)
+			for name, v := range c.after {
+				want[filepath.FromSlash(name)] = v
+			}
+			for _, d := range snapshotDiff(contentsOnly(want), contentsOnly(snapshot(t, root))) {
+				t.Errorf("%s", d)
+			}
+		})
+	}
+
+	t.Run("golden", func(t *testing.T) {
+		_, _, errOut := runCLI(t, cliTree(t, map[string]string{"keep.txt": "keep\n"}),
+			[]string{"--verify", "rm new/x.go; printf 'FAIL\\n'; false"}, create)
+		golden(t, "cli-verify-failed-created-gone", errOut)
+	})
+
+	t.Run("--json carries it beside the count", func(t *testing.T) {
+		_, js, _ := runCLI(t, cliTree(t, map[string]string{"keep.txt": "keep\n"}),
+			[]string{"--json", "--verify", "rm new/x.go; false"}, create)
+		var v struct {
+			Exit   int
+			Verify struct {
+				RolledBack  int               `json:"rolled_back"`
+				Gone        []string          `json:"already_gone"`
+				NotRestored []json.RawMessage `json:"not_restored"`
+			}
+		}
+		must(t, json.Unmarshal([]byte(js), &v))
+		if v.Exit != exitVerifyFailed || v.Verify.RolledBack != 1 || len(v.Verify.NotRestored) != 0 ||
+			len(v.Verify.Gone) != 1 || v.Verify.Gone[0] != "new/x.go" {
+			t.Errorf("%s", js)
+		}
 	})
 }
 

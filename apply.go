@@ -761,7 +761,14 @@ func RunVerify(command, root string, tailLines int) (*Verify, error) {
 // A file the verify deleted counts as differing. Restoring it could not discard
 // anybody's work, but the tool cannot tell a formatter's cleanup from a
 // deliberate removal, which is the whole reason the default refuses.
-func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored) {
+//
+// Except a file this transaction created. Rolling a create back means the path
+// is absent, and it is, so a created file that is gone is rolled back under
+// either flag, decided 2026-09-21. Until then it was exit 4 on a tree exactly as
+// it was before, with a message calling a missing file "something else". gone
+// names those files: something other than hunk removed them, and the report
+// says so without calling the tree inconsistent.
+func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored, gone []string) {
 	for _, f := range x.files {
 		op := f.finalOp()
 		if op == "" {
@@ -772,6 +779,11 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored)
 			// commit made go after every file is back, in removeMadeDirs.
 			if !mayFormat {
 				now, err := x.tree.ReadFile(f.target)
+				if errors.Is(err, fs.ErrNotExist) {
+					gone = append(gone, f.target.Orig())
+					restored++
+					continue
+				}
 				if err != nil || sha256.Sum256(now) != f.wrote {
 					notRestored = append(notRestored, NotRestored{
 						Path: f.target.Orig(),
@@ -784,6 +796,13 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored)
 				}
 			}
 			if err := x.tree.Remove(f.target); err != nil {
+				// Under --verify-may-format nothing looked first, so a file
+				// already gone surfaces here, as ENOENT.
+				if errors.Is(err, fs.ErrNotExist) {
+					gone = append(gone, f.target.Orig())
+					restored++
+					continue
+				}
 				notRestored = append(notRestored, NotRestored{
 					Path: f.target.Orig(), Reason: "It could not be removed: " + err.Error(),
 				})
@@ -848,7 +867,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored)
 		restored++
 	}
 	x.removeMadeDirs()
-	return restored, notRestored
+	return restored, notRestored, gone
 }
 
 // removeMadeDirs removes every directory commit made that is empty now that
