@@ -103,9 +103,51 @@ func TestTheIndentationSentenceSaysWhetherTheShiftIsUniform(t *testing.T) {
 			"line 2 of your old used a tab; the file uses 4 spaces, and no other line differs",
 		},
 		{
-			// Uniform in depth, but a tab per level is not one swap.
+			// A tab per level is not one swap, and until 2026-09-22 this read
+			// as though the nesting differed. It is the same four spaces to a
+			// tab at every depth (tabs-for-spaces-reads-as-a-nesting-change).
 			"nested tabs for nested spaces", "    a\n        b\n", "\ta\n\t\tb",
-			"line 1 of your old used a tab; the file uses 4 spaces, and the other lines do not all differ the same way",
+			"your old indents with tabs and the file with spaces, 4 spaces to a tab",
+		},
+		{
+			"nested spaces for nested tabs", "\tif err != nil {\n\t\treturn err\n\t}\n",
+			"    if err != nil {\n        return err\n    }",
+			"your old indents with spaces and the file with tabs, 4 spaces to a tab",
+		},
+		{"two spaces to a tab", "\ta\n\t\tb\n", "  a\n    b", "your old indents with spaces and the file with tabs, 2 spaces to a tab"},
+		{
+			// A blank line has no depth, even one the file left a tab on.
+			"a blank line in a nested block", "\ta\n\t\n\t\tb\n", "    a\n\n        b",
+			"your old indents with spaces and the file with tabs, 4 spaces to a tab",
+		},
+		{
+			// Lines indented the same on both sides fit any width.
+			"unindented lines between", "func f() {\n\ta\n\t\tb\n}\n", "func f() {\n    a\n        b\n}",
+			"your old indents with spaces and the file with tabs, 4 spaces to a tab",
+		},
+		{
+			// The file aligns with two spaces after its indent. Alignment is
+			// common to both sides and is not part of the swap. At one depth
+			// this is a uniform shift; it takes two depths to reach the rule.
+			"alignment after the indent", "\ta(x,\n\t\t  y)\n", "    a(x,\n          y)",
+			"your old indents with spaces and the file with tabs, 4 spaces to a tab",
+		},
+		{
+			// One differing line is named, not summarized.
+			"one converted line among unindented ones", "func f() {\n\treturn nil\n}\n", "func f() {\n    return nil\n}",
+			"line 2 of your old used 4 spaces; the file uses a tab, and no other line differs",
+		},
+		{
+			"four spaces to a tab on one line and six on another", "\ta\n\t\tb\n", "    a\n            b",
+			"line 1 of your old used 4 spaces; the file uses a tab, and the other lines do not all differ the same way",
+		},
+		{
+			"both ways round", "\ta\n        b\n", "    a\n\t\tb",
+			"line 1 of your old used 4 spaces; the file uses a tab, and the other lines do not all differ the same way",
+		},
+		{
+			"not a whole number of spaces to a tab", "\t\ta\n\t\t\t\tb\n", "   a\n      b",
+			"line 1 of your old used 3 spaces; the file uses 2 tabs, and the other lines do not all differ the same way",
 		},
 		{
 			"two lines shifted and one not", "a\n  b\n  c\n", "a\n    b\n    c",
@@ -173,6 +215,12 @@ func TestDiagnoseGoldens(t *testing.T) {
 			name: "indentation-tab-vs-spaces",
 			file: "func f() {\n    return nil\n}\n",
 			old:  "func f() {\n\treturn nil\n}",
+		},
+		{
+			// The README's block: spaces against tabs, a level at a time.
+			name: "indentation-spaces-for-tabs",
+			file: "\tif err != nil {\n\t\treturn fmt.Errorf(\"listen: %w\", err)\n\t}\n",
+			old:  "    if err != nil {\n        return fmt.Errorf(\"listen: %w\", err)\n    }",
 		},
 		{
 			// The field's shape: a block copied four spaces deeper than it sits.
