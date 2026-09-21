@@ -116,11 +116,12 @@ type FileResult struct {
 	Added   int
 	Removed int
 
-	// SeamAdded means append or prepend inserted a newline the patch did not
-	// contain at the seam, where the payload meets text already there (§3.3).
-	// Reported rather than done quietly, which is the whole reason normalizing
-	// the seam was acceptable. The newline append gives the end of its payload
-	// is not a seam, and is not counted here.
+	// SeamAdded means append ended the file's last line before appending,
+	// because it had no newline: a byte the patch did not contain, which
+	// depends on the file rather than the patch (§3.3). Reported rather than
+	// done quietly, which is the whole reason normalizing the seam was
+	// acceptable. The newline append or prepend gives its own payload is
+	// predictable from the patch, and is not counted here.
 	SeamAdded bool
 
 	// NoFinalNewline means the batch created this file, overwrite included,
@@ -204,9 +205,9 @@ type file struct {
 	// cannot exist, and no hunk can make it.
 	inFile, inFileName string
 
-	// seamAdded records that append or prepend inserted a newline the patch did
-	// not contain at a seam (§3.3). Reported rather than done quietly, which is
-	// the whole reason normalizing the seam was acceptable.
+	// seamAdded records that append ended the file's last line first (§3.3).
+	// Reported rather than done quietly, which is the whole reason normalizing
+	// the seam was acceptable.
 	seamAdded bool
 
 	failedAt int // the first hunk against this file that did not match
@@ -633,11 +634,13 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 	case OpPrepend:
 		// The mirror: for prepend the text on the left of the seam is the
 		// payload, and §3.3 never gives a payload a trailing newline, so
-		// without this it would weld by default.
+		// without this it would weld by default. Not reported, since
+		// 2026-09-22: the newline is the payload's own and predictable from
+		// the patch, as the one append gives the end of its payload is, and
+		// reporting it put "(added a final newline)" on every prepend.
 		body := x.convert(h.Body, f.eol)
 		if len(body) > 0 && !bytes.HasSuffix(body, lf) {
 			body = append(body, eol...)
-			f.seamAdded = true
 		}
 		f.cur = append(append([]byte{}, body...), f.cur...)
 		f.added += lineCount(body)
