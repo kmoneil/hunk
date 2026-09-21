@@ -389,6 +389,8 @@ var reportGoldens = map[string]int{
 	"cli-all-three-ops":               0,
 	"cli-seam-added":                  0,
 	"cli-one-replacement":             0,
+	"cli-no-final-newline":            0,
+	"cli-no-final-newline-json":       0,
 	"cli-spec-example":                0,
 	"cli-spec-example-full":           0,
 	"report-validation":               2,

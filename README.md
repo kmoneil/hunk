@@ -133,7 +133,12 @@ it.
 Three rules worth knowing before the first patch:
 
 1. **A payload never gains a trailing newline.** To match text that ends in a
-   newline, leave a blank line before the next directive.
+   newline, leave a blank line before the next directive. `@@ append` and
+   `@@ prepend` add whole lines, so they need no blank line: a payload with no
+   trailing newline gets one when it is written, and `@@ append` first ends the
+   file's last line if it has none. `@@ create` writes its payload exactly, so
+   leave the blank line if the new file should end in a newline. The report
+   says `(no final newline)` when it does not.
 2. **Hunks apply in order, against the file as earlier hunks left it.** So a
    later hunk can match text an earlier one created. A hunk that fails stops the
    later hunks against *that file*, which are reported as skipped rather than
