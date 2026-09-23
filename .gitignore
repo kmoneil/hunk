@@ -12,7 +12,9 @@ docs/
 # The benchmark's staging directory (scripts/bench.sh).
 _bench/
 
-# Build output.
+# Build output: make build writes bin/hunk, and a bare `go build` in the root
+# still writes ./hunk.
+/bin/
 /hunk
 
 # Skill eval runs: 36 fixture repos and their transcripts, regenerated per
