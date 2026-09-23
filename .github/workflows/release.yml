@@ -90,7 +90,26 @@ jobs:
               go build -trimpath -ldflags "-X main.version=$stamp" \
                 -o "dist/hunk-$os-$arch$ext" .
           done
-          cd dist && sha256sum hunk-* > SHA256SUMS && cat SHA256SUMS
+      # The agent skill, as `make install` copies it: SKILL.md and
+      # references/, and not evals/, which is development material. It is
+      # published so that Homebrew can install it from the same release as the
+      # binary, which keeps the skill a user has describing the binary they
+      # have. One directory at the top, so extracting it into ~/.claude/skills
+      # is a whole install by hand as well.
+      #
+      # Reproducible: sorted, owned by nobody in particular, dated to the
+      # commit, and gzip told to record no name or time, so the tag alone
+      # decides the digest.
+      - name: package the skill
+        run: |
+          mtime=$(git log -1 --format=%ct)
+          (cd skills && tar --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime="@$mtime" -cf - hunk/SKILL.md hunk/references/*.md) \
+            | gzip -n > dist/hunk-skill.tar.gz
+          tar -tvzf dist/hunk-skill.tar.gz
+      # After the skill, so the manifest names every asset the release carries.
+      - name: checksums
+        run: cd dist && sha256sum hunk-* > SHA256SUMS && cat SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binaries
@@ -129,3 +148,51 @@ jobs:
           files: |
             dist/hunk-*
             dist/SHA256SUMS
+
+  # The Homebrew formula in kmoneil/homebrew-tap names four of these binaries
+  # and the skill, each with its digest, and moving them to a new release is
+  # the tap's job: its bump-hunk workflow rewrites the formula, installs and
+  # tests it on macOS, and only then lands it. This tells it there is a release
+  # to move to.
+  #
+  # A separate job rather than a step on publish, so its failure says what it
+  # means. By the time it runs the release exists and cannot be withdrawn, so a
+  # red here is never "the release is bad": it is "the release is out and brew
+  # still installs the previous one".
+  #
+  # Not for a prerelease, which publish does not make the latest release
+  # either. The tap refuses a tag that is not vX.Y.Z, and a formula should not
+  # move to a version the release page tells nobody to use.
+  bump-the-tap:
+    name: tell the tap
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    # Nothing here uses this repository's token, so it gets no permissions at
+    # all. The one credential is the tap's, below.
+    permissions: {}
+    steps:
+      - name: dispatch to kmoneil/homebrew-tap
+        env:
+          # Not github.token: that is scoped to this repository and cannot
+          # dispatch to another. A fine-grained token limited to the tap, with
+          # Contents: read and write, is the smallest thing that can.
+          GH_TOKEN: ${{ secrets.TAP_DISPATCH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "TAP_DISPATCH_TOKEN is not set, so the formula was not bumped." >&2
+            echo "brew install kmoneil/tap/hunk still fetches the previous release." >&2
+            echo >&2
+            echo "To fix it for good: create a fine-grained token limited to" >&2
+            echo "kmoneil/homebrew-tap with Contents: read and write, and add it" >&2
+            echo "as the TAP_DISPATCH_TOKEN secret on this repository." >&2
+            echo >&2
+            echo "To fix it for ${TAG} now:" >&2
+            echo "  gh workflow run bump-hunk.yml --repo kmoneil/homebrew-tap -f tag=${TAG}" >&2
+            exit 1
+          fi
+          gh api repos/kmoneil/homebrew-tap/dispatches \
+            -f event_type=hunk-released \
+            -f "client_payload[tag]=${TAG}"
+          echo "asked the tap to bump to ${TAG}"
