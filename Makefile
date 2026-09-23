@@ -1,7 +1,8 @@
 # hunk. Standard library only, no network, no code generation.
 
-GO  ?= go
-BIN := hunk
+GO     ?= go
+BINDIR := bin
+BIN    := $(BINDIR)/hunk
 
 # Every developer tool is pinned here and nowhere else, and CI reads these
 # values with `make -s print-GOFUMPT_VERSION` rather than repeating them. A
@@ -174,4 +175,4 @@ print-%:
 	@echo "$($*)"
 
 clean:
-	rm -f $(BIN)
+	rm -rf $(BINDIR)

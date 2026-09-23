@@ -252,7 +252,7 @@ either stops being true.
 ```sh
 make tools    # the pinned gofumpt, golangci-lint and govulncheck
 make check    # gofumpt, vet, golangci-lint, the dependency and network gates, tests
-make build    # ./hunk
+make build    # bin/hunk
 make hooks    # enable the commit-msg and pre-commit hooks, once per clone
 ```
 
