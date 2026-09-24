@@ -1,0 +1,105 @@
+name: install
+
+# The README's Windows install, run exactly as it is written. Nobody who works
+# on hunk runs PowerShell, so without this those steps would be a guess that
+# reads well. They are read out of README.md rather than copied in here, so the
+# two cannot drift: a change to the README is tested by the README.
+#
+# The steps install from the latest release, so this also answers whether a
+# user following them today gets a working hunk. It runs when the README or
+# this file changes, and after every run of the release workflow, which is the
+# only other thing that changes what "latest" serves.
+
+on:
+  pull_request:
+    paths: [README.md, .github/workflows/install.yml]
+  push:
+    branches: [main]
+    paths: [README.md, .github/workflows/install.yml]
+  # Not `release: published`: release.yml publishes with the workflow's own
+  # token, and an event that token causes starts no workflow.
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: windows (${{ matrix.shell }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows PowerShell 5.1 is what every Windows machine has, and
+        # PowerShell 7 is what most people who installed one have.
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Exactly one powershell block in the Windows section, run as written.
+      # A second block would be a step this does not run, so it is refused.
+      - name: the README's steps, as written
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $readme = Get-Content README.md -Raw
+          $section = [regex]::Match($readme, '(?ms)^### Windows\r?\n(.*?)^#{2,3} ').Groups[1].Value
+          $blocks = [regex]::Matches($section, '(?s)```powershell\r?\n(.*?)```')
+          if ($blocks.Count -ne 1) {
+            throw "the Windows section has $($blocks.Count) powershell blocks, and this runs exactly one"
+          }
+          Invoke-Expression $blocks[0].Groups[1].Value
+
+      - name: what it installed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A new terminal's PATH, read back from where the steps saved it: a
+          # step inherits the runner's environment and never rereads it.
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+            [Environment]::GetEnvironmentVariable('Path', 'User')
+          $hunk = (Get-Command hunk).Source
+          $latest = gh release view --repo kmoneil/hunk --json tagName --jq .tagName
+          $version = & $hunk --version
+          if ($version -ne "hunk $latest") {
+            throw "hunk --version said '$version', and the latest release is $latest"
+          }
+          foreach ($file in 'SKILL.md', 'references\exit-codes.md') {
+            $skill = Join-Path $env:USERPROFILE ".claude\skills\hunk\$file"
+            if (-not (Test-Path $skill)) { throw "the skill has no $skill" }
+          }
+          "installed $version from $hunk, with the skill"
+
+      # The README says --verify refuses and writes nothing without sh, and
+      # runs with Git for Windows' sh. Both, on the binary the steps installed.
+      - name: what the README says about sh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+            [Environment]::GetEnvironmentVariable('Path', 'User')
+          $hunk = (Get-Command hunk).Source
+          Set-Location $env:RUNNER_TEMP
+          $file = Join-Path $env:RUNNER_TEMP 'greeting.txt'
+          [IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'patch.txt'), "@@ file greeting.txt`n@@ old`nhello`n@@ new`ngoodbye`n")
+          [IO.File]::WriteAllText($file, "hello`n")
+
+          $everything = $env:Path
+          $env:Path = "$env:SystemRoot\System32"
+          $ErrorActionPreference = 'Continue'
+          & $hunk --verify 'exit 0' -f patch.txt
+          $code = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($code -ne 5) { throw "with no sh, --verify exited $code rather than 5" }
+          if ([IO.File]::ReadAllText($file) -ne "hello`n") { throw 'with no sh, --verify wrote the file anyway' }
+
+          $env:Path = "$env:ProgramFiles\Git\bin;$everything"
+          & $hunk --verify 'exit 0' -f patch.txt
+          if ($LASTEXITCODE -ne 0) { throw "with Git for Windows' sh, --verify exited $LASTEXITCODE" }
+          if ([IO.File]::ReadAllText($file) -ne "goodbye`n") { throw "with Git for Windows' sh, the edit did not land" }
+          'without sh: refused, nothing written; with Git for Windows: applied'
