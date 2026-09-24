@@ -1,9 +1,10 @@
 name: install
 
-# The README's Windows install, run exactly as it is written. Nobody who works
-# on hunk runs PowerShell, so without this those steps would be a guess that
-# reads well. They are read out of README.md rather than copied in here, so the
-# two cannot drift: a change to the README is tested by the README.
+# The README's Windows install, both ways, run exactly as it is written. Nobody
+# who works on hunk runs PowerShell or Scoop, so without this those steps would
+# be a guess that reads well. They are read out of README.md rather than copied
+# in here, so the two cannot drift: a change to the README is tested by the
+# README.
 #
 # The steps install from the latest release, so this also answers whether a
 # user following them today gets a working hunk. It runs when the README or
@@ -42,16 +43,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Exactly one powershell block in the Windows section, run as written.
-      # A second block would be a step this does not run, so it is refused.
+      # Exactly one powershell block under "Without Scoop", run as written. A
+      # second block would be a step this does not run, so it is refused.
       - name: the README's steps, as written
         run: |
           $ErrorActionPreference = 'Stop'
           $readme = Get-Content README.md -Raw
-          $section = [regex]::Match($readme, '(?ms)^### Windows\r?\n(.*?)^#{2,3} ').Groups[1].Value
+          $section = [regex]::Match($readme, '(?ms)^#### Without Scoop\r?\n(.*?)(?=^#{2,4} |\z)').Groups[1].Value
           $blocks = [regex]::Matches($section, '(?s)```powershell\r?\n(.*?)```')
           if ($blocks.Count -ne 1) {
-            throw "the Windows section has $($blocks.Count) powershell blocks, and this runs exactly one"
+            throw "'Without Scoop' has $($blocks.Count) powershell blocks, and this runs exactly one"
           }
           Invoke-Expression $blocks[0].Groups[1].Value
 
@@ -103,3 +104,51 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "with Git for Windows' sh, --verify exited $LASTEXITCODE" }
           if ([IO.File]::ReadAllText($file) -ne "goodbye`n") { throw "with Git for Windows' sh, the edit did not land" }
           'without sh: refused, nothing written; with Git for Windows: applied'
+
+  # The README's Scoop lines, with real Scoop. The version is checked against
+  # the bucket's own manifest rather than the latest release: the bucket moves
+  # a few minutes after a release, by its own verified bump, and a check run
+  # in between would be reporting that gap rather than a broken install.
+  scoop:
+    name: windows (scoop)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: install Scoop
+        run: |
+          # The runners are administrators, and Scoop's installer refuses one
+          # unless told it may.
+          Invoke-Expression "& {$(Invoke-RestMethod https://get.scoop.sh)} -RunAsAdmin"
+          Join-Path $env:USERPROFILE 'scoop\shims' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: the README's Scoop steps, as written
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $readme = Get-Content README.md -Raw
+          $section = [regex]::Match($readme, '(?ms)^#### With Scoop\r?\n(.*?)(?=^#{2,4} |\z)').Groups[1].Value
+          $blocks = [regex]::Matches($section, '(?s)```powershell\r?\n(.*?)```')
+          if ($blocks.Count -ne 1) {
+            throw "'With Scoop' has $($blocks.Count) powershell blocks, and this runs exactly one"
+          }
+          Invoke-Expression $blocks[0].Groups[1].Value
+
+      - name: what it installed
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = Get-Content (Join-Path $env:USERPROFILE 'scoop\buckets\kmoneil\bucket\hunk.json') -Raw | ConvertFrom-Json
+          $version = hunk --version
+          if ($version -ne "hunk v$($manifest.version)") {
+            throw "hunk --version said '$version', and the bucket's manifest is at $($manifest.version)"
+          }
+          foreach ($file in 'SKILL.md', 'references\exit-codes.md') {
+            $skill = Join-Path $env:USERPROFILE ".claude\skills\hunk\$file"
+            if (-not (Test-Path $skill)) { throw "the skill has no $skill" }
+          }
+          if (Test-Path (Join-Path $env:USERPROFILE 'scoop\apps\7zip')) {
+            throw 'Scoop installed 7-Zip to install hunk'
+          }
+          "installed $version with Scoop, with the skill, and no 7-Zip"
