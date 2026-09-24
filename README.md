@@ -248,6 +248,18 @@ ln -s "$(brew --prefix)/opt/hunk/share/hunk/skill" ~/.claude/skills/hunk
 
 ### Windows
 
+#### With Scoop
+
+```powershell
+scoop bucket add kmoneil https://github.com/kmoneil/scoop-bucket
+scoop install kmoneil/hunk
+```
+
+That installs the skill into `~\.claude\skills\hunk` as well, and
+`scoop update hunk` keeps both at the same version.
+
+#### Without Scoop
+
 In PowerShell. This downloads the binary for your machine and the skill from
 the latest release, checks both against the release's `SHA256SUMS` and installs
 nothing unless both match, then puts `hunk.exe` on your `PATH`:
@@ -291,8 +303,9 @@ the same steps again upgrades both.
 
 `--verify` and `--try` run their command with `sh`, which Windows does not
 have: without one, those two flags refuse and write nothing, and every other
-edit works. [Git for Windows](https://git-scm.com/downloads/win) brings `sh`
-with Git Bash. Claude Code runs its shell commands in Git Bash when Git for
+edit works. `scoop install git` puts one on your `PATH`, and
+[Git for Windows](https://git-scm.com/downloads/win) brings one with Git Bash.
+Claude Code runs its shell commands in Git Bash when Git for
 Windows is installed and in PowerShell when it is not, so install it before
 handing hunk to an agent; the skill's examples are written for that shell.
 

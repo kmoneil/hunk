@@ -196,3 +196,33 @@ jobs:
             -f event_type=hunk-released \
             -f "client_payload[tag]=${TAG}"
           echo "asked the tap to bump to ${TAG}"
+
+  # The same for the Scoop bucket: kmoneil/scoop-bucket's bump-hunk workflow
+  # rewrites bucket/hunk.json, installs it with Scoop on Windows, and only then
+  # lands it. Its own job, so that a red says which of the two was not told.
+  bump-the-bucket:
+    name: tell the bucket
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: dispatch to kmoneil/scoop-bucket
+        env:
+          # The tap's token, given the bucket as well: a fine-grained token
+          # limited to the two repositories, with Contents: read and write.
+          GH_TOKEN: ${{ secrets.TAP_DISPATCH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "TAP_DISPATCH_TOKEN is not set, so the Scoop manifest was not bumped." >&2
+            echo "scoop install kmoneil/hunk still fetches the previous release." >&2
+            echo >&2
+            echo "To fix it for ${TAG} now:" >&2
+            echo "  gh workflow run bump-hunk.yml --repo kmoneil/scoop-bucket -f tag=${TAG}" >&2
+            exit 1
+          fi
+          gh api repos/kmoneil/scoop-bucket/dispatches \
+            -f event_type=hunk-released \
+            -f "client_payload[tag]=${TAG}"
+          echo "asked the bucket to bump to ${TAG}"
