@@ -50,7 +50,7 @@ linters:
       - _reports
       # Eval fixtures include deliberately unformatted and deliberately broken
       # Go, because one eval case is about a verify command that reformats.
-      - skills
+      - .agents
 
 issues:
   max-issues-per-linter: 0

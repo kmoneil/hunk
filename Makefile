@@ -30,14 +30,16 @@ build:
 	$(GO) build -o $(BIN) .
 
 fmt:
-	gofumpt -w $$(git ls-files '*.go' | grep -v '^skills/')
+	gofumpt -w $$(git ls-files '*.go' | grep -v '^\.agents/')
 	cd scripts/corpus && gofumpt -w .
 
-# The eval fixtures under skills/*-workspace/ include deliberately unformatted
-# Go, because one eval case is about a verify command that reformats. They are
-# not this module's source and gofmt has no business walking them.
+# The eval fixtures under .agents/skills/*-workspace/ include deliberately
+# unformatted Go, because one eval case is about a verify command that
+# reformats. They are not this module's source and gofmt has no business
+# walking them. gofmt skips a dot-directory on its own; the grep stays for the
+# day it does not.
 fmt-check:
-	@out=$$(gofumpt -l . 2>/dev/null | grep -v '^skills/[^/]*-workspace/' || true); \
+	@out=$$(gofumpt -l . 2>/dev/null | grep -v '^\.agents/skills/[^/]*-workspace/' || true); \
 	if [ -n "$$out" ]; then \
 		echo "not gofumpt'd:"; echo "$$out"; echo "run: make fmt"; exit 1; \
 	fi
@@ -112,20 +114,20 @@ deps-gate:
 
 check: fmt-check vet lint gates test corpus-test
 
-# Grade the skill eval runs in skills/hunk-workspace/. Does not launch the runs
-# (those are agent invocations); it scores the trees they left behind.
+# Grade the skill eval runs in .agents/skills/hunk-workspace/. Does not launch
+# the runs (those are agent invocations); it scores the trees they left behind.
 #
-#   make skill-grade WORKSPACE=skills/hunk-workspace/iteration-4
+#   make skill-grade WORKSPACE=.agents/skills/hunk-workspace/iteration-4
 #
 # Defaults to the iteration in grade.py. The grader's own tests run first: it
 # has been wrong four times and each fix moved a published number, so "check
 # the instrument before believing the measurement" gets a mechanism rather than
 # a sentence in a README.
 skill-grade: skill-grade-test
-	python3 skills/hunk/evals/grade.py $(WORKSPACE)
+	python3 .agents/skills/hunk/evals/grade.py $(WORKSPACE)
 
 skill-grade-test:
-	python3 skills/hunk/evals/grade_test.py
+	python3 .agents/skills/hunk/evals/grade_test.py
 
 # scripts/corpus is its own module: it is not part of the binary and must not
 # appear in hunk's coverage, its dependency gate, or its import graph. Its tests
@@ -147,14 +149,20 @@ corpus:
 # The skill ships SKILL.md and references/ only. evals/ is development
 # material: a grader and its cases, of no use to a session that is trying to
 # edit a file.
-SKILLDIR ?= $(HOME)/.claude/skills/hunk
+#
+# Two destinations, one per convention: ~/.agents/skills is the unified folder
+# most agents read, and ~/.claude/skills is the one folder Claude Code reads.
+# Identical copies, so every tool finds the same skill.
+SKILLDIRS ?= $(HOME)/.claude/skills/hunk $(HOME)/.agents/skills/hunk
 install:
 	$(GO) install .
-	@mkdir -p $(SKILLDIR)/references
-	@cp skills/hunk/SKILL.md $(SKILLDIR)/
-	@cp skills/hunk/references/*.md $(SKILLDIR)/references/
 	@echo "binary:  $$($(GO) env GOPATH)/bin/hunk"
-	@echo "skill:   $(SKILLDIR)/SKILL.md"
+	@for dir in $(SKILLDIRS); do \
+		mkdir -p $$dir/references && \
+		cp .agents/skills/hunk/SKILL.md $$dir/ && \
+		cp .agents/skills/hunk/references/*.md $$dir/references/ && \
+		echo "skill:   $$dir/SKILL.md" || exit 1; \
+	done
 
 # Once per clone. Enables both hooks: commit-msg refuses tool attribution, and
 # pre-commit runs the gate cheapest-first.

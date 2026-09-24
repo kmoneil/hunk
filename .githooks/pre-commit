@@ -11,7 +11,7 @@
 set -e
 
 echo "pre-commit: gofumpt"
-unformatted=$(gofumpt -l . 2>/dev/null | grep -v '^skills/[^/]*-workspace/' || true)
+unformatted=$(gofumpt -l . 2>/dev/null | grep -v '^\.agents/skills/[^/]*-workspace/' || true)
 if [ -n "$unformatted" ]; then
 	echo "not formatted:"
 	printf '%s\n' "$unformatted" | sed 's/^/  /'

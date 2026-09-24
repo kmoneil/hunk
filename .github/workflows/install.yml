@@ -72,8 +72,10 @@ jobs:
             throw "hunk --version said '$version', and the latest release is $latest"
           }
           foreach ($file in 'SKILL.md', 'references\exit-codes.md') {
-            $skill = Join-Path $env:USERPROFILE ".claude\skills\hunk\$file"
-            if (-not (Test-Path $skill)) { throw "the skill has no $skill" }
+            foreach ($base in '.claude\skills\hunk', '.agents\skills\hunk') {
+              $skill = Join-Path $env:USERPROFILE "$base\$file"
+              if (-not (Test-Path $skill)) { throw "the skill has no $skill" }
+            }
           }
           "installed $version from $hunk, with the skill"
 
@@ -145,8 +147,10 @@ jobs:
             throw "hunk --version said '$version', and the bucket's manifest is at $($manifest.version)"
           }
           foreach ($file in 'SKILL.md', 'references\exit-codes.md') {
-            $skill = Join-Path $env:USERPROFILE ".claude\skills\hunk\$file"
-            if (-not (Test-Path $skill)) { throw "the skill has no $skill" }
+            foreach ($base in '.claude\skills\hunk', '.agents\skills\hunk') {
+              $skill = Join-Path $env:USERPROFILE "$base\$file"
+              if (-not (Test-Path $skill)) { throw "the skill has no $skill" }
+            }
           }
           if (Test-Path (Join-Path $env:USERPROFILE 'scoop\apps\7zip')) {
             throw 'Scoop installed 7-Zip to install hunk'
