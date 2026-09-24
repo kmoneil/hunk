@@ -224,19 +224,92 @@ is why neither is worth the complexity of closing.
 
 ## Install
 
+Each way below installs the `hunk` binary and its agent skill, which teaches an
+agent when to reach for the tool and, more importantly, what to do when it
+refuses. Claude Code finds the skill in `~/.claude/skills/hunk`.
+
+### macOS and Linux, with Homebrew
+
+```sh
+brew install kmoneil/tap/hunk
+```
+
+The full name matters: Homebrew's own `hunk` is an unrelated tool, a diff
+viewer, and `brew install hunk` installs that one instead.
+
+The formula installs the skill from the same release as the binary. Homebrew
+does not write into your home directory, so link the skill in once, and every
+`brew upgrade` moves it along with the binary:
+
+```sh
+mkdir -p ~/.claude/skills
+ln -s "$(brew --prefix)/opt/hunk/share/hunk/skill" ~/.claude/skills/hunk
+```
+
+### Windows
+
+In PowerShell. This downloads the binary for your machine and the skill from
+the latest release, checks both against the release's `SHA256SUMS` and installs
+nothing unless both match, then puts `hunk.exe` on your `PATH`:
+
+```powershell
+# Windows PowerShell 5.1 does not always offer TLS 1.2, which GitHub requires.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$ProgressPreference = 'SilentlyContinue'
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+$from = 'https://github.com/kmoneil/hunk/releases/latest/download'
+$get = Join-Path $env:TEMP 'hunk-install'
+New-Item -ItemType Directory -Force -Path $get | Out-Null
+foreach ($file in "hunk-windows-$arch.exe", 'hunk-skill.tar.gz', 'SHA256SUMS') {
+    Invoke-WebRequest "$from/$file" -OutFile (Join-Path $get $file) -UseBasicParsing
+}
+
+$want = @{}
+Get-Content (Join-Path $get 'SHA256SUMS') | ForEach-Object {
+    $digest, $name = $_ -split '\s+', 2
+    $want[$name] = $digest
+}
+foreach ($file in "hunk-windows-$arch.exe", 'hunk-skill.tar.gz') {
+    if ((Get-FileHash (Join-Path $get $file)).Hash -ne $want[$file]) {
+        throw "$file does not match SHA256SUMS; nothing was installed"
+    }
+}
+
+$dir = Join-Path $env:LOCALAPPDATA 'Programs\hunk'
+$skills = Join-Path $env:USERPROFILE '.claude\skills'
+New-Item -ItemType Directory -Force -Path $dir, $skills | Out-Null
+Copy-Item (Join-Path $get "hunk-windows-$arch.exe") (Join-Path $dir 'hunk.exe') -Force
+& "$env:SystemRoot\System32\tar.exe" -xzf (Join-Path $get 'hunk-skill.tar.gz') -C $skills
+$path = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (($path -split ';') -notcontains $dir) {
+    [Environment]::SetEnvironmentVariable('Path', "$path;$dir", 'User')
+}
+```
+
+Open a new terminal, and `hunk --version` says which release you have. Running
+the same steps again upgrades both.
+
+`--verify` and `--try` run their command with `sh`, which Windows does not
+have: without one, those two flags refuse and write nothing, and every other
+edit works. [Git for Windows](https://git-scm.com/downloads/win) brings `sh`
+with Git Bash. Claude Code runs its shell commands in Git Bash when Git for
+Windows is installed and in PowerShell when it is not, so install it before
+handing hunk to an agent; the skill's examples are written for that shell.
+
+### Anywhere, with Go
+
 ```sh
 go install github.com/kmoneil/hunk@latest
 ```
 
-Or from a clone, which also installs the agent skill:
+That installs the binary only. The skill is `hunk-skill.tar.gz` in every
+[release](https://github.com/kmoneil/hunk/releases/latest), one `hunk/`
+directory to extract into `~/.claude/skills`. Or, from a clone on macOS or
+Linux, `make install` does both:
 
 ```sh
 git clone https://github.com/kmoneil/hunk && cd hunk && make install
 ```
-
-That puts the binary on your `PATH` and the skill in `~/.claude/skills/hunk`,
-which teaches an agent when to reach for the tool and, more importantly, what to
-do when it refuses.
 
 `hunk --version` says which one you have: the release when you installed one,
 and a pseudo-version naming the commit when you built from a clone.
