@@ -558,7 +558,7 @@ func TestTheSkillNamesEveryFlagOrSaysWhyNot(t *testing.T) {
 	if len(listed) == 0 {
 		t.Fatal("read no flags from --help; every check below would pass")
 	}
-	b, err := os.ReadFile(filepath.Join("skills", "hunk", "SKILL.md"))
+	b, err := os.ReadFile(filepath.Join(".agents", "skills", "hunk", "SKILL.md"))
 	if err != nil {
 		t.Fatalf("read the skill: %v", err)
 	}
@@ -721,7 +721,7 @@ func TestCLIEdges(t *testing.T) {
 // format`'s example is pinned by TestFormatExampleParses; this pins the
 // skill's, end to end through the binary rather than only through the parser.
 func TestSkillExampleApplies(t *testing.T) {
-	skill, err := os.ReadFile(filepath.Join("skills", "hunk", "SKILL.md"))
+	skill, err := os.ReadFile(filepath.Join(".agents", "skills", "hunk", "SKILL.md"))
 	if err != nil {
 		t.Skip("no skill shipped:", err)
 	}
@@ -766,7 +766,7 @@ func TestSkillExampleApplies(t *testing.T) {
 // under "computed". Its heredocs are run by sh as the skill prints them; only
 // the pipe into hunk is replaced by an in-process run.
 func TestSkillLoopExampleApplies(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("skills", "hunk", "SKILL.md"))
+	b, err := os.ReadFile(filepath.Join(".agents", "skills", "hunk", "SKILL.md"))
 	if err != nil {
 		t.Fatalf("read the skill: %v", err)
 	}
@@ -847,7 +847,7 @@ func TestSkillLoopExampleApplies(t *testing.T) {
 // here is the skill's own, taken from its text, so the section cannot change
 // its command without this noticing.
 func TestSkillPartsLayoutIsOneBatch(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("skills", "hunk", "SKILL.md"))
+	b, err := os.ReadFile(filepath.Join(".agents", "skills", "hunk", "SKILL.md"))
 	if err != nil {
 		t.Skip("no skill shipped:", err)
 	}

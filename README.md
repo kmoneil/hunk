@@ -226,7 +226,12 @@ is why neither is worth the complexity of closing.
 
 Each way below installs the `hunk` binary and its agent skill, which teaches an
 agent when to reach for the tool and, more importantly, what to do when it
-refuses. Claude Code finds the skill in `~/.claude/skills/hunk`.
+refuses. The skill is installed twice, one copy per convention:
+`~/.agents/skills/hunk` is the unified folder most agents discover skills in
+(Codex, Cursor, Copilot, Gemini CLI and more), and `~/.claude/skills/hunk` is
+the one folder Claude Code reads: as of 2.1.282 it does not discover skills in
+`.agents/`, and its support for the unified folder is an explicit import
+command. Identical copies, so every tool finds the same skill.
 
 ### macOS and Linux, with Homebrew
 
@@ -238,12 +243,13 @@ The full name matters: Homebrew's own `hunk` is an unrelated tool, a diff
 viewer, and `brew install hunk` installs that one instead.
 
 The formula installs the skill from the same release as the binary. Homebrew
-does not write into your home directory, so link the skill in once, and every
-`brew upgrade` moves it along with the binary:
+does not write into your home directory, so link the skill in once, one link
+per convention, and every `brew upgrade` moves both along with the binary:
 
 ```sh
-mkdir -p ~/.claude/skills
+mkdir -p ~/.claude/skills ~/.agents/skills
 ln -s "$(brew --prefix)/opt/hunk/share/hunk/skill" ~/.claude/skills/hunk
+ln -s "$(brew --prefix)/opt/hunk/share/hunk/skill" ~/.agents/skills/hunk
 ```
 
 ### Windows
@@ -255,8 +261,9 @@ scoop bucket add kmoneil https://github.com/kmoneil/scoop-bucket
 scoop install kmoneil/hunk
 ```
 
-That installs the skill into `~\.claude\skills\hunk` as well, and
-`scoop update hunk` keeps both at the same version.
+That installs the skill into `~\.claude\skills\hunk` and
+`~\.agents\skills\hunk` as well, and `scoop update hunk` keeps all of it at
+the same version.
 
 #### Without Scoop
 
@@ -289,9 +296,11 @@ foreach ($file in "hunk-windows-$arch.exe", 'hunk-skill.tar.gz') {
 
 $dir = Join-Path $env:LOCALAPPDATA 'Programs\hunk'
 $skills = Join-Path $env:USERPROFILE '.claude\skills'
-New-Item -ItemType Directory -Force -Path $dir, $skills | Out-Null
+$agents = Join-Path $env:USERPROFILE '.agents\skills'
+New-Item -ItemType Directory -Force -Path $dir, $skills, $agents | Out-Null
 Copy-Item (Join-Path $get "hunk-windows-$arch.exe") (Join-Path $dir 'hunk.exe') -Force
 & "$env:SystemRoot\System32\tar.exe" -xzf (Join-Path $get 'hunk-skill.tar.gz') -C $skills
+& "$env:SystemRoot\System32\tar.exe" -xzf (Join-Path $get 'hunk-skill.tar.gz') -C $agents
 $path = [Environment]::GetEnvironmentVariable('Path', 'User')
 if (($path -split ';') -notcontains $dir) {
     [Environment]::SetEnvironmentVariable('Path', "$path;$dir", 'User')
@@ -317,12 +326,16 @@ go install github.com/kmoneil/hunk@latest
 
 That installs the binary only. The skill is `hunk-skill.tar.gz` in every
 [release](https://github.com/kmoneil/hunk/releases/latest), one `hunk/`
-directory to extract into `~/.claude/skills`. Or, from a clone on macOS or
-Linux, `make install` does both:
+directory to extract into `~/.claude/skills`, `~/.agents/skills`, or both.
+Or, from a clone on macOS or Linux, `make install` does both:
 
 ```sh
 git clone https://github.com/kmoneil/hunk && cd hunk && make install
 ```
+
+A clone carries the skill's source at `.agents/skills/hunk`, the unified
+project folder, so an agent that reads it finds the skill in the tree without
+any install.
 
 `hunk --version` says which one you have: the release when you installed one,
 and a pseudo-version naming the commit when you built from a clone.

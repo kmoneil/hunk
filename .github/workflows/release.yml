@@ -95,7 +95,7 @@ jobs:
       # published so that Homebrew can install it from the same release as the
       # binary, which keeps the skill a user has describing the binary they
       # have. One directory at the top, so extracting it into ~/.claude/skills
-      # is a whole install by hand as well.
+      # or ~/.agents/skills is a whole install by hand as well.
       #
       # Reproducible: sorted, owned by nobody in particular, dated to the
       # commit, and gzip told to record no name or time, so the tag alone
@@ -103,7 +103,7 @@ jobs:
       - name: package the skill
         run: |
           mtime=$(git log -1 --format=%ct)
-          (cd skills && tar --sort=name --owner=0 --group=0 --numeric-owner \
+          (cd .agents/skills && tar --sort=name --owner=0 --group=0 --numeric-owner \
             --mtime="@$mtime" -cf - hunk/SKILL.md hunk/references/*.md) \
             | gzip -n > dist/hunk-skill.tar.gz
           tar -tvzf dist/hunk-skill.tar.gz

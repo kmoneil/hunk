@@ -344,7 +344,7 @@ func TestParserHasNoFileAccess(t *testing.T) {
 // a patch, every example in the skill is a heredoc whose own terminator does
 // that job, and leaving it undocumented is a decision rather than an omission.
 func TestTheSkillDocumentsEveryDirective(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("skills", "hunk", "SKILL.md"))
+	b, err := os.ReadFile(filepath.Join(".agents", "skills", "hunk", "SKILL.md"))
 	if err != nil {
 		t.Fatalf("read the skill: %v", err)
 	}

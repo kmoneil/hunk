@@ -4,7 +4,7 @@ behind or the commands it ran, never against the agent's own summary."""
 import json, os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_ROOT = "/workspace/hunk/skills/hunk-workspace/iteration-2"
+DEFAULT_ROOT = "/workspace/hunk/.agents/skills/hunk-workspace/iteration-2"
 
 # The case list comes from evals.json rather than a hand-written range. The two
 # were kept in step by hand until a tenth case was added and range(9) graded
