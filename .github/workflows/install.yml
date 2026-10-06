@@ -120,11 +120,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Scoop's installer at a commit, and that commit's bytes. get.scoop.sh
+      # redirects to the installer repository's master branch, which moves, and
+      # until 2026-10-06 this piped whatever it served straight into
+      # Invoke-Expression. Pinned to the newest commit on that day, whose
+      # install.ps1 was byte for byte what get.scoop.sh served. To move it: take
+      # a newer commit of ScoopInstaller/Install, hash its install.ps1, and
+      # change both lines together. TestTheScoopInstallerIsPinned holds the shape.
       - name: install Scoop
+        env:
+          SCOOP_INSTALLER: https://raw.githubusercontent.com/ScoopInstaller/Install/1e2f334083d609986d8c8bc9e31ae8e87c39fab4/install.ps1
+          SCOOP_INSTALLER_SHA256: 94f983b190438311e006b957db7c8422709e0ba62a6c2ac04e278164108f2512
         run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'install.ps1'
+          Invoke-RestMethod $env:SCOOP_INSTALLER -OutFile $installer
+          $sum = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+          if ($sum -ne $env:SCOOP_INSTALLER_SHA256) {
+            throw "Scoop's installer at the pinned commit hashes $sum, not $env:SCOOP_INSTALLER_SHA256"
+          }
           # The runners are administrators, and Scoop's installer refuses one
           # unless told it may.
-          Invoke-Expression "& {$(Invoke-RestMethod https://get.scoop.sh)} -RunAsAdmin"
+          & $installer -RunAsAdmin
           Join-Path $env:USERPROFILE 'scoop\shims' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: the README's Scoop steps, as written

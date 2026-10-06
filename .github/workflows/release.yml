@@ -42,9 +42,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # No cache, here or in the build. setup-go caches by default, and since
+      # its v6 the key is go.mod, which this module has, so until 2026-10-06
+      # both jobs restored a Go build cache that a run on main had written
+      # ("Cache restored successfully" in the v0.3.0 run). A release builds from
+      # nothing it did not make; the minute it costs is paid once a release.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
       - name: install the pinned tools
         run: |
           go install mvdan.cc/gofumpt@$(make -s print-GOFUMPT_VERSION)
@@ -64,6 +70,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
       # Every platform ci.yml runs the suite on, which is now all three. A
       # binary is published for a platform the tests have executed on and for
       # no others, because this tool's whole surface is filesystem semantics
