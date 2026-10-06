@@ -6,7 +6,7 @@
 # before anyone read the default that produced it, and removing them meant
 # restamping every hash. The cost of that is high enough that this is a gate.
 #
-# Enable with `make hooks` (sets core.hooksPath), once per clone.
+# Enable with `make hooks`, once per clone.
 
 set -eu
 
