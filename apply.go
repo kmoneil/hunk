@@ -174,6 +174,10 @@ type file struct {
 	sum     [sha256.Size]byte
 	eol     string // the dominant line ending (§6.4)
 	changed bool
+	// info is the file load read, from the descriptor it read the bytes
+	// through, so Check can tell the same file from another one at the name.
+	// Nil for a path that was absent.
+	info fs.FileInfo
 
 	// existed and deleted are the batch's final state for this path (§6.6).
 	// Commit writes that state, not the sequence that produced it: a create
@@ -359,7 +363,10 @@ func (x *Txn) load(h Hunk) (*file, error) {
 		return f, nil
 	}
 	f := &file{target: tg, mode: createMode, eol: "\n"}
-	fi, err := x.tree.Stat(tg)
+	// One open for the mode and the bytes, so they are the same file's: commit
+	// and rollback write these bytes with this mode, and from two lookups by
+	// name they could be two files'.
+	fi, b, err := x.tree.ReadTarget(tg)
 	switch {
 	case err == nil && fi.IsDir():
 		return nil, &PathRefusal{
@@ -367,11 +374,8 @@ func (x *Txn) load(h Hunk) (*file, error) {
 			Reason: "it is a directory, not a file",
 		}
 	case err == nil:
-		b, readErr := x.tree.ReadFile(tg)
-		if readErr != nil {
-			return nil, readErr
-		}
 		f.existed = true
+		f.info = fi
 		f.orig, f.cur = b, b
 		f.mode = fi.Mode().Perm()
 		f.sum = sha256.Sum256(b)
@@ -674,10 +678,12 @@ func (f *file) finalOp() string {
 	return ""
 }
 
-// Check re-hashes every target and compares to the load-time hash (§6.1 step
-// 4). Any difference is exit 6 with nothing written: something else is writing
-// the tree. This closes the concurrent-writer window to microseconds; §6.2 says
-// plainly that it does not eliminate it, and no lock file is used.
+// Check re-reads every target and compares it to what load read (§6.1 step 4):
+// the hash, and since 2026-10-06 the file's identity and mode, which commit
+// writes back. Any difference is exit 6 with nothing written: something else
+// is writing the tree. This closes the concurrent-writer window to
+// microseconds; §6.2 says plainly that it does not eliminate it, and no lock
+// file is used.
 func (x *Txn) Check() error {
 	for _, f := range x.files {
 		if !f.existed {
@@ -690,11 +696,14 @@ func (x *Txn) Check() error {
 			}
 			continue
 		}
-		b, err := x.tree.ReadFile(f.target)
-		if err != nil {
-			return &ChangedError{Path: f.target.Orig()}
-		}
-		if sha256.Sum256(b) != f.sum {
+		// The same bytes are not enough. Commit writes them with the mode load
+		// recorded, so the file at the name has to be the one load read and
+		// still have that mode: another file put there with the same bytes,
+		// or a chmod since load, is a second writer too, and committing would
+		// silently undo it.
+		fi, b, err := x.tree.ReadTarget(f.target)
+		if err != nil || sha256.Sum256(b) != f.sum ||
+			!os.SameFile(fi, f.info) || fi.Mode().Perm() != f.mode {
 			return &ChangedError{Path: f.target.Orig()}
 		}
 	}
