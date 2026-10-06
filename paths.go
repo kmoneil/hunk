@@ -14,6 +14,7 @@ package main
 // gives one file one name.
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -395,8 +396,8 @@ func (t *Tree) readlink(name string) (string, error) {
 	return t.r.Readlink(name)
 }
 
-// Stat reports the target's mode. Rollback restores it, so it is read at load
-// rather than guessed at commit.
+// Stat reports whether something is at the target. The mode load records comes
+// from ReadTarget instead, with the bytes it describes.
 func (t *Tree) Stat(tg Target) (fs.FileInfo, error) {
 	return t.stat(tg.name)
 }
@@ -449,6 +450,51 @@ func (t *Tree) ReadFile(tg Target) ([]byte, error) {
 		return os.ReadFile(tg.name)
 	}
 	return t.r.ReadFile(tg.name)
+}
+
+// ReadTarget reads the target and describes it from the same open file, so the
+// mode and the bytes are one file's. Load records both, and commit and rollback
+// write those bytes back with that mode. Until 2026-10-06 load took them from
+// two lookups by name, Stat and then ReadFile, so a file put at the name between
+// the two lent its mode to the bytes of the file put back after it.
+//
+// A directory comes back with its FileInfo and no bytes, for load to refuse. A
+// name that will not open is asked about by name only to say whether it is a
+// directory, so one the user cannot read is still refused as a directory rather
+// than reported as an I/O error; nothing read is described by that answer.
+//
+// On an error from the open file the bytes are whatever was read, and the
+// caller has the error to say they are not the file.
+func (t *Tree) ReadTarget(tg Target) (fs.FileInfo, []byte, error) {
+	f, err := t.open(tg.name)
+	if err != nil {
+		if fi, serr := t.stat(tg.name); serr == nil && fi.IsDir() {
+			return fi, nil, nil
+		}
+		return nil, nil, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil || fi.IsDir() {
+		return fi, nil, err
+	}
+	// Sized from that fstat, as os.ReadFile sizes from its own, so the file is
+	// read without regrowing; the spare MinRead is where the read that returns
+	// EOF lands.
+	size := 0
+	if s := fi.Size(); s > 0 && int64(int(s)) == s {
+		size = int(s)
+	}
+	b := bytes.NewBuffer(make([]byte, 0, size+bytes.MinRead))
+	_, err = b.ReadFrom(f)
+	return fi, b.Bytes(), err
+}
+
+func (t *Tree) open(name string) (*os.File, error) {
+	if t.r == nil {
+		return os.Open(name)
+	}
+	return t.r.Open(name)
 }
 
 // MkdirAll creates the target's parent directories, returning those it made so
@@ -752,13 +798,7 @@ func (s *Spellings) list(dir string) []string {
 
 // readDirNames lists a directory's names as it stores them.
 func (t *Tree) readDirNames(name string) ([]string, error) {
-	var f *os.File
-	var err error
-	if t.r == nil {
-		f, err = os.Open(name)
-	} else {
-		f, err = t.r.Open(name)
-	}
+	f, err := t.open(name)
 	if err != nil {
 		return nil, err
 	}

@@ -433,6 +433,22 @@ func TestCheckCatchesAWriterUnderneath(t *testing.T) {
 		{"removed", func(t *testing.T, root string) {
 			must(t, os.Remove(filepath.Join(root, "a.go")))
 		}},
+		// The same bytes in another file. Commit writes the edit with the mode
+		// load read from the first one, so the hash alone cannot say the file
+		// is the one load read. Until 2026-10-06 this passed.
+		{"replaced by another file with the same bytes", func(t *testing.T, root string) {
+			p := filepath.Join(root, "a.go")
+			must(t, os.WriteFile(p+".new", []byte("one\n"), 0o644))
+			must(t, os.Rename(p+".new", p))
+		}},
+		// The same file with another mode. Commit would put load's mode back
+		// and nothing would say so. 0444 because it is a change on Windows
+		// too, where it is the read-only attribute.
+		{"chmodded", func(t *testing.T, root string) {
+			p := filepath.Join(root, "a.go")
+			must(t, os.Chmod(p, 0o444))
+			t.Cleanup(func() { os.Chmod(p, 0o644) })
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tree, root := fixture(t, map[string]string{"a.go": "one\n"})
@@ -661,6 +677,177 @@ func TestRunChecksBetweenValidatingAndCommitting(t *testing.T) {
 		if !stops[phase] {
 			t.Errorf("Run does not return when %s fails", phase)
 		}
+	}
+}
+
+// Load takes a file's mode and its bytes from one open, decided 2026-10-06.
+// Commit and both rollbacks write those bytes with that mode. Taken from two
+// lookups by name, Stat and then ReadFile, a file put at the name between them
+// lent its mode to the bytes of the file put back after it, and a 0600 file was
+// written back 0644. Nothing a test does from outside lands in that gap on
+// demand, and a refactor that reopens it would pass every other test here, so
+// the shape is asserted.
+func TestLoadTakesTheModeFromTheFileItReads(t *testing.T) {
+	load := funcDecl(t, "apply.go", "load")
+	var onTree []string
+	ast.Inspect(load.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if name := exprString(call.Fun); strings.HasPrefix(name, "x.tree.") {
+				onTree = append(onTree, strings.TrimPrefix(name, "x.tree."))
+			}
+		}
+		return true
+	})
+	if n := countOf(onTree, "ReadTarget"); n != 1 {
+		t.Errorf("load calls ReadTarget %d times, want once: %v", n, onTree)
+	}
+	for _, byName := range []string{"Stat", "ReadFile"} {
+		if slices.Contains(onTree, byName) {
+			t.Errorf("load calls Tree.%s, a second lookup by name beside ReadTarget's open: %v", byName, onTree)
+		}
+	}
+
+	// ReadTarget opens once, and the FileInfo and the bytes both come from what
+	// that open returned. The one other lookup is the stat that says whether a
+	// name that will not open is a directory, inside the open's error branch,
+	// where there are no bytes for it to describe.
+	rt := funcDecl(t, "paths.go", "ReadTarget")
+	var fd string
+	var openErr *ast.BlockStmt
+	for i, st := range rt.Body.List {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			continue
+		}
+		if call, ok := as.Rhs[0].(*ast.CallExpr); ok && exprString(call.Fun) == "t.open" {
+			fd = as.Lhs[0].(*ast.Ident).Name
+			if i+1 < len(rt.Body.List) {
+				if ifs, ok := rt.Body.List[i+1].(*ast.IfStmt); ok {
+					openErr = ifs.Body
+				}
+			}
+			break
+		}
+	}
+	if fd == "" || openErr == nil {
+		t.Fatal("ReadTarget does not open the target and check the error straight after")
+	}
+	var outside, inside []string
+	statsFD, readsFD := false, false
+	ast.Inspect(rt.Body, func(n ast.Node) bool {
+		if n == openErr {
+			ast.Inspect(openErr, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					inside = append(inside, exprString(call.Fun))
+				}
+				return true
+			})
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		name := exprString(call.Fun)
+		if strings.HasPrefix(name, "t.") || strings.HasPrefix(name, "os.") {
+			outside = append(outside, name)
+		}
+		if name == fd+".Stat" {
+			statsFD = true
+		}
+		if strings.HasSuffix(name, ".ReadFrom") && len(call.Args) == 1 && exprString(call.Args[0]) == fd {
+			readsFD = true
+		}
+		return true
+	})
+	if !slices.Equal(outside, []string{"t.open"}) {
+		t.Errorf("ReadTarget looks the target up by %v, want only the one t.open", outside)
+	}
+	if lookups := slices.DeleteFunc(slices.Clone(inside), func(s string) bool {
+		return !strings.HasPrefix(s, "t.") && !strings.HasPrefix(s, "os.")
+	}); !slices.Equal(lookups, []string{"t.stat"}) {
+		t.Errorf("ReadTarget's open error branch calls %v, want only t.stat", lookups)
+	}
+	if !statsFD {
+		t.Errorf("ReadTarget does not take the FileInfo from %s.Stat()", fd)
+	}
+	if !readsFD {
+		t.Errorf("ReadTarget does not read the bytes from %s", fd)
+	}
+}
+
+// funcDecl finds a function or method declared in a file of this package.
+func funcDecl(t *testing.T, file, name string) *ast.FuncDecl {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+	must(t, err)
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == name {
+			return fd
+		}
+	}
+	t.Fatalf("%s declares no %s", file, name)
+	return nil
+}
+
+// exprString renders the identifiers and selectors a call is made through,
+// "x.tree.Stat", and "" for anything else.
+func exprString(e ast.Expr) string {
+	switch e := e.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		if x := exprString(e.X); x != "" {
+			return x + "." + e.Sel.Name
+		}
+	}
+	return ""
+}
+
+func countOf(s []string, v string) int {
+	n := 0
+	for _, e := range s {
+		if e == v {
+			n++
+		}
+	}
+	return n
+}
+
+// Every path that writes an existing file back leaves it at the mode load read
+// with its bytes: the commit of a modify, and the rollback of a modify and of a
+// delete, under --try and under a failed --verify. A file that is not 0644 is
+// what shows it, since 0644 is also what a write that lost the mode would make.
+func TestEveryRewriteKeepsTheModeLoadRead(t *testing.T) {
+	const modify = "@@ file a.txt\n@@ old\none\n@@ new\nONE\n"
+	for _, c := range []struct {
+		name  string
+		args  []string
+		patch string
+		code  int
+		want  string
+	}{
+		{"a modify", nil, modify, exitOK, "ONE\n"},
+		{"--try, a modify", []string{"--try", "true"}, modify, exitOK, "one\n"},
+		{"--try, a delete", []string{"--try", "true"}, "@@ delete a.txt\n", exitOK, "one\n"},
+		{"a failed --verify, a modify", []string{"--verify", "false"}, modify, exitVerifyFailed, "one\n"},
+		{"a failed --verify, a delete", []string{"--verify", "false"}, "@@ delete a.txt\n", exitVerifyFailed, "one\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"a.txt": "one\n"})
+			p := filepath.Join(root, "a.txt")
+			must(t, os.Chmod(p, 0o640))
+			code, stdout, stderr := runCLI(t, root, c.args, c.patch)
+			if code != c.code {
+				t.Fatalf("exit %d, want %d\nstdout: %s\nstderr: %s", code, c.code, stdout, stderr)
+			}
+			if got := readFile(t, root, "a.txt"); got != c.want {
+				t.Errorf("a.txt = %q, want %q", got, c.want)
+			}
+			fi, err := os.Stat(p)
+			must(t, err)
+			assertMode(t, fi.Mode(), 0o640)
+		})
 	}
 }
 
@@ -1012,6 +1199,26 @@ func TestLoadErrorPaths(t *testing.T) {
 		}
 		if !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("err = %v, want a permission error", err)
+		}
+	})
+
+	// Load opens a target to read it, and a directory the user cannot read
+	// will not open. It is still a directory, and a patch that names one as a
+	// file is still refused as one: exit 2, with the reason, not exit 5 with a
+	// permission error that sends the agent to chmod.
+	t.Run("a directory that will not open is still refused as a directory", func(t *testing.T) {
+		needsPOSIXPerms(t)
+		tree, root := fixture(t, map[string]string{"locked/a.go": "x\n"})
+		must(t, os.Chmod(filepath.Join(root, "locked"), 0o000))
+		t.Cleanup(func() { os.Chmod(filepath.Join(root, "locked"), 0o755) })
+
+		_, err := run(t, tree, "@@ file locked\n@@ old\nx\n@@ new\ny\n", Options{})
+		var pr *PathRefusal
+		if !errors.As(err, &pr) {
+			t.Fatalf("want *PathRefusal, got %T: %v", err, err)
+		}
+		if pr.Path != "locked" || !strings.Contains(pr.Reason, "is a directory, not a file") {
+			t.Errorf("refusal = %s: %q", pr.Path, pr.Reason)
 		}
 	})
 
