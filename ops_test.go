@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,13 +37,22 @@ func TestCreateDeleteAppendPrepend(t *testing.T) {
 
 	// §6.6 does not say what mode a created file gets. 0644 before umask is the
 	// only sane default; a created shell script wants 0755 and the format has
-	// no way to ask.
-	t.Run("a created file is 0644", func(t *testing.T) {
+	// no way to ask. Compared with a file opened at 0644 beside it rather than
+	// with 0644, so the row holds under whatever umask the suite runs with;
+	// TestACreatedFileHonoursTheUmask chooses the umask and pins the numbers.
+	t.Run("a created file is 0644 less the umask", func(t *testing.T) {
 		tree, root := fixture(t, map[string]string{"a.txt": "x\n"})
 		must(t, run2(t, tree, "@@ create s.sh\n#!/bin/sh\n\n"))
 		fi, err := os.Stat(filepath.Join(root, "s.sh"))
 		must(t, err)
-		assertMode(t, fi.Mode(), createMode)
+		control, err := os.OpenFile(filepath.Join(root, "control"), os.O_RDWR|os.O_CREATE|os.O_EXCL, createMode)
+		must(t, err)
+		cfi, err := control.Stat()
+		must(t, err)
+		must(t, control.Close())
+		if fi.Mode().Perm() != cfi.Mode().Perm() {
+			t.Errorf("created file is %v; a file opened at %v here is %v", fi.Mode().Perm(), createMode, cfi.Mode().Perm())
+		}
 	})
 
 	t.Run("create makes missing directories", func(t *testing.T) {
@@ -92,6 +103,124 @@ func run2(t *testing.T, tree *Tree, patch string) error {
 // The card's ordering table. The rule underneath is that the batch has one
 // final state per path, and commit writes that state rather than the sequence
 // that produced it (§6.6).
+// A created file is createMode less the umask, decided 2026-09-04 and true of
+// the file only since 2026-10-06: until then a chmod after the open set 0644
+// exactly, and a .env created under umask 077 was readable by everyone while a
+// shell redirect beside it made 0600. A directory create makes has always
+// honoured the umask, so the two rows of each case disagreed.
+//
+// The rest are the writes that must not change: a modify, an overwrite and both
+// rollbacks put back the mode the file had, whatever the umask, and each would
+// fail if the umask were applied to every write rather than to a create.
+//
+// Every case runs confined and unconfined, which open the temp file through
+// different calls.
+func TestACreatedFileHonoursTheUmask(t *testing.T) {
+	needsUmask(t)
+	const modify = "@@ file a.txt\n@@ old\none\n@@ new\nONE\n"
+	creates := []struct {
+		umask     string
+		file, dir fs.FileMode
+	}{
+		{"077", 0o600, 0o700},
+		{"027", 0o640, 0o750},
+		{"007", 0o640, 0o750}, // 0755 for a directory, less 007
+		{"022", 0o644, 0o755},
+	}
+	kept := []struct {
+		name  string
+		umask string
+		mode  fs.FileMode // a.txt's mode before, and after
+		args  []string
+		patch string
+		code  int
+		want  string
+	}{
+		{
+			"an overwrite keeps the mode the file had", "022", 0o600, nil,
+			"@@ delete a.txt\n@@ create a.txt\nnew\n\n", exitOK, "new\n",
+		},
+		{"a modify keeps the mode the file had", "077", 0o666, nil, modify, exitOK, "ONE\n"},
+		{
+			"a rolled-back modify puts the mode back", "077", 0o666,
+			[]string{"--verify", "false"},
+			modify, exitVerifyFailed, "one\n",
+		},
+		{
+			"a rolled-back delete puts the mode back", "077", 0o640,
+			[]string{"--verify", "false"},
+			"@@ delete a.txt\n", exitVerifyFailed, "one\n",
+		},
+	}
+	for _, confined := range []bool{true, false} {
+		var flags []string
+		where := "confined"
+		if !confined {
+			flags, where = []string{"--allow-outside-root"}, "unconfined"
+		}
+		for _, c := range creates {
+			t.Run(where+", umask "+c.umask, func(t *testing.T) {
+				root := cliTree(t, map[string]string{"a.txt": "one\n"})
+				code, out := hunkUnderUmask(t, c.umask, root, flags,
+					"@@ create secret.txt\nx\n\n@@ create d/inner.txt\ny\n\n")
+				if code != exitOK {
+					t.Fatalf("exit %d, want 0\n%s", code, out)
+				}
+				for _, w := range []struct {
+					name string
+					want fs.FileMode
+				}{{"secret.txt", c.file}, {"d", c.dir}, {"d/inner.txt", c.file}} {
+					fi, err := os.Stat(filepath.Join(root, w.name))
+					must(t, err)
+					if got := fi.Mode().Perm(); got != w.want {
+						t.Errorf("%s is %v under umask %s, want %v", w.name, got, c.umask, w.want)
+					}
+				}
+			})
+		}
+		for _, c := range kept {
+			t.Run(where+", "+c.name, func(t *testing.T) {
+				root := cliTree(t, map[string]string{"a.txt": "one\n"})
+				p := filepath.Join(root, "a.txt")
+				must(t, os.Chmod(p, c.mode))
+				code, out := hunkUnderUmask(t, c.umask, root, append(slices.Clone(flags), c.args...), c.patch)
+				if code != c.code {
+					t.Fatalf("exit %d, want %d\n%s", code, c.code, out)
+				}
+				if got := readFile(t, root, "a.txt"); got != c.want {
+					t.Errorf("a.txt = %q, want %q", got, c.want)
+				}
+				fi, err := os.Stat(p)
+				must(t, err)
+				if got := fi.Mode().Perm(); got != c.mode {
+					t.Errorf("a.txt is %v under umask %s, want the %v it had", got, c.umask, c.mode)
+				}
+			})
+		}
+	}
+}
+
+// hunkUnderUmask runs hunk as its own process under a umask, which sh sets in
+// that process alone. A umask belongs to a process, so setting it in the
+// test's would reach whatever else the suite runs, and this is the path an
+// agent takes anyway: a shell with its umask, then hunk.
+func hunkUnderUmask(t *testing.T, umask, root string, args []string, stdin string) (int, string) {
+	t.Helper()
+	exe, err := os.Executable()
+	must(t, err)
+	argv := append([]string{"-c", "umask " + umask + ` && exec "$0" "$@"`, exe, "--root", root}, args...)
+	cmd := exec.Command("sh", argv...)
+	cmd.Env = append(os.Environ(), "HUNK_TEST_AS_HUNK=1")
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), string(out)
+	}
+	must(t, err)
+	return 0, string(out)
+}
+
 func TestOrderingAcrossOpsOnOnePath(t *testing.T) {
 	for _, c := range []struct {
 		name    string

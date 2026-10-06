@@ -60,6 +60,17 @@ func needsPOSIXPerms(t *testing.T) {
 	}
 }
 
+// needsUmask skips a test that runs hunk under a umask it chooses. Windows has
+// no umask and no POSIX bits for one to clear: a file is created writable or
+// read-only, and that is all. The test sets the umask through sh, which Windows
+// does not have either.
+func needsUmask(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no umask, and no POSIX permission bits for one to clear")
+	}
+}
+
 // needsSignals skips a test that kills a process with a signal to see how its
 // exit is reported. Windows has no signal for "kill -9 $$" to send, and a
 // process there always ends with an exit code.

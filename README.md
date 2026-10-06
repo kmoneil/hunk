@@ -121,7 +121,7 @@ Six directives:
 | --- | --- |
 | `@@ file PATH` | sets the target for the hunks that follow |
 | `@@ old` / `@@ new` | replace text. `@@ old x3` means exactly three occurrences, and replaces all three |
-| `@@ create PATH` | create a file, with the payload as its contents |
+| `@@ create PATH` | create a file, with the payload as its contents, at mode 0644 less the umask |
 | `@@ delete PATH` | delete a file |
 | `@@ append PATH` | append the payload |
 | `@@ prepend PATH` | prepend the payload |
