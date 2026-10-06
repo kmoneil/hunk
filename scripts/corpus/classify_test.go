@@ -420,6 +420,8 @@ var reportGoldens = map[string]int{
 	"cli-path-refused-link-cannot-be-followed-json": ExitNoMatch,
 	"cli-a-file-and-a-directory":                    ExitNoMatch,
 	"cli-a-path-through-a-file":                     ExitNoMatch,
+	"cli-not-a-file":                                ExitNoMatch,
+	"cli-not-a-file-json":                           ExitNoMatch,
 	"cli-verify-failed":                             3,
 	"cli-verify-failed-created-gone":                3,
 	"report-try-passed":                             0,

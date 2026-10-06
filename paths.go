@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 )
@@ -613,24 +614,33 @@ func (t *Tree) ReadFile(tg Target) ([]byte, error) {
 // two lookups by name, Stat and then ReadFile, so a file put at the name between
 // the two lent its mode to the bytes of the file put back after it.
 //
-// A directory comes back with its FileInfo and no bytes, for load to refuse. A
-// name that will not open is asked about by name only to say whether it is a
-// directory, so one the user cannot read is still refused as a directory rather
-// than reported as an I/O error; nothing read is described by that answer.
+// A directory comes back with its FileInfo and no bytes, for load to refuse,
+// and so do a named pipe, a socket and a device, which are not files anybody
+// edits. The open does not block: until 2026-10-06 it did, and a named pipe
+// with nobody writing to it held every operation in load for ever, while one
+// with a writer was read, edited, and then had a regular file renamed over it.
+// O_NONBLOCK lets the open of a pipe return, the fstat on that descriptor says
+// what it is, and nothing is read from it. On a regular file the flag changes
+// nothing, and Windows ignores it and has no pipes in a tree.
+//
+// A name that will not open is asked about by name only to say what it is, so
+// one the user cannot read is still refused as a directory rather than reported
+// as an I/O error, and a socket, which no open takes, as a socket. Nothing read
+// is described by that answer.
 //
 // On an error from the open file the bytes are whatever was read, and the
 // caller has the error to say they are not the file.
 func (t *Tree) ReadTarget(tg Target) (fs.FileInfo, []byte, error) {
-	f, err := t.open(tg.name)
+	f, err := t.openRead(tg.name)
 	if err != nil {
-		if fi, serr := t.stat(tg.name); serr == nil && fi.IsDir() {
+		if fi, serr := t.stat(tg.name); serr == nil && (fi.IsDir() || notAFile(fi) != "") {
 			return fi, nil, nil
 		}
 		return nil, nil, err
 	}
 	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
-	if err != nil || fi.IsDir() {
+	if err != nil || fi.IsDir() || notAFile(fi) != "" {
 		return fi, nil, err
 	}
 	// Sized from that fstat, as os.ReadFile sizes from its own, so the file is
@@ -650,6 +660,31 @@ func (t *Tree) open(name string) (*os.File, error) {
 		return os.Open(name)
 	}
 	return t.r.Open(name)
+}
+
+// openRead opens name for ReadTarget, without waiting for a named pipe's writer.
+func (t *Tree) openRead(name string) (*os.File, error) {
+	const flag = os.O_RDONLY | syscall.O_NONBLOCK
+	if t.r == nil {
+		return os.OpenFile(name, flag, 0)
+	}
+	return t.r.OpenFile(name, flag, 0)
+}
+
+// notAFile names the kind of thing fi is when it is one hunk will not edit
+// besides a directory: a named pipe, a socket or a device. "" for anything
+// else, which includes a regular file and Windows' irregular reparse points,
+// cloud placeholders among them, that people do edit.
+func notAFile(fi fs.FileInfo) string {
+	switch m := fi.Mode(); {
+	case m&fs.ModeNamedPipe != 0:
+		return "a named pipe"
+	case m&fs.ModeSocket != 0:
+		return "a socket"
+	case m&(fs.ModeDevice|fs.ModeCharDevice) != 0:
+		return "a device"
+	}
+	return ""
 }
 
 // MkdirAll creates the target's parent directories, returning those it made so

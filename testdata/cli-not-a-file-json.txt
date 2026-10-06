@@ -1,0 +1,22 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 1,
+      "path": "a.txt",
+      "patch_line": 2,
+      "expected": 1,
+      "found": 0,
+      "near_miss": {
+        "cause": "no anchor"
+      }
+    },
+    {
+      "hunk": 2,
+      "path": "p",
+      "patch_line": 7,
+      "refusal": "it is a named pipe, not a file; the root is /the/root"
+    }
+  ]
+}

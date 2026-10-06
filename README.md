@@ -147,6 +147,11 @@ filesystem: another case, trailing dots or spaces, the Windows short name
 name, so a repository kept elsewhere, a bare `repo.git` or one named by
 `GIT_DIR`, is not recognised.
 
+hunk edits files. A path that names a directory, a named pipe, a socket or a
+device is refused with exit 2, for every directive, before anything is read
+from it: a named pipe is never waited on, never read, and never replaced by a
+regular file.
+
 Three rules worth knowing before the first patch:
 
 1. **A payload never gains a trailing newline.** To match text that ends in a

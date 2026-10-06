@@ -70,6 +70,12 @@ func snapshot(t *testing.T, root string) map[string]string {
 			dest, err := os.Readlink(p)
 			out[rel] = "symlink\x00" + dest
 			return err
+		case fi.Mode()&(fs.ModeNamedPipe|fs.ModeSocket|fs.ModeDevice) != 0:
+			// Recorded by what it is and never read: reading a named pipe
+			// waits for a writer, and a socket will not open. A pipe that
+			// became a regular file is a change this has to see.
+			out[rel] = fi.Mode().String()
+			return nil
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {
@@ -709,8 +715,8 @@ func TestLoadTakesTheModeFromTheFileItReads(t *testing.T) {
 
 	// ReadTarget opens once, and the FileInfo and the bytes both come from what
 	// that open returned. The one other lookup is the stat that says whether a
-	// name that will not open is a directory, inside the open's error branch,
-	// where there are no bytes for it to describe.
+	// name that will not open is a directory or a socket, inside the open's
+	// error branch, where there are no bytes for it to describe.
 	rt := funcDecl(t, "paths.go", "ReadTarget")
 	var fd string
 	var openErr *ast.BlockStmt
@@ -719,7 +725,7 @@ func TestLoadTakesTheModeFromTheFileItReads(t *testing.T) {
 		if !ok || len(as.Rhs) != 1 {
 			continue
 		}
-		if call, ok := as.Rhs[0].(*ast.CallExpr); ok && exprString(call.Fun) == "t.open" {
+		if call, ok := as.Rhs[0].(*ast.CallExpr); ok && exprString(call.Fun) == "t.openRead" {
 			fd = as.Lhs[0].(*ast.Ident).Name
 			if i+1 < len(rt.Body.List) {
 				if ifs, ok := rt.Body.List[i+1].(*ast.IfStmt); ok {
@@ -760,8 +766,8 @@ func TestLoadTakesTheModeFromTheFileItReads(t *testing.T) {
 		}
 		return true
 	})
-	if !slices.Equal(outside, []string{"t.open"}) {
-		t.Errorf("ReadTarget looks the target up by %v, want only the one t.open", outside)
+	if !slices.Equal(outside, []string{"t.openRead"}) {
+		t.Errorf("ReadTarget looks the target up by %v, want only the one t.openRead", outside)
 	}
 	if lookups := slices.DeleteFunc(slices.Clone(inside), func(s string) bool {
 		return !strings.HasPrefix(s, "t.") && !strings.HasPrefix(s, "os.")
