@@ -64,12 +64,20 @@ vuln:
 	govulncheck ./...
 
 # The tripwire, not a target. See SIZE_BUDGET_BYTES.
+#
+# Built in a directory of its own, removed however the recipe ends, and chained
+# so that a step that fails fails the target. Until 2026-10-06 it built to
+# /tmp/hunk-size: a fixed name in a directory every user can write, which go
+# build writes through when something already stands there, and a size that
+# could not be read printed as empty and passed. The template is spelled out
+# because macOS's mktemp -d without one ignores TMPDIR.
 size:
-	@$(GO) build -o /tmp/hunk-size .
-	@n=$$(wc -c < /tmp/hunk-size); rm -f /tmp/hunk-size; \
+	@d=$$(mktemp -d "$${TMPDIR:-/tmp}/hunk-size.XXXXXX") && trap 'rm -rf "$$d"' EXIT && \
+	$(GO) build -o "$$d/hunk" . && \
+	n=$$(wc -c < "$$d/hunk") && \
 	if [ "$$n" -gt "$(SIZE_BUDGET_BYTES)" ]; then \
 		echo "binary is $$n bytes, over the $(SIZE_BUDGET_BYTES) budget"; exit 1; \
-	fi; \
+	fi && \
 	echo "binary $$n bytes, budget $(SIZE_BUDGET_BYTES)"
 
 # Discovered rather than listed, so the nightly cannot silently sweep a subset.
