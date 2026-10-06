@@ -935,16 +935,19 @@ func TestDetailSentences(t *testing.T) {
 		}
 	})
 
-	// --eol auto translates CRLF away, so an LF file reaching this row means
-	// the caller is on strict with an LF file and a CRLF payload.
+	// An LF file reaching this row means the payload carries CRs: a CRLF patch
+	// under strict, or one with endings mixed enough that auto keeps its bytes.
+	// Until 2026-10-06 it said "--eol auto translates that for you", which under
+	// auto was false, so the LF row asserts the remedy and that the old claim is
+	// gone.
 	t.Run("detailEOL names which side is which", func(t *testing.T) {
 		for in, want := range map[string]string{
-			"a\r\nb\r\n":       "the file is CRLF",
-			"a\nb\n":           "the file is LF",
-			"a\r\nb\nc\r\nd\n": "mixed line endings",
+			"a\r\nb\r\n":       "the file is CRLF; --eol auto translates that for you",
+			"a\nb\n":           "the patch's lines end in CRLF and the file's in LF; write the patch with LF line endings",
+			"a\r\nb\nc\r\nd\n": "the file has mixed line endings, 2 CRLF and 2 LF",
 		} {
-			if got := detailEOL(nil, nil, []byte(in)); !strings.Contains(got, want) {
-				t.Errorf("detailEOL(%q) = %q, want it to mention %q", in, got, want)
+			if got := detailEOL(nil, nil, []byte(in)); got != want {
+				t.Errorf("detailEOL(%q) = %q, want %q", in, got, want)
 			}
 		}
 	})

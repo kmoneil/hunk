@@ -1,0 +1,1 @@
+hunk: patch line 3: the line would be the directive "@@ end" but for U+000C in it, a control character; remove it, or if the line is payload text, choose another directive prefix with --marker

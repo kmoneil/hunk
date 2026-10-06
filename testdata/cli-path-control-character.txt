@@ -1,0 +1,1 @@
+hunk: x<U+001B>[31mred.txt: the path contains U+001B, a control character, which hunk does not allow in a file name; remove it from the patch; the root is /the/root
