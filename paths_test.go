@@ -323,6 +323,73 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 	}
 }
 
+// A delete cannot go through a link the patch named, and can go through one in a
+// directory above it, so Resolve has to tell the two apart. ViaSymlink cannot:
+// it is set by both. named is set by a link standing last on the path, however
+// it was reached, and by nothing else.
+func TestResolveSaysWhetherTheNamedEntryIsALink(t *testing.T) {
+	root := mktree(t)
+	for _, l := range [][2]string{
+		{"rel.link", "sub/in.txt"},
+		{"chain.link", "rel.link"},
+		{"d", "sub"},
+		{"sub/alias.link", "in.txt"},
+		{"through.link", "d/in.txt"},
+		{"dangling.link", "missing.txt"},
+		{"l", "internal"},
+	} {
+		must(t, os.Symlink(filepath.FromSlash(l[1]), filepath.Join(root, filepath.FromSlash(l[0]))))
+	}
+	must(t, os.Symlink(filepath.Join(root, "sub", "in.txt"), filepath.Join(root, "abs.link")))
+
+	for _, mode := range []struct {
+		name     string
+		unconfin bool
+		want     func(string) string
+	}{
+		{"confined", false, native},
+		{"unconfined", true, func(p string) string { return filepath.Join(root, native(p)) }},
+	} {
+		tree, err := OpenTree(root, mode.unconfin)
+		must(t, err)
+		t.Cleanup(func() { tree.Close() })
+
+		for _, c := range []struct {
+			name, in, want string
+			via, named     bool
+		}{
+			{"no link at all", "sub/in.txt", "sub/in.txt", false, false},
+			{"a path that does not exist yet", "new/x.go", "new/x.go", false, false},
+			{"a relative link", "rel.link", "sub/in.txt", true, true},
+			{"an absolute in-root link", "abs.link", "sub/in.txt", true, true},
+			{"a chain of links", "chain.link", "sub/in.txt", true, true},
+			{"a dangling link", "dangling.link", "missing.txt", true, true},
+			{"a directory link above a file", "d/in.txt", "sub/in.txt", true, false},
+			{"a dangling directory link above a new file", "l/new.go", "internal/new.go", true, false},
+			{"a link reached through a directory link", "d/alias.link", "sub/in.txt", true, true},
+			{"a link whose destination runs through a directory link", "through.link", "sub/in.txt", true, true},
+		} {
+			t.Run(mode.name+", "+c.name, func(t *testing.T) {
+				tg, err := tree.Resolve(c.in)
+				if err != nil {
+					t.Fatalf("Resolve(%q): %v", c.in, err)
+				}
+				if want := mode.want(c.want); tg.name != want {
+					t.Errorf("name = %q, want %q", tg.name, want)
+				}
+				if tg.ViaSymlink() != c.via || tg.named != c.named {
+					t.Errorf("ViaSymlink = %v, named = %v; want %v, %v", tg.ViaSymlink(), tg.named, c.via, c.named)
+				}
+				// Load respells every target before it is used, and a respelled
+				// target that forgot the link would delete through it again.
+				if got := tree.Spellings().Respell(tg); got.named != c.named {
+					t.Errorf("respelled, named = %v, want %v", got.named, c.named)
+				}
+			})
+		}
+	}
+}
+
 // On a filesystem that folds case or Unicode normalization, two spellings of one
 // name are one file, and until 2026-09-17 they were two entries in the load
 // index: A.go and a.go in one batch lost an edit under exit 0. A name that

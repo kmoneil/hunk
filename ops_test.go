@@ -712,6 +712,249 @@ func TestAPathThroughAFileIsGolden(t *testing.T) {
 	golden(t, "cli-a-path-through-a-file", slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
 }
 
+// A write goes through a link the patch names (§6.5), and until 2026-10-06 so
+// did a delete: "@@ delete CLAUDE.md", with CLAUDE.md -> AGENTS.md, removed
+// AGENTS.md, left the link dangling, and reported "D CLAUDE.md" under exit 0.
+// The same shape removed .git/HEAD through a link to it. hunk deletes files,
+// not links, so a delete naming a link is refused and the refusal names both
+// ways out. A link in a directory above the file is not refused: that delete
+// removes the file the path names.
+func TestADeleteNeverGoesThroughALinkItNames(t *testing.T) {
+	type failure struct {
+		hunk, line int
+		path, says string
+		skipped    int
+	}
+	symlinkTo := func(name string) string {
+		return "it is a symlink to " + native(name) + ", and hunk deletes files, not links"
+	}
+	for _, c := range []struct {
+		name       string
+		patch      string
+		want       []failure // nil means it applies
+		gone       []string  // applied: absent afterwards, not even as a link
+		links      []string  // applied: still a symlink, with its destination unchanged
+		files      map[string]string
+		dryRun     bool
+		unconfined bool
+	}{
+		{
+			name:  "a link to a file",
+			patch: "@@ delete CLAUDE.md\n",
+			want:  []failure{{1, 1, "CLAUDE.md", symlinkTo("AGENTS.md"), 0}},
+		},
+		{
+			name:  "an absolute link inside the root",
+			patch: "@@ delete abs.md\n",
+			want:  []failure{{1, 1, "abs.md", symlinkTo("AGENTS.md"), 0}},
+		},
+		{
+			name:  "a chain of links",
+			patch: "@@ delete chain.md\n",
+			want:  []failure{{1, 1, "chain.md", symlinkTo("AGENTS.md"), 0}},
+		},
+		{
+			name:  "a link reached through a directory link",
+			patch: "@@ delete d/alias.go\n",
+			want:  []failure{{1, 1, "d/alias.go", symlinkTo("sub/b.go"), 0}},
+		},
+		{
+			// Refused as a link rather than as a missing file: the link is
+			// there, and "no such file" would send the agent to look.
+			name:  "a dangling link",
+			patch: "@@ delete dangling.md\n",
+			want:  []failure{{1, 1, "dangling.md", symlinkTo("missing.md"), 0}},
+		},
+		{
+			// §6.6's overwrite, through the link. The create is skipped rather
+			// than told to delete first, which it did.
+			name:  "a delete then a create through the link",
+			patch: "@@ delete CLAUDE.md\n@@ create CLAUDE.md\nnew\n",
+			want:  []failure{{1, 1, "CLAUDE.md", symlinkTo("AGENTS.md"), 0}, {2, 2, "CLAUDE.md", "", 1}},
+		},
+		{
+			// The file is keyed by its resolved name and keeps the target of
+			// the first hunk that named it, which reached it without a link.
+			// The check is the delete's own.
+			name:  "a replace of the file by name, then a delete through its link",
+			patch: "@@ file AGENTS.md\n@@ old\nkeep\n@@ new\nKEEP\n@@ delete CLAUDE.md\n",
+			want:  []failure{{2, 6, "CLAUDE.md", symlinkTo("AGENTS.md"), 0}},
+		},
+		{
+			// A replace after a delete of its file is refused whatever the
+			// delete named, so this one is true of the batch as written and is
+			// reported, not skipped.
+			name:  "a delete through the link, then a replace of the file",
+			patch: "@@ delete CLAUDE.md\n@@ file AGENTS.md\n@@ old\nkeep\n@@ new\nx\n",
+			want:  []failure{{1, 1, "CLAUDE.md", symlinkTo("AGENTS.md"), 0}, {2, 3, "AGENTS.md", "an earlier hunk in this batch deleted it", 0}},
+		},
+		{
+			name:  "reported beside the batch's other failures",
+			patch: "@@ delete CLAUDE.md\n@@ file plain.txt\n@@ old\nabsent\n@@ new\ny\n",
+			want:  []failure{{1, 1, "CLAUDE.md", symlinkTo("AGENTS.md"), 0}, {2, 3, "plain.txt", "", 0}},
+		},
+		{
+			name:   "a dry run refuses it too",
+			patch:  "@@ delete CLAUDE.md\n",
+			want:   []failure{{1, 1, "CLAUDE.md", symlinkTo("AGENTS.md"), 0}},
+			dryRun: true,
+		},
+		{
+			name:       "an unconfined tree refuses it too",
+			patch:      "@@ delete CLAUDE.md\n",
+			want:       []failure{{1, 1, "CLAUDE.md", "it is a symlink to ", 0}},
+			unconfined: true,
+		},
+		{
+			name:  "a directory link above the file",
+			patch: "@@ delete d/b.go\n",
+			gone:  []string{"sub/b.go"},
+			links: []string{"d", "CLAUDE.md"},
+		},
+		{
+			name:  "the file a link leads to, by name",
+			patch: "@@ delete AGENTS.md\n",
+			gone:  []string{"AGENTS.md"},
+			links: []string{"CLAUDE.md", "chain.md", "abs.md"},
+		},
+		{
+			name:  "a plain file",
+			patch: "@@ delete plain.txt\n",
+			gone:  []string{"plain.txt"},
+		},
+		{
+			name:  "a replace through the link still writes through it",
+			patch: "@@ file CLAUDE.md\n@@ old\nkeep\n@@ new\nKEEP\n",
+			links: []string{"CLAUDE.md"},
+			files: map[string]string{"AGENTS.md": "KEEP\n"},
+		},
+		{
+			name:  "an append through the link still writes through it",
+			patch: "@@ append CLAUDE.md\nmore\n",
+			links: []string{"CLAUDE.md"},
+			files: map[string]string{"AGENTS.md": "keep\nmore\n"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			if r, err := filepath.EvalSymlinks(root); err == nil {
+				root = r
+			}
+			must(t, os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("keep\n"), 0o644))
+			must(t, os.WriteFile(filepath.Join(root, "plain.txt"), []byte("p\n"), 0o644))
+			must(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+			must(t, os.WriteFile(filepath.Join(root, "sub", "b.go"), []byte("alpha\n"), 0o644))
+			for _, l := range [][2]string{
+				{"CLAUDE.md", "AGENTS.md"},
+				{"chain.md", "CLAUDE.md"},
+				{"d", "sub"},
+				{"sub/alias.go", "b.go"},
+				{"dangling.md", "missing.md"},
+			} {
+				must(t, os.Symlink(filepath.FromSlash(l[1]), filepath.Join(root, filepath.FromSlash(l[0]))))
+			}
+			must(t, os.Symlink(filepath.Join(root, "AGENTS.md"), filepath.Join(root, "abs.md")))
+			tree, err := OpenTree(root, c.unconfined)
+			must(t, err)
+			t.Cleanup(func() { tree.Close() })
+			p, err := Parse([]byte(c.patch), DefaultMarker)
+			must(t, err)
+
+			before := snapshot(t, root)
+			if c.dryRun {
+				_, err = NewTxn(tree, Options{}).Preview(p)
+			} else {
+				_, err = NewTxn(tree, Options{}).Run(p)
+			}
+			if c.want == nil {
+				must(t, err)
+				for _, name := range c.gone {
+					if _, err := os.Lstat(filepath.Join(root, name)); !errors.Is(err, fs.ErrNotExist) {
+						t.Errorf("%s should be gone: %v", name, err)
+					}
+				}
+				for _, name := range c.links {
+					fi, err := os.Lstat(filepath.Join(root, name))
+					if err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+						t.Errorf("%s should still be a symlink: %v", name, err)
+						continue
+					}
+					if dest, _ := os.Readlink(filepath.Join(root, name)); "symlink\x00"+dest != before[name] {
+						t.Errorf("%s now leads to %q, want it unchanged (%s)", name, dest, before[name])
+					}
+				}
+				for name, want := range c.files {
+					if got := readFile(t, root, name); got != want {
+						t.Errorf("%s = %q, want %q", name, got, want)
+					}
+				}
+				return
+			}
+
+			if got := ExitCode(err); got != exitNoMatch {
+				t.Fatalf("exit %d, want %d: %v", got, exitNoMatch, err)
+			}
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("want *ValidationError, got %T: %v", err, err)
+			}
+			if len(ve.Failures) != len(c.want) {
+				t.Fatalf("%d failures, want %d: %+v", len(ve.Failures), len(c.want), ve.Failures)
+			}
+			for i, w := range c.want {
+				f := ve.Failures[i]
+				if f.Hunk != w.hunk || f.PatchLine != w.line || f.Path != w.path || f.SkippedAfter != w.skipped {
+					t.Errorf("failure %d is hunk %d, line %d, %q, skipped after %d; want hunk %d, line %d, %q, skipped after %d",
+						i, f.Hunk, f.PatchLine, f.Path, f.SkippedAfter, w.hunk, w.line, w.path, w.skipped)
+				}
+				switch {
+				case w.says == "" && f.Refusal != "":
+					t.Errorf("hunk %d was refused and should not have been: %s", f.Hunk, f.Refusal)
+				case w.says != "" && !strings.Contains(f.Refusal, w.says):
+					t.Errorf("hunk %d: refusal = %q, want it to say %q", f.Hunk, f.Refusal, w.says)
+				case w.says != "" && !strings.Contains(f.Refusal, root):
+					t.Errorf("hunk %d: refusal = %q, want it to name the root %q", f.Hunk, f.Refusal, root)
+				}
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
+}
+
+// The page an agent reads for a delete through a link, in text and in JSON. The
+// root is substituted as in TestAPathRefusalIsGolden; in JSON it is substituted
+// as JSON spells it, since Windows' backslashes are escaped there.
+func TestADeleteThroughALinkIsGolden(t *testing.T) {
+	tree := func() string {
+		root := cliTree(t, map[string]string{"AGENTS.md": "keep\n"})
+		must(t, os.Symlink("AGENTS.md", filepath.Join(root, "CLAUDE.md")))
+		return root
+	}
+	const patch = "@@ delete CLAUDE.md\n"
+
+	root := tree()
+	code, out, errOut := runCLI(t, root, nil, patch)
+	if code != exitNoMatch {
+		t.Fatalf("exit %d, want %d: %s", code, exitNoMatch, errOut)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
+	}
+	if got := readFile(t, root, "AGENTS.md"); got != "keep\n" {
+		t.Errorf("AGENTS.md = %q, want it untouched", got)
+	}
+	golden(t, "cli-delete-through-a-link", slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
+
+	root = tree()
+	code, js, errOut := runCLI(t, root, []string{"--json"}, patch)
+	if code != exitNoMatch || errOut != "" {
+		t.Fatalf("exit %d, stderr %q; want %d and nothing on stderr", code, errOut, exitNoMatch)
+	}
+	quoted, err := json.Marshal(root)
+	must(t, err)
+	golden(t, "cli-delete-through-a-link-json", strings.ReplaceAll(js, strings.Trim(string(quoted), `"`), "/the/root"))
+}
+
 // A file is read once and written once (§3.5), and that has to mean the file,
 // not the spelling. Until 2026-09-17 a directory link made one file two: with
 // d -> sub, a batch naming sub/b.go and d/b.go loaded it twice and wrote it

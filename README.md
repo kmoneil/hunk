@@ -130,6 +130,13 @@ Six directives:
 an empty `@@ new`, which with rule 1 below takes the block's last newline with
 it.
 
+Every other directive writes through a symlink to the file it leads to, and
+leaves the link in place. `@@ delete` refuses a path that is itself a symlink,
+because deleting through it would remove a file the patch never named and leave
+the link behind; the refusal names the file it leads to. Name that file to
+delete it, or remove the link with `rm`. A symlink in a directory above the
+file is fine: `@@ delete` removes the file the path names.
+
 Three rules worth knowing before the first patch:
 
 1. **A payload never gains a trailing newline.** To match text that ends in a

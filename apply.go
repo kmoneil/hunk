@@ -243,6 +243,10 @@ type Txn struct {
 	// resolving twice is both wasted work and a second error path that cannot
 	// happen, since Load would already have refused it.
 	hunkFile []*file
+	// hunkTarget is where each hunk's own path led. A file is keyed by its
+	// resolved name and keeps the target of the first hunk that named it, so
+	// whether a later hunk reached it through a link has to be kept here.
+	hunkTarget []Target
 }
 
 func NewTxn(tree *Tree, opt Options) *Txn {
@@ -289,6 +293,7 @@ func (x *Txn) Preview(p *Patch) (*Result, error) {
 // patch would fix it, it is a validation failure.
 func (x *Txn) Load(p *Patch) error {
 	x.hunkFile = make([]*file, len(p.Hunks))
+	x.hunkTarget = make([]Target, 0, len(p.Hunks))
 	for i, h := range p.Hunks {
 		f, err := x.load(h)
 		if err != nil {
@@ -356,6 +361,7 @@ func (x *Txn) load(h Hunk) (*file, error) {
 		return nil, err
 	}
 	tg = x.spellings.Respell(tg)
+	x.hunkTarget = append(x.hunkTarget, tg)
 	// Keyed by resolved name, so "a.go", "./a.go", a symlink to it, a path
 	// through a symlinked directory and, where the directory folds case, "A.go"
 	// are one file, read once and written once (§3.5).
@@ -431,6 +437,29 @@ func (x *Txn) Validate(p *Patch) []Failure {
 	for i, h := range p.Hunks {
 		n := i + 1
 		f := x.hunkFile[i]
+		if tg := x.hunkTarget[i]; h.Op == OpDelete && tg.named {
+			// Resolving the link is what lets a write go through it (§6.5),
+			// and a delete resolved the same way removed the file it leads to
+			// and left the link, reporting the link's name as deleted. A link
+			// is not hunk's to remove, and the file it leads to was not named,
+			// so both ways out are left to the agent. Until 2026-10-06 the
+			// destination was deleted.
+			f.failedAt = n
+			failures = append(failures, Failure{
+				Hunk: n, Path: h.Path, PatchLine: h.Line,
+				// The destination is in the reason rather than in Resolved,
+				// because it is half of the remedy and has to come before it.
+				Refusal: (&PathRefusal{
+					Path: h.Path, Root: x.tree.Root(),
+					Reason: "it is a symlink to " + tg.name + ", and hunk deletes files, not links; " +
+						"name " + tg.name + " to delete that file, or remove the link outside hunk",
+				}).Detail(),
+			})
+			// Later hunks are classified against the batch as written, so a
+			// create after it is skipped rather than told to delete first.
+			x.applyWhole(f, h)
+			continue
+		}
 		if err := requireState(f, h, x.tree.Root(), deletes[f.inFileName]); err != nil {
 			// Load's classification is per hunk, because the same path can be
 			// legally absent for one hunk and present for the next.

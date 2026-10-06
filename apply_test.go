@@ -1320,6 +1320,11 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 		// batch deleting the file.
 		"@@ create a.go/0\n",
 		"@@ delete a.go\n@@ create a.go/0\n",
+		// A delete naming a link, which removed a.go and left the link until
+		// 2026-10-06, alone and in §6.6's overwrite.
+		"@@ delete link.go\n",
+		"@@ delete link.go\n@@ create link.go\nx\n",
+		"@@ file a.go\n@@ old\none\n@@ new\nONE\n@@ delete link.go\n",
 	} {
 		f.Add(s)
 	}
@@ -1334,6 +1339,7 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 		}
 		os.WriteFile(filepath.Join(root, "a.go"), []byte("one\ntwo\nx\nx\n"), 0o644)
 		os.WriteFile(filepath.Join(root, "sub", "b.go"), []byte("alpha\r\nbeta\r\n"), 0o600)
+		os.Symlink("a.go", filepath.Join(root, "link.go"))
 
 		p, err := Parse([]byte(patch), DefaultMarker)
 		if err != nil {
@@ -1344,6 +1350,21 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 			t.Fatal(err)
 		}
 		defer tree.Close()
+
+		// Which deletes name a link, asked of the filesystem rather than of
+		// Resolve. A patch path is cleaned as text before any link is read, so
+		// joining it to the root asks the same question. No hunk can make or
+		// remove a link, so the answer holds for the whole batch.
+		namesLink := ""
+		for _, h := range p.Hunks {
+			at := h.Path
+			if !filepath.IsAbs(at) {
+				at = filepath.Join(root, at)
+			}
+			if fi, err := os.Lstat(at); h.Op == OpDelete && err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+				namesLink = h.Path
+			}
+		}
 
 		before := snapshot(t, root)
 		// A dry run first, on the same tree, since it writes nothing.
@@ -1363,6 +1384,11 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 			t.Errorf("the dry run reports %+v and the apply %+v", preview.Files, r.Files)
 		case previewErr == nil && err != nil && ExitCode(err) != exitIO:
 			t.Errorf("the dry run succeeds and the apply exits %d: %v", ExitCode(err), err)
+		}
+		// hunk deletes files, not links. Through a link it removed the file
+		// the link leads to, which the batch never named.
+		if namesLink != "" && err == nil {
+			t.Errorf("a delete named the symlink %q and the batch applied", namesLink)
 		}
 
 		if err != nil {

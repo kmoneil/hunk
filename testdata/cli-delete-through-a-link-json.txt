@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 1,
+      "path": "CLAUDE.md",
+      "patch_line": 1,
+      "refusal": "it is a symlink to AGENTS.md, and hunk deletes files, not links; name AGENTS.md to delete that file, or remove the link outside hunk; the root is /the/root"
+    }
+  ]
+}

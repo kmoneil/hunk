@@ -84,7 +84,7 @@ and an agent that has not seen this list reaches for `Write` or a shell instead:
 | `@@ file PATH` | Sets the file the `@@ old` hunks under it apply to |
 | `@@ old` / `@@ new` | Replaces literal text, exactly as many times as claimed |
 | `@@ create PATH` | Makes a file, payload is its whole content. Refuses if it exists |
-| `@@ delete PATH` | **Removes the whole file.** It is not a way to delete lines |
+| `@@ delete PATH` | **Removes the whole file.** It is not a way to delete lines. Refuses a path that is a symlink; name the file it leads to |
 | `@@ append PATH` | Adds the payload at the end of the file |
 | `@@ prepend PATH` | Adds it at the start |
 

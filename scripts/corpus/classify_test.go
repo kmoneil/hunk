@@ -432,6 +432,8 @@ var reportGoldens = map[string]int{
 	"report-rollback-incomplete-json":               4,
 	"cli-rollback-incomplete":                       4,
 	"cli-help":                                      ExitProbe,
+	"cli-delete-through-a-link":                     ExitNoMatch,
+	"cli-delete-through-a-link-json":                2,
 }
 
 // The classifier reads hunk's diagnostics, and SPEC §8.1 says "a reworded
