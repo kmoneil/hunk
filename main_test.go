@@ -27,6 +27,11 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// cli is invoke for a test that has no use for the signal it hands to main.
+func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return invoke(args, stdin, stdout, stderr, nil)
+}
+
 func runCLI(t *testing.T, root string, args []string, stdin string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errOut bytes.Buffer

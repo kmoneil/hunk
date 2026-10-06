@@ -27,6 +27,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -254,6 +255,10 @@ type Txn struct {
 	hunkTarget []Target
 	// crlfPatch is Patch.CRLF, kept by Load for convert and created.
 	crlfPatch bool
+	// beforeCommit runs after the check and before the first write, when it is
+	// set. The CLI installs its signal handler there: earlier, a signal still
+	// kills a load or a validation that writes nothing, and a hung one with it.
+	beforeCommit func()
 }
 
 func NewTxn(tree *Tree, opt Options) *Txn {
@@ -272,6 +277,9 @@ func (x *Txn) Run(p *Patch) (*Result, error) {
 	}
 	if err := x.Check(); err != nil {
 		return nil, err
+	}
+	if x.beforeCommit != nil {
+		x.beforeCommit()
 	}
 	if err := x.Commit(); err != nil {
 		return nil, err
@@ -872,13 +880,6 @@ func cause(err error) error {
 	return err
 }
 
-// RunVerify is phase 6 (§6.1 step 6): run cmd via sh -c with cwd root and
-// capture combined output.
-//
-// A command that cannot start is not a failed verify. Exit 3 means the verify
-// ran and said no; a missing shell means nothing was verified at all, and
-// reporting that as "the tests failed" would be a lie about the tree. That case
-// returns an error, which the CLI maps to exit 5.
 // exitStatus is the status a shell would report: the exit code, or 128 plus
 // the signal when the command was killed by one, which is what --try exits
 // with (§4.1). A command sh runs and a signal kills already comes back from sh
@@ -890,26 +891,121 @@ func exitStatus(e *exec.ExitError) int {
 	return e.ExitCode()
 }
 
-func RunVerify(command, root string, tailLines int) (*Verify, error) {
+// A Stop is what ends a --verify or --try command before it ends itself: a
+// timeout, a signal to hunk, or neither. A nil Signals never fires.
+type Stop struct {
+	Timeout time.Duration
+	Signals <-chan os.Signal
+}
+
+// verifyGrace is how long a command's process group has to go after the signal
+// that ends it, before SIGKILL; verifyWaitDelay is how long hunk goes on
+// reading the command's output once sh has exited. Variables so that a test
+// can shorten them; nothing else sets them.
+var (
+	verifyGrace     = 5 * time.Second
+	verifyWaitDelay = 5 * time.Second
+)
+
+// RunVerify is phase 6 (§6.1 step 6): run cmd via sh -c with cwd root and
+// capture combined output.
+//
+// A command that cannot start is not a failed verify. Exit 3 means the verify
+// ran and said no; a missing shell means nothing was verified at all, and
+// reporting that as "the tests failed" would be a lie about the tree. That case
+// returns an error, which the CLI maps to exit 5.
+//
+// Until 2026-10-06 this waited for as long as the command ran and for as long
+// as anything held its output open, and a signal killed hunk where it stood:
+// the batch stayed applied, --try's included, and the command ran on. Now
+// stop can end it, by --timeout or by a signal to hunk, and either way the
+// command's whole process group goes with it (end). And sh exiting is the end
+// of the command even when something it started still holds the pipe, a
+// server a test started for instance: hunk reads on for verifyWaitDelay and
+// then stops, and the report says so. That process is left running, because a
+// command that exits normally may have started it on purpose.
+//
+// The pipe is hunk's own rather than one exec makes, which is what lets it be
+// cut whatever the command's status: exec.Cmd.WaitDelay does the same and
+// reports it only when the command succeeded.
+func RunVerify(command, root string, tailLines int, stop Stop) (*Verify, error) {
 	v := &Verify{Ran: true, Command: command}
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = root
+	ownGroup(cmd)
 	start := time.Now()
-	out, err := cmd.CombinedOutput()
+	r, w, err := os.Pipe()
+	if err == nil {
+		cmd.Stdout, cmd.Stderr = w, w
+		err = cmd.Start()
+		// The command holds its own copies now. Holding this one too would keep
+		// the pipe open after everything the command started had exited.
+		_ = w.Close()
+	}
+	// exited is how the command ended, and a command that could not start, for
+	// want of a pipe or of sh, ended there: it is reported below where a Wait
+	// that failed would be. A nil r, when the pipe could not be made, reads as
+	// an error at once, which ends the copy.
+	exited := make(chan error, 1)
+	if err != nil {
+		exited <- err
+	} else {
+		go func() { exited <- cmd.Wait() }()
+	}
+	var out bytes.Buffer
+	read := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&out, r)
+		close(read)
+	}()
+
+	// A command that never started has nothing to stop, so neither the timeout
+	// nor a signal is waited on: the select picks among ready cases at random,
+	// and either one would have had end signal a process that does not exist.
+	var timeout <-chan time.Time
+	signals := stop.Signals
+	if err != nil {
+		signals = nil
+	} else if stop.Timeout > 0 {
+		t := time.NewTimer(stop.Timeout)
+		defer t.Stop()
+		timeout = t.C
+	}
+	var waitErr error
+	select {
+	case waitErr = <-exited:
+	case <-timeout:
+		v.TimedOut = stop.Timeout
+		waitErr = end(cmd.Process, syscall.SIGTERM, exited)
+	case sig := <-signals:
+		v.Signal = sig
+		waitErr = end(cmd.Process, sig, exited)
+	}
 	v.Seconds = time.Since(start).Seconds()
+
+	// What closing the read end does to the copy is how exec stops its own
+	// copies after WaitDelay, on every platform.
+	select {
+	case <-read:
+	case <-time.After(verifyWaitDelay):
+		v.Cut = true
+		_ = r.Close()
+		<-read
+	}
+	_ = r.Close()
 
 	var exitErr *exec.ExitError
 	switch {
-	case err == nil:
-		v.OK = true
-	case errors.As(err, &exitErr):
+	case waitErr == nil:
+		v.OK = v.TimedOut == 0 && v.Signal == nil
+	case errors.As(waitErr, &exitErr):
 		v.OK = false
 		v.Status = exitStatus(exitErr)
 	default:
-		return nil, err
+		return nil, waitErr
 	}
 
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		lines = nil
 	}
@@ -919,6 +1015,35 @@ func RunVerify(command, root string, tailLines int) (*Verify, error) {
 	}
 	v.Tail = lines
 	return v, nil
+}
+
+// end stops a command that is still running: sig to its whole process group,
+// then SIGKILL to whatever of the group is left after verifyGrace. It returns
+// what Wait said about sh.
+func end(p *os.Process, sig os.Signal, exited <-chan error) error {
+	signalGroup(p, sig)
+	deadline := time.NewTimer(verifyGrace)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	var err error
+	gone := false
+	for {
+		select {
+		case err = <-exited:
+			gone, exited = true, nil
+		case <-tick.C:
+		case <-deadline.C:
+			killGroup(p)
+			if !gone {
+				err = <-exited
+			}
+			return err
+		}
+		if gone && !groupAlive(p) {
+			return err
+		}
+	}
 }
 
 // Rollback is phase 7 (§6.3). It restores each file this transaction wrote,

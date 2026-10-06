@@ -357,3 +357,24 @@ func sameFileUnderTwoNames(tb testing.TB, made, looked string) bool {
 	}
 	return os.SameFile(a, b)
 }
+
+// pidsFromShAreReal reports whether a process ID that sh prints ($$, $!) names
+// a process the test can look up and signal. Git for Windows' sh prints its own
+// MSYS IDs, which no Windows API knows, so there the checks that a command's
+// processes were ended, or left running, are not made. What is asserted there
+// is the exit, the report and the tree, and on Windows a timeout or an
+// interrupt ends sh alone: there is no process group to end, which is said in
+// command_other.go.
+func pidsFromShAreReal() bool { return runtime.GOOS != "windows" }
+
+// longSleep is a command that outlasts any timeout these tests set. On POSIX
+// the tests end it, through the command's process group or by its ID. On
+// Windows nothing can find what sh started (pidsFromShAreReal), so it is kept
+// short enough to end by itself soon after the test, rather than linger on the
+// runner for the length a POSIX test can afford.
+func longSleep() string {
+	if runtime.GOOS == "windows" {
+		return "sleep 6"
+	}
+	return "sleep 20"
+}

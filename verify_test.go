@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -160,12 +161,30 @@ func TestVerifyMechanics(t *testing.T) {
 		root := cliTree(t, map[string]string{"a.txt": "one\n"})
 		// A shell that does not exist. Exit 3 would say the tests failed, and
 		// nothing was verified at all.
-		v, err := RunVerify("true", root, 40)
+		v, err := RunVerify("true", root, 40, Stop{})
 		if err != nil || !v.OK {
 			t.Fatalf("a working command: %v %+v", err, v)
 		}
-		if _, err := RunVerify("true", filepath.Join(root, "nonexistent-dir"), 40); err == nil {
+		if _, err := RunVerify("true", filepath.Join(root, "nonexistent-dir"), 40, Stop{}); err == nil {
 			t.Error("a verify in a directory that does not exist should not report as a failed verify")
+		}
+	})
+
+	// A command that never started has nothing for a timeout or a signal to
+	// stop. Until the review on 2026-10-06 the select that waits on all three
+	// could take the timeout or the signal when they were ready at the moment
+	// the start failed, and end then signalled a nil process: a panic where exit
+	// 5 belongs. Both are made ready before the call, and the call is repeated,
+	// because the select picks among ready cases at random.
+	t.Run("a command that cannot start ignores a timeout or a signal already due", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "nonexistent-dir")
+		for i := 0; i < 50; i++ {
+			sigs := make(chan os.Signal, 1)
+			sigs <- syscall.SIGTERM
+			v, err := RunVerify("true", missing, 40, Stop{Timeout: time.Nanosecond, Signals: sigs})
+			if err == nil || v != nil {
+				t.Fatalf("run %d: %+v, %v; want the start's error and no Verify", i, v, err)
+			}
 		}
 	})
 
@@ -193,7 +212,7 @@ func TestVerifyMechanics(t *testing.T) {
 	})
 
 	t.Run("the duration is measured", func(t *testing.T) {
-		v, err := RunVerify("sleep 0.05", t.TempDir(), 40)
+		v, err := RunVerify("sleep 0.05", t.TempDir(), 40, Stop{})
 		must(t, err)
 		if v.Seconds < 0.04 {
 			t.Errorf("seconds = %v", v.Seconds)
@@ -509,9 +528,9 @@ func TestACommandThatCannotStartDoesNotClaimAPutBack(t *testing.T) {
 		name string
 		run  func(txn *Txn, tree *Tree) (*Verify, error)
 	}{
-		{"--try", func(txn *Txn, tree *Tree) (*Verify, error) { return runTry(txn, tree, "true", 40, false) }},
+		{"--try", func(txn *Txn, tree *Tree) (*Verify, error) { return runTry(txn, tree, "true", 40, false, Stop{}) }},
 		{"--verify", func(txn *Txn, tree *Tree) (*Verify, error) {
-			return runVerify(txn, tree, "true", 40, false, false)
+			return runVerify(txn, tree, "true", 40, false, false, Stop{})
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

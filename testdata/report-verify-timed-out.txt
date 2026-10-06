@@ -1,0 +1,6 @@
+hunk: applied 2 hunks, verify timed out after 2m, rolled back 1 file
+
+$ zig build test
+Build Summary: 3/5 steps succeeded
+test: waiting
+(last 2 of 2 lines)

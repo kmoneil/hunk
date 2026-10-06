@@ -1,0 +1,10 @@
+hunk: applied 2 hunks, interrupted by SIGTERM during the verify, rolled back 0 files, 1 file left alone
+
+$ zig build test
+Build Summary: 3/5 steps succeeded
+test: waiting
+(last 2 of 2 lines)
+
+src/faults.zig was not restored.
+  Something rewrote it after hunk did.
+  hunk did not write its original bytes back; they are in version control.

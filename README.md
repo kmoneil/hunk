@@ -229,12 +229,41 @@ create back leaves, so it counts as rolled back and the exit stays 3, with one
 line naming the file as removed by something else.
 
 `--try CMD` is for an edit you do not mean to keep: a print statement, a
-measurement, a deliberate hang to see what the logs say. It applies the batch,
-runs `CMD` the way `--verify` would, puts every file back whatever `CMD` says,
-and exits with `CMD`'s own status. The report starts `tried`, so a caller can
-tell `CMD`'s 2 from `hunk`'s own. If a file could not be put back, because
-`CMD` rewrote it, the exit is 4, and `--verify-may-format` puts it back
-anyway.
+measurement, a deliberate hang to see what the logs say (with `--timeout`). It
+applies the batch, runs `CMD` the way `--verify` would, puts every file back
+whatever `CMD` says, and exits with `CMD`'s own status. The report starts
+`tried`, so a caller can tell `CMD`'s 2 from `hunk`'s own. If a file could not
+be put back, because `CMD` rewrote it, the exit is 4, and `--verify-may-format`
+puts it back anyway.
+
+### When the command does not end
+
+`--timeout DURATION` (`90s`, `5m`) ends the `--verify` or `--try` command after
+that long, and everything it started with it: its whole process group gets
+SIGTERM, and SIGKILL five seconds later if anything is left. A verify that
+timed out exits 3 and is rolled back; a `--try` that timed out exits 124, as
+`timeout(1)` does, and is put back. There is no default, because `hunk` cannot
+know the limit its caller works under. **An agent should set one below its own
+tool's limit for the call**, and always with `--try` on anything meant to hang.
+A harness may not stop a hung verify for you: Claude Code, for one, moves a
+command that outlives its timeout into the background rather than killing it,
+and `hunk` waits there with the batch applied.
+
+A SIGINT, SIGTERM or SIGHUP to `hunk` while the command runs, a Ctrl-C at a
+terminal included, does the same: the command and everything it started are
+ended, the batch is put back, the report is printed, and `hunk` then ends by
+that same signal, so a shell sees 130, 143 or 129. If a file could not be put
+back the exit is 4 instead. SIGKILL cannot be caught, and leaves the batch
+applied and the command running.
+
+A command that exits normally but leaves something running that still holds
+its output, a server a test suite started for instance, no longer holds
+`hunk`: it stops reading five seconds after the command exits, says so in the
+report, and leaves that process running, since the command may have meant to
+start it.
+
+On Windows there is no process group to end: a timeout or a Ctrl-C ends `sh`,
+and the five-second cut on its output covers what `sh` started.
 
 ## Exit codes
 
@@ -247,6 +276,11 @@ anyway.
 | 4 | verify failed and rollback was incomplete | **inconsistent** |
 | 5 | I/O error | untouched, unless the message says otherwise |
 | 6 | a file changed on disk between load and commit | untouched |
+
+Under `--try` the exit is the command's own status instead, 124 if
+`--timeout` ended it, and 4 if a file could not be put back. A `hunk` ended by a
+signal during the command dies of that signal once the batch is back (130, 143,
+129).
 
 **Exit 2 is not an error condition to route around.** It is the tool working,
 and it is the one to expect routinely: fix the patch and resend. Exit 4 is the

@@ -16,9 +16,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // version is the release this binary was built from, set by the release
@@ -127,6 +129,11 @@ FLAGS
                         back whatever it says, and exit with its status. For a
                         print statement or a measurement you do not mean to
                         keep. 4 if a file could not be put back.
+  --timeout DURATION    End the --verify or --try command after DURATION, such
+                        as 90s or 5m, and everything it started with it: exit
+                        3 under --verify, rolled back, and 124 under --try, put
+                        back. No default. Set it below any limit your harness
+                        puts on this call.
   --dry-run             Validate and print the diffstat. Write nothing.
   --root DIR            Resolve relative paths and run --verify or --try here.
                         (cwd)
@@ -156,6 +163,11 @@ Exit 2 is the one to expect routinely and act on without alarm: fix the patch
 and resend. The report prints the bytes that are actually in the file, so the
 fix is usually a paste rather than a re-read.
 
+SIGINT, SIGTERM or SIGHUP while the --verify or --try command runs ends the
+command and everything it started, puts the batch back, and then ends hunk by
+the same signal, which a shell reports as 130, 143 or 129; 4 if a file could not
+be put back. SIGKILL cannot be caught and leaves the batch applied.
+
 WHAT THIS DOES NOT PROMISE
 
 Replacing one file is atomic, via rename(2). The batch is not. A write that
@@ -171,12 +183,25 @@ Run "hunk format" for the patch grammar.
 `
 
 func main() {
-	os.Exit(cli(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	var interrupted os.Signal
+	code := invoke(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, &interrupted)
+	// A signal that ended the --verify or --try command is re-raised once the
+	// batch is back and the report is out, so that a parent sees what it
+	// would have seen before hunk caught it: a death by that signal, which a
+	// shell reports as 130 or 143. Where it cannot be, on Windows, the exit
+	// is that number.
+	if interrupted != nil {
+		raise(interrupted)
+	}
+	os.Exit(code)
 }
 
-// cli is main with its edges injected, so the exit-code walk can drive it
-// in-process and assert the tree state each code implies.
-func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+// invoke is main with its edges injected, so the exit-code walk can drive it
+// in-process and assert the tree state each code implies. It never re-raises a
+// signal, which would end a test that called it: it returns the status a shell
+// would have seen, and sets *interrupted, where interrupted is not nil, to the
+// signal main should die of once it returns.
+func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupted *os.Signal) int {
 	if len(args) > 0 && args[0] == "format" {
 		if len(args) > 1 {
 			fmt.Fprintf(stderr, "hunk: format takes no arguments\n")
@@ -205,6 +230,7 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		context      = fs.Int("context", DefaultContext, "")
 		eol          = fs.String("eol", "auto", "")
 		allowOutside = fs.Bool("allow-outside-root", false, "")
+		timeoutFlag  = fs.String("timeout", "", "")
 		help         = fs.Bool("help", false, "")
 		h            = fs.Bool("h", false, "")
 		showVersion  = fs.Bool("version", false, "")
@@ -277,6 +303,10 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if *verifyFormat && *verify == "" && *try == "" {
 		return fail(exitUsage, errors.New("--verify-may-format does nothing without --verify or --try"), "")
 	}
+	timeout, err := parseTimeout(*timeoutFlag, *verify != "" || *try != "")
+	if err != nil {
+		return fail(exitUsage, err, "")
+	}
 
 	opt := Options{Context: *context}
 	switch *eol {
@@ -328,6 +358,19 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	txn := NewTxn(tree, opt)
+	// A signal while the batch is on disk ends the command and puts the batch
+	// back, rather than killing hunk where it stands with the batch applied,
+	// which is what it did until 2026-10-06, --try's included. The handler goes
+	// in once nothing can stop the commit but a signal, and comes out when the
+	// batch is kept or back: before then, a signal kills a load that writes
+	// nothing, as it always has, and after, it kills a hunk that has finished.
+	var sigs chan os.Signal
+	if _, cmd := commandFlag(*verify, *try); cmd != "" && !*dryRun {
+		sigs = make(chan os.Signal, 1)
+		txn.beforeCommit = func() { notifyInterrupts(sigs) }
+		defer signal.Stop(sigs)
+	}
+	stop := Stop{Timeout: timeout, Signals: sigs}
 	var res *Result
 	if *dryRun {
 		res, err = txn.Preview(p)
@@ -339,16 +382,24 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	switch {
 	case err == nil && *try != "" && *dryRun:
 		v = &Verify{Command: *try, Try: true}
+	case err == nil && *verify != "" && *dryRun:
+		// §4: --dry-run writes nothing and runs no verify. The report says so
+		// rather than leaving the caller to assume it passed.
+		v = &Verify{Command: *verify}
+	case err == nil && pending(sigs) != nil:
+		// The signal came while the batch was being written. Commit finished,
+		// and the command never starts.
+		v, err = interruptedBeforeTheCommand(txn, *verify, *try, pending(sigs), *verifyFormat)
 	case err == nil && *try != "":
-		v, err = runTry(txn, tree, *try, *verifyLines, *verifyFormat)
+		v, err = runTry(txn, tree, *try, *verifyLines, *verifyFormat, stop)
 	case err == nil && *verify != "":
-		if *dryRun {
-			// §4: --dry-run writes nothing and runs no verify. The report says
-			// so rather than leaving the caller to assume it passed.
-			v = &Verify{Command: *verify}
-		} else {
-			v, err = runVerify(txn, tree, *verify, *verifyLines, *keepOnFail, *verifyFormat)
-		}
+		v, err = runVerify(txn, tree, *verify, *verifyLines, *keepOnFail, *verifyFormat, stop)
+	}
+	if sigs != nil {
+		signal.Stop(sigs)
+	}
+	if v != nil && v.Signal != nil && interrupted != nil && len(v.NotRestored) == 0 {
+		*interrupted = v.Signal
 	}
 
 	rep := NewReport(res, err, v, *dryRun, len(p.Hunks))
@@ -373,8 +424,8 @@ func cli(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 // runVerify is phases 6 and 7: run the command, and put the tree back if it
 // failed (§6.1, §6.3).
-func runVerify(txn *Txn, tree *Tree, command string, lines int, keep, mayFormat bool) (*Verify, error) {
-	v, err := RunVerify(command, tree.Root(), lines)
+func runVerify(txn *Txn, tree *Tree, command string, lines int, keep, mayFormat bool, stop Stop) (*Verify, error) {
+	v, err := RunVerify(command, tree.Root(), lines, stop)
 	if err != nil {
 		// Nothing was verified, and --verify keeps a batch only when its
 		// check passes, so the batch goes, decided 2026-09-22. Until then it
@@ -404,13 +455,16 @@ func runVerify(txn *Txn, tree *Tree, command string, lines int, keep, mayFormat 
 // runTry is --try (§4.1): run the command, then put the batch back whatever it
 // said. A command that cannot start still gets the batch put back, and is exit
 // 5 through the error, reported like any other.
-func runTry(txn *Txn, tree *Tree, command string, lines int, mayFormat bool) (*Verify, error) {
-	v, err := RunVerify(command, tree.Root(), lines)
+func runTry(txn *Txn, tree *Tree, command string, lines int, mayFormat bool, stop Stop) (*Verify, error) {
+	v, err := RunVerify(command, tree.Root(), lines, stop)
 	if err != nil {
 		v = &Verify{Command: command, Try: true, Applied: txn.Applied()}
 		return v, cannotStart("the --try command", "put back", err, v, txn, mayFormat)
 	}
 	v.Try = true
+	if v.TimedOut > 0 {
+		v.Status = exitTimedOut
+	}
 	v.Applied = txn.Applied()
 	v.RolledBack, v.NotRestored, v.Gone = txn.Rollback(mayFormat)
 	return v, nil
@@ -420,12 +474,69 @@ func runTry(txn *Txn, tree *Tree, command string, lines int, mayFormat bool) (*V
 // says whether it managed to: it names how many files it could not put back
 // rather than claiming it did, and the report lists them.
 func cannotStart(what, done string, err error, v *Verify, txn *Txn, mayFormat bool) error {
+	return fmt.Errorf("could not run %s: %w; %s", what, err, putBack(txn, v, mayFormat, done))
+}
+
+// putBack rolls the batch back after a command that never ran to an end of its
+// own, and says how it went, for the message: "the batch was" done, or how
+// many files could not be put back, rather than claiming it was.
+func putBack(txn *Txn, v *Verify, mayFormat bool, done string) string {
 	v.RolledBack, v.NotRestored, v.Gone = txn.Rollback(mayFormat)
-	back := "the batch was " + done
 	if len(v.NotRestored) > 0 {
-		back = fmt.Sprintf("%s could not be put back", count(len(v.NotRestored), "file"))
+		return fmt.Sprintf("%s could not be put back", count(len(v.NotRestored), "file"))
 	}
-	return fmt.Errorf("could not run %s: %w; %s", what, err, back)
+	return "the batch was " + done
+}
+
+// interruptedBeforeTheCommand puts the batch back after a signal that arrived
+// while it was being written, before its command could start.
+func interruptedBeforeTheCommand(txn *Txn, verify, try string, sig os.Signal, mayFormat bool) (*Verify, error) {
+	name, command := commandFlag(verify, try)
+	v := &Verify{Command: command, Try: try != "", Signal: sig, Applied: txn.Applied()}
+	return v, fmt.Errorf("interrupted by %s before the %s command ran; %s",
+		signalName(sig), name, putBack(txn, v, mayFormat, "put back"))
+}
+
+// pending is the signal waiting on sigs, if one is. It is put back, so asking
+// twice gives the same answer.
+func pending(sigs chan os.Signal) os.Signal {
+	select {
+	case sig := <-sigs:
+		sigs <- sig
+		return sig
+	default:
+		return nil
+	}
+}
+
+// notifyInterrupts is signal.Notify for the interrupts, as a variable so a
+// test can deliver one at the moment the handler goes in, which is the only
+// way to land a signal between the handler and the first write every time.
+var notifyInterrupts = func(c chan<- os.Signal) { signal.Notify(c, interrupts...) }
+
+// exitTimedOut is --try's exit when --timeout ended its command: 124, as
+// timeout(1) exits, so a caller can tell it from anything the command said.
+const exitTimedOut = 124
+
+// parseTimeout reads --timeout. Empty means none, which is the default:
+// hunk cannot know the limit its caller works under, and a default that
+// failed a slow, honest verify would be worse than none. hasCommand is whether
+// --verify or --try was given, without which --timeout would do nothing.
+func parseTimeout(s string, hasCommand bool) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("--timeout must be a duration with a unit, such as 90s or 5m, not %q", s)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("--timeout must be more than zero, not %q", s)
+	}
+	if !hasCommand {
+		return 0, errors.New("--timeout does nothing without --verify or --try")
+	}
+	return d, nil
 }
 
 // commandFlag names the flag whose command the batch will run, if either.

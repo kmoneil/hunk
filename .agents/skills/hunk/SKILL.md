@@ -324,10 +324,20 @@ decision.
 printed, and the exit is still 3.
 
 **For an edit you mean to throw away**, a print statement to see a value, a
-measurement, a deliberate hang, use `--try CMD` instead of a backup and a
-restore. It applies the batch, runs `CMD`, puts every file back whatever `CMD`
-does, prints `CMD`'s output, and exits with `CMD`'s own status. The report
-starts `tried`, which is how its exit 2 differs from a refused patch.
+measurement, a deliberate hang (with `--timeout`), use `--try CMD` instead of a
+backup and a restore. It applies the batch, runs `CMD`, puts every file back
+whatever `CMD` does, prints `CMD`'s output, and exits with `CMD`'s own status,
+or 124 if `--timeout` ended it. The report starts `tried`, which is how its exit
+2 differs from a refused patch.
+
+**Pass `--timeout` whenever the command could run long**, below your tool's own
+limit for the call: `--timeout 90s` under a two-minute limit. It ends the
+command and everything it started, then rolls back (exit 3) or, under `--try`,
+puts back (124). Always pass it with `--try` on anything meant to hang. Do not
+count on your harness to stop a hung verify: Claude Code moves a command that
+outlives its timeout into the background rather than killing it, and `hunk`
+waits there with the batch still applied while you carry on. A SIGINT, SIGTERM
+or SIGHUP does put the batch back; only SIGKILL cannot.
 
 **Prefer the repository's own gate** (`make check`, `npm test`) over a command
 you compose. `--verify` decides on the exit code, and some tools report a
