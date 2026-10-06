@@ -13,9 +13,19 @@ on:
       - "v*"
   # A manual run, so this file can be exercised without spending a version
   # number to find out whether it works. A dispatch releases nothing: `publish`
-  # is guarded on the ref being a v* tag, so on a dispatch that job never
-  # starts, no release is created, and nothing reaches the module proxy, which
-  # only ever sees tags.
+  # and both bumps are guarded on the event being a push, so on a dispatch
+  # none of them starts, no release is created or touched, and nothing reaches
+  # the module proxy, which only ever sees tags.
+  #
+  # The event and not the ref, because a dispatch can name a tag as its ref.
+  # Until 2026-10-06 the guard was the ref being a v* tag, and a dispatch on an
+  # existing tag passed it: the tag's release had its assets deleted and
+  # uploaded again, and the tap and the bucket were told to move to that tag,
+  # which after a newer release moves them back. A dispatch runs the named
+  # tag's own copy of this file, so the tags cut before that date still carry
+  # the old guard; the tap and the bucket refuse a version older than the one
+  # they have, which is what covers those. TestReleasePublishesOnlyOnATagPush
+  # holds every job that writes outside the run to this.
   workflow_dispatch:
 
 # Read at the workflow level, write on the one job that publishes. Every job
@@ -74,10 +84,13 @@ jobs:
       # toolchain has no tag to base one on. So an unstamped artifact would name
       # v0.0.0 rather than the release it is.
       #
-      # Only a tag stamps. On a workflow_dispatch the value is empty and the
-      # binary reports that pseudo-version, which is the truth about a build
-      # that releases nothing. Both halves measured on run 34127523370 by
-      # downloading the artifact and running it, rather than assumed.
+      # Only a tag ref stamps. On a workflow_dispatch from a branch the value is
+      # empty and the binary reports that pseudo-version, which is the truth
+      # about a build that releases nothing. Both halves measured on run
+      # 34127523370 by downloading the artifact and running it, rather than
+      # assumed. A dispatch that names a tag as its ref stamps that tag, which
+      # is harmless now that nothing publishes on a dispatch: the artifact is
+      # the run's own and expires with it.
       - name: build
         run: |
           mkdir -p dist
@@ -120,11 +133,12 @@ jobs:
   publish:
     name: publish
     needs: build
-    # Where a manual run stops. Guarded at the job and not at the step, so the
+    # Where a manual run stops, whatever ref it names (see the note on
+    # workflow_dispatch above). Guarded at the job and not at the step, so the
     # job never starts rather than starting and skipping its last thing: a
     # write token that is never minted cannot be misused by anything running
     # beside it.
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     # The only job that writes anything, and the only one running a
     # third-party action.
@@ -163,10 +177,14 @@ jobs:
   # Not for a prerelease, which publish does not make the latest release
   # either. The tap refuses a tag that is not vX.Y.Z, and a formula should not
   # move to a version the release page tells nobody to use.
+  #
+  # Guarded on the push event itself and not only through `needs: publish`,
+  # which skips it today but stops doing so the moment anybody adds always()
+  # to run it after a failed publish.
   bump-the-tap:
     name: tell the tap
     needs: publish
-    if: ${{ !contains(github.ref_name, '-') }}
+    if: ${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     # Nothing here uses this repository's token, so it gets no permissions at
     # all. The one credential is the tap's, below.
@@ -203,7 +221,7 @@ jobs:
   bump-the-bucket:
     name: tell the bucket
     needs: publish
-    if: ${{ !contains(github.ref_name, '-') }}
+    if: ${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions: {}
     steps:
