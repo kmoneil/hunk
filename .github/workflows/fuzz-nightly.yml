@@ -82,8 +82,21 @@ jobs:
           path: ${{ steps.gocache.outputs.dir }}
           key: fuzz-corpus-${{ github.run_id }}
           restore-keys: fuzz-corpus-
+      # Through env: and checked, not pasted into the script: Actions puts an
+      # expression's value into the script's text before bash reads it, so a
+      # fuzztime of "10m; anything" ran anything. Only someone who can dispatch
+      # could type one, but the script should not depend on who that is.
+      # TestTheFuzzTimeIsCheckedBeforeMake runs this script as written.
       - name: fuzz
-        run: make fuzz FUZZTARGET=${{ matrix.target }} FUZZTIME=${{ inputs.fuzztime || '10m' }}
+        env:
+          TARGET: ${{ matrix.target }}
+          FUZZTIME: ${{ inputs.fuzztime || '10m' }}
+        run: |
+          if ! [[ "$FUZZTIME" =~ ^[0-9]+[smh]$ ]]; then
+            echo "::error::fuzztime must be a whole number of seconds, minutes or hours, like 10m; got '$FUZZTIME'"
+            exit 1
+          fi
+          make fuzz FUZZTARGET="$TARGET" FUZZTIME="$FUZZTIME"
       # The input Go wrote is the whole value of the run. It gets committed by
       # hand as an f.Add seed alongside the fix, so it has to survive the
       # runner: an artifact, and an issue that says where to find it.

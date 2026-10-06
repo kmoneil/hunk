@@ -92,6 +92,16 @@ func needsMake(t *testing.T) {
 	}
 }
 
+// needsBash skips a test that runs a workflow's Linux step under bash, as
+// Actions does on ubuntu-latest. The script is the subject, not the platform,
+// and the Windows job has no bash it could be sure was the same one.
+func needsBash(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("a Linux workflow step is bash, and the Windows job is not where it runs")
+	}
+}
+
 // makeFIFO makes a named pipe at name, or skips. Windows has no named pipes in
 // a filesystem (its pipes live under \\.\pipe\, which no tree contains), so
 // there is nothing for load to meet there. The mkfifo command rather than
