@@ -304,6 +304,11 @@ through any symlink, is exit 2. Change git's own files with `git`.
 exits non-zero, **every file goes back** and the exit is 3. You do not need a
 backup and you do not need a cleanup call.
 
+`CMD` is any shell command, run with the user's permissions, and so is
+`--try`'s. A permission rule that allows `hunk` therefore allows whatever those
+flags carry: do not use them to run a command you would not run directly, and
+expect a careful harness to ask about them.
+
 **Reach for it without being asked when a batch touches more than one file of a
 compiled language.** `--verify 'go build ./...'` is the case in point: every
 hunk can match, every file can be plausible on its own, and the batch still not
