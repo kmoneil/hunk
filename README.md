@@ -13,7 +13,7 @@ people.
 One invocation carries many literal-text edits across many files, plus a command
 that says whether they were right. Nothing is written until every edit is known
 to match exactly as many times as it claimed to. If the command then fails,
-every file goes back to how it was.
+every file goes back to the bytes and mode it had.
 
 ```sh
 hunk --verify 'go build ./... && go test ./...' <<'HUNK'
@@ -192,7 +192,7 @@ anyway.
 | 0 | applied, and verify passed if given | changed |
 | 1 | usage or parse error | untouched |
 | 2 | a hunk did not match | untouched |
-| 3 | verify failed, rolled back | untouched |
+| 3 | verify failed, rolled back | the same bytes and mode |
 | 4 | verify failed and rollback was incomplete | **inconsistent** |
 | 5 | I/O error | untouched, unless the message says otherwise |
 | 6 | a file changed on disk between load and commit | untouched |
@@ -221,6 +221,15 @@ the two.
 
 Both gaps are repaired by the version control your tree is already under, which
 is why neither is worth the complexity of closing.
+
+Every write is a new file renamed over the old one, so a file `hunk` rewrites,
+including one a rollback puts back, keeps its bytes and its permission bits but
+is a new file. It keeps the file's group where you are in that group. Where you
+are not, the group it ends up in gets only the permissions everyone else had,
+so nobody in that group gains anything by the change. It keeps the owner only
+when run as root: editing a file someone else owns makes it yours. ACLs and
+extended attributes are not kept. A file whose access depends on any of those
+is better edited another way.
 
 ## Install
 

@@ -556,7 +556,12 @@ func (t *Tree) RemoveDir(name string) error {
 }
 
 // WriteAtomic replaces the target's contents: temp file in the same directory,
-// fsync, chmod, rename (§6.1 step 5).
+// fsync, chown, chmod, rename (§6.1 step 5).
+//
+// like is the file being replaced, as load read it, and nil for a file that was
+// not there. The new file takes its owner and group as far as keepOwner can
+// give them, and then mode, in that order because a chown can clear bits a
+// chmod set.
 //
 // Because Resolve has already followed the final symlink, the rename lands on
 // the link's destination and the link survives. Renaming onto the link itself
@@ -566,7 +571,7 @@ func (t *Tree) RemoveDir(name string) error {
 // The directory is not fsynced, so a rename is not durable across power loss.
 // That is consistent with §6.2, which designs against "the tests failed" rather
 // than "the machine lost power" and says so out loud.
-func (t *Tree) WriteAtomic(tg Target, data []byte, mode fs.FileMode) (err error) {
+func (t *Tree) WriteAtomic(tg Target, data []byte, mode fs.FileMode, like fs.FileInfo) (err error) {
 	if tg.name == "" {
 		return errors.New("write to an unresolved target; every path goes through Tree.Resolve")
 	}
@@ -590,7 +595,7 @@ func (t *Tree) WriteAtomic(tg Target, data []byte, mode fs.FileMode) (err error)
 	if err = f.Sync(); err != nil {
 		return err
 	}
-	if err = f.Chmod(mode); err != nil {
+	if err = f.Chmod(keepOwner(f, like, mode)); err != nil {
 		return err
 	}
 	if err = f.Close(); err != nil {
@@ -598,6 +603,14 @@ func (t *Tree) WriteAtomic(tg Target, data []byte, mode fs.FileMode) (err error)
 	}
 	return t.rename(tmp, tg.name)
 }
+
+// fchown is (*os.File).Chown, as a variable so a test can refuse it. keepOwner's
+// last resort runs for real only when a file's group is one the invoker is not
+// in, which a test can arrange without privilege where a new file takes its
+// directory's group and that group is foreign, as /tmp's is on macOS, and not
+// at all on Linux. Declared here rather than beside keepOwner so that the test
+// that sets it compiles on every platform.
+var fchown = (*os.File).Chown
 
 func (t *Tree) createTemp(dir string) (string, *os.File, error) {
 	for i := 0; i < 10000; i++ {

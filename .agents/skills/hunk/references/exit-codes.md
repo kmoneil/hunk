@@ -11,7 +11,7 @@ guarantee.
 | 0 | applied, verify passed if given | changed |
 | 1 | usage or a malformed patch | untouched |
 | 2 | a hunk did not match | untouched |
-| 3 | verify failed, rolled back | untouched |
+| 3 | verify failed, rolled back | the same bytes and mode |
 | 4 | verify failed and rollback was incomplete | **inconsistent** |
 | 5 | I/O error | untouched, unless the message says otherwise |
 | 6 | a file changed on disk between read and write | untouched |
@@ -35,3 +35,8 @@ usually both succeed, and can leave some files as one wrote them and some as
 the other did. Both are repaired by the version control the tree is already
 under. Do not build anything on the batch being atomic across a power failure,
 or on two agents editing the same files at once.
+
+A rewritten file, including one a rollback puts back, keeps its bytes and its
+permission bits, and its group where the user is in that group; where not, the
+group gets only what everyone else had. It keeps the owner only under root, and
+keeps no ACL or extended attribute.

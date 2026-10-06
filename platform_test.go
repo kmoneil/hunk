@@ -5,7 +5,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -109,6 +111,57 @@ func assertMode(t *testing.T, got fs.FileMode, want fs.FileMode) {
 	if got.Perm() != want {
 		t.Errorf("mode %v, want %v", got.Perm(), want)
 	}
+}
+
+// groupOf is the group a file belongs to. The tests that ask are POSIX ones and
+// call needsPOSIXPerms first, since Windows has no file groups. The field is
+// read by name, through reflect, because syscall.Stat_t does not exist on
+// Windows and naming it would stop this file compiling there.
+func groupOf(t *testing.T, path string) int {
+	t.Helper()
+	fi, err := os.Lstat(path)
+	must(t, err)
+	gid := reflect.ValueOf(fi.Sys()).Elem().FieldByName("Gid")
+	if !gid.IsValid() {
+		t.Fatalf("%s: %T has no Gid", path, fi.Sys())
+	}
+	return int(gid.Uint())
+}
+
+// newFileGroup is the group a new file in dir gets: the directory's on macOS and
+// the BSDs, and the process's on Linux unless the directory is setgid. A file
+// hunk rewrites is a new file in its directory, so this is the group it ends up
+// in when hunk does nothing about it.
+func newFileGroup(t *testing.T, dir string) int {
+	t.Helper()
+	probe := filepath.Join(dir, ".probe")
+	must(t, os.WriteFile(probe, nil, 0o600))
+	defer os.Remove(probe)
+	return groupOf(t, probe)
+}
+
+// otherGroup is a group the invoker is in that is not but, or skips the test.
+// A runner whose user is in one group cannot give a file a group that a rewrite
+// would lose, and that is a fact about the runner, not about hunk.
+func otherGroup(t *testing.T, but int) int {
+	t.Helper()
+	groups, err := os.Getgroups()
+	must(t, err)
+	for _, g := range append(groups, os.Getegid()) {
+		if g != but {
+			return g
+		}
+	}
+	t.Skipf("the invoker is in no group but %d, so no file can have a group a rewrite would lose", but)
+	return 0
+}
+
+// inGroup reports whether the invoker is in group g, and so may chown a file to it.
+func inGroup(t *testing.T, g int) bool {
+	t.Helper()
+	groups, err := os.Getgroups()
+	must(t, err)
+	return g == os.Getegid() || slices.Contains(groups, g)
 }
 
 // notExistPhrase is what the operating system says when a file is not there.
