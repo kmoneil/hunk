@@ -67,6 +67,17 @@ func needsSignals(t *testing.T) {
 	}
 }
 
+// needsMake skips a test that runs this repository's Makefile. Its recipes are
+// POSIX shell and the developer workflow they serve runs on macOS and Linux;
+// the Windows job tests the binary, and has neither make nor the sh the
+// recipes are written for on its PATH by default.
+func needsMake(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the Makefile is POSIX shell and is not part of the Windows job")
+	}
+}
+
 // brokenShell returns a directory to use as PATH in which exec.LookPath finds
 // an sh that cannot run: garbage, marked executable where there is such a
 // mark. It is how a verify command that is found and still cannot start is
