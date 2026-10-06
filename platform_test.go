@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -213,6 +214,50 @@ func slashPaths(s string) string { return strings.ReplaceAll(s, `\`, "/") }
 // links. The expectation is what the runner showed rather than a skip, so the
 // fallback stays tested on the one platform that takes it.
 func climbingPastTheTopResolves() bool { return runtime.GOOS != "windows" }
+
+// dotDotIsWalked reports whether the operating system resolves a ".." in a path
+// or a link's destination by walking it, as POSIX does, rather than possibly
+// cleaning the text before anything walks it, as Windows does.
+//
+// Most of what resolveLinks answers rests on os.Root's walk and its own, the
+// same Go code on all three platforms, and those rows hold everywhere. Three
+// things rest on the operating system instead. Unconfined, the Lstat made
+// before the walk is its own, and on Windows "nd.link\..\c.txt" is cleaned to
+// "c.txt" before the kernel sees it, so a row pinning the fallback for a ".."
+// after a file or a loop has no failure to pin. An absolute link's
+// destination is stored by CreateSymbolicLinkW, which may clean it the same
+// way, and Readlink returns what was stored. And the kernel's own answer, which
+// the rows compare with, is the platform's.
+//
+// That was a prediction when the rows were written. The first windows-latest
+// run, on 2026-10-06, showed more: os.Root on Windows is its own code, and it
+// walks the confined links the rows pin as refused too. A ".." after a file
+// came back as text cleans it, nine directory links were followed, and a link
+// to itself was stopped by resolveLinks' own hop limit with its own words. So
+// on Windows the fallback those rows exercise is never reached, and nothing
+// pins there whether resolveLinks' answer through a ".." in a link is the file
+// Windows itself opens. That question is older than these rows.
+func dotDotIsWalked() bool { return runtime.GOOS != "windows" }
+
+// unreadableLink makes a symlink at name that Lstat finds and Readlink cannot
+// read, where the platform can, and reports whether it did.
+//
+// macOS enforces a symlink's own mode on readlink, and "chmod -h 000" sets
+// it; the standard library has no lchmod there, so the command is run. Linux
+// keeps no mode on a link and Windows has no chmod, so both report false and
+// the test skips. It is a probe rather than a GOOS check, like foldsCase,
+// because what matters is whether the read fails, not which system said so.
+func unreadableLink(tb testing.TB, name string) bool {
+	tb.Helper()
+	if err := os.Symlink("anything", name); err != nil {
+		tb.Fatal(err)
+	}
+	if exec.Command("chmod", "-h", "000", name).Run() != nil {
+		return false
+	}
+	_, err := os.Readlink(name)
+	return err != nil
+}
 
 // foldsCase reports whether the filesystem the test's temporary directories are
 // on folds case, by making a file and looking it up in the other case.

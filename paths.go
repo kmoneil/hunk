@@ -21,6 +21,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -217,18 +218,52 @@ func (t *Tree) toName(p string) (string, error) {
 // Lstat'd as it stands before it is walked, so an escape or an absolute link in
 // a parent is refused in os.Root's words, exactly as before. A path it cannot
 // traverse for any other reason, such as a loop, a file used as a directory or
-// a permission, comes back as it stands for load to report.
+// a permission, comes back as it stands for load to report, unless a ".." is
+// still in it.
+//
+// A ".." still in it came from a link's destination, and only walking it says
+// what it removes. Cleaning it as text instead was this fallback until
+// 2026-10-06, and it named a file the kernel does not reach: with
+// self.link -> self.link/../c.txt, which the kernel cannot open, a delete of
+// self.link deleted c.txt. So it is refused. That costs a few links the kernel
+// can follow and os.Root will not, such as a ".." past a chain of nine
+// directory links, and buys not having a second walker that can be wrong in a
+// different way.
 func (t *Tree) resolveLinks(orig, name string) (string, bool, error) {
 	base, parts := t.splitName(name)
 	via := false
 	links := 0
+	// The link followed last and what it held, for a refusal that has to say
+	// which link it could not get past.
+	var link, dest string
+	// A final link whose destination's text climbs out of the root. Until
+	// 2026-10-06 that text was enough to refuse it, which refused links that
+	// stay inside once walked (with x -> sub/deep, x/../../c.txt is c.txt). The
+	// walk decides now, and when os.Root agrees that it leaves, the refusal is
+	// worded as the text check worded it.
+	climbed := ""
 	for i, walked := 0, false; ; {
 		if !walked {
 			walked = true
 			current := t.joinName(base, parts, false)
 			if _, err := t.lstat(current); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				if refusal := t.refusalFor(orig, filepath.Clean(current), err); refusal != nil {
+					if climbed != "" {
+						refusal.Resolved, refusal.Reason = climbed, "it is a symlink out of the root"
+					}
 					return "", false, refusal
+				}
+				if slices.Contains(parts, "..") {
+					var pe *fs.PathError
+					if errors.As(err, &pe) {
+						err = pe.Err // the path it names is the spliced one, which can run to pages
+					}
+					return "", false, &PathRefusal{
+						Path: orig, Root: t.root,
+						Reason: fmt.Sprintf("the symlink %s -> %s cannot be followed (%v), "+
+							"and a .. after a symlink has no answer without following it; name the file itself",
+							link, dest, err),
+					}
 				}
 				return filepath.Clean(current), via, nil
 			}
@@ -277,15 +312,18 @@ func (t *Tree) resolveLinks(orig, name string) (string, bool, error) {
 			}
 		}
 		links++
-		dest, err := t.readlink(here)
+		held, err := t.readlink(here)
 		if err != nil {
 			return "", false, &PathRefusal{
 				Path: orig, Root: t.root, Resolved: here,
 				Reason: "the symlink could not be read: " + err.Error(),
 			}
 		}
-		via = true
-		absolute, destBase, destParts, err := t.linkDestination(orig, here, dest, i == len(parts)-1)
+		via, link, dest = true, here, held
+		if i == len(parts)-1 {
+			climbed = t.climbsAsText(here, dest)
+		}
+		absolute, destBase, destParts, err := t.linkDestination(orig, dest)
 		if err != nil {
 			return "", false, err
 		}
@@ -301,13 +339,19 @@ func (t *Tree) resolveLinks(orig, name string) (string, bool, error) {
 // linkDestination turns a symlink's destination into components to put where
 // the link stood, and reports whether they start from the top instead.
 //
-// A final link gets the checks os.Root never makes on it, since Lstat does not
-// follow the last component: an absolute destination inside the root is
-// translated, which os.Root refuses even there, and one that leaves the root is
-// refused, as is a relative one whose text climbs out. A link in a parent was
-// already followed by os.Root in the Lstat before this walk, which refused it
-// if it escaped or was absolute.
-func (t *Tree) linkDestination(orig, link, dest string, final bool) (bool, string, []string, error) {
+// Confined, an absolute destination is reached only by a final link, since
+// os.Root refuses one in a parent in the Lstat before the walk. It gets the
+// check os.Root never makes on it, because Lstat does not follow the last
+// component: one inside the root is translated, which os.Root refuses even
+// there, and one that leaves the root is refused.
+//
+// The translation compares the root's components with the destination's as
+// written and splices the rest in raw, ".." and all, for the walk to resolve
+// physically like any other. Until 2026-10-06 it went through filepath.Rel,
+// which cleans as text, so with x -> sub/deep a link to <root>/x/../c.txt was
+// c.txt, where the kernel reads sub/c.txt. A rest that climbs back out of the
+// root is refused by os.Root in the Lstat that follows.
+func (t *Tree) linkDestination(orig, dest string) (bool, string, []string, error) {
 	if t.r == nil {
 		if filepath.IsAbs(dest) {
 			vol := filepath.VolumeName(dest)
@@ -316,25 +360,65 @@ func (t *Tree) linkDestination(orig, link, dest string, final bool) (bool, strin
 		return false, "", splitPath(dest), nil
 	}
 	if filepath.IsAbs(dest) {
-		rel, err := filepath.Rel(t.root, filepath.Clean(dest))
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		rest, ok := below(t.root, dest)
+		if !ok {
 			return false, "", nil, &PathRefusal{
 				Path: orig, Root: t.root, Resolved: dest,
 				Reason: "it is a symlink out of the root",
 			}
 		}
-		return true, "", splitPath(rel), nil
-	}
-	if joined := filepath.Join(filepath.Dir(link), dest); final &&
-		(joined == ".." || strings.HasPrefix(joined, ".."+string(filepath.Separator))) {
-		return false, "", nil, &PathRefusal{
-			Path: orig, Root: t.root,
-			Resolved: filepath.Join(t.root, filepath.Dir(link), dest),
-			Reason:   "it is a symlink out of the root",
-		}
+		return true, "", rest, nil
 	}
 	return false, "", splitPath(dest), nil
 }
+
+// climbsAsText reports where a confined final link's destination leads when
+// its text is cleaned, if that is out of the root, and "" if not. It is only
+// ever a wording, the one the refusal had when the text decided: os.Root
+// decides whether the link leaves.
+func (t *Tree) climbsAsText(link, dest string) string {
+	if t.r == nil {
+		return ""
+	}
+	shown, rel := dest, ""
+	if filepath.IsAbs(dest) {
+		rel, _ = filepath.Rel(t.root, filepath.Clean(dest))
+	} else {
+		rel = filepath.Join(filepath.Dir(link), dest)
+		shown = filepath.Join(t.root, rel)
+	}
+	if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return shown
+}
+
+// below returns p's components under root when root's components begin it, as
+// written: neither path is cleaned, so a ".." stays in the rest to be walked,
+// and a "." or ".." among the root's own components is a different path and
+// is not below it. Components are compared whole, so <root>2/c.txt is not
+// under <root>, which a string prefix would say it is.
+func below(root, p string) ([]string, bool) {
+	rv, pv := filepath.VolumeName(root), filepath.VolumeName(p)
+	rp, pp := splitPath(root[len(rv):]), splitPath(p[len(pv):])
+	if !sameComponent(rv, pv) || len(pp) < len(rp) {
+		return nil, false
+	}
+	for i := range rp {
+		if !sameComponent(rp[i], pp[i]) {
+			return nil, false
+		}
+	}
+	return pp[len(rp):], true
+}
+
+// sameComponent compares two path components the way filepath.Rel did when it
+// made this comparison: folding case on Windows, and exactly elsewhere.
+func sameComponent(a, b string) bool {
+	return a == b || (componentsFoldCase && strings.EqualFold(a, b))
+}
+
+const componentsFoldCase = runtime.GOOS == "windows"
 
 // splitName breaks a name in this tree's terms into the part the walk never
 // leaves, "" when confined and the volume's top when not, and its components.
@@ -422,9 +506,13 @@ func (t *Tree) stat(name string) (fs.FileInfo, error) {
 // It walks tg's name and its spelling in the patch in step. The two can differ
 // only where Resolve replaced a link with its destination, and the file in the
 // way is always below the link that led to it, so they stay in step as far as
-// the walk goes. On Linux and macOS they do not differ at all: Resolve returns
-// a path it could not traverse as it stands. Stat follows a link where
-// resolution stopped, so a link to a file is the file in the way.
+// the walk goes. On Linux and macOS a path Resolve could not traverse comes back
+// as its walk had it, which differs from the spelling only by a destination
+// spliced in where a link stood, and never by a ".." cleaned away, since one
+// is refused there. A final link whose destination itself runs through a file
+// is the shape that still leaves the two out of step, and the file named is
+// then the wrong one. Stat follows a link where resolution stopped, so a link
+// to a file is the file in the way.
 func (t *Tree) FileAbove(tg Target) (shown, name string, ok bool) {
 	name, spelled := tg.name, filepath.Clean(filepath.FromSlash(tg.orig))
 	for {

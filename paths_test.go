@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1236,4 +1239,510 @@ func TestKeepOwnerWhenChownIsRefused(t *testing.T) {
 			}
 		})
 	}
+}
+
+// dotDotTree adds the fixture for links whose destinations hold a "..". The
+// kernel reaches sub/c.txt through x, and c.txt is the decoy that cleaning the
+// text instead lands on. b is a chain of nine directory links, one more than
+// os.Root follows, and k a chain of eight. root+"2" is a sibling of the root
+// whose name extends the root's. s is a directory with a one-letter name, for
+// the links that climb in and out of one more times than os.Root will step.
+func dotDotTree(tb testing.TB, root string) {
+	tb.Helper()
+	do := func(err error) {
+		tb.Helper()
+		if err != nil {
+			tb.Fatal(err)
+		}
+	}
+	do(os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755))
+	do(os.MkdirAll(filepath.Join(root, "s"), 0o755))
+	do(os.MkdirAll(root+"2", 0o755))
+	for name, body := range map[string]string{
+		"top.txt": "top\n", "c.txt": "lexical\n", "sub/c.txt": "physical\n", "sub/f.txt": "f\n",
+	} {
+		do(os.WriteFile(filepath.Join(root, native(name)), []byte(body), 0o644))
+	}
+	do(os.WriteFile(filepath.Join(root+"2", "c.txt"), []byte("sibling\n"), 0o644))
+	// In order, so each link's target exists before a link to it is made, which
+	// is how Windows tells a directory link from a file link.
+	links := [][2]string{{"x", "sub/deep"}, {"d", "sub"}, {"alias", "c.txt"}, {"b8", "sub/deep"}, {"k7", "sub/deep"}}
+	for i := 7; i >= 1; i-- {
+		links = append(links, [2]string{"b" + strconv.Itoa(i), "b" + strconv.Itoa(i+1)})
+	}
+	for i := 6; i >= 1; i-- {
+		links = append(links, [2]string{"k" + strconv.Itoa(i), "k" + strconv.Itoa(i+1)})
+	}
+	links = append(links, [2]string{"b", "b1"}, [2]string{"k", "k1"})
+	for _, l := range links {
+		do(os.Symlink(native(l[1]), filepath.Join(root, l[0])))
+	}
+}
+
+// dotDotLinks are the links the rows below name, by the destination each
+// holds. One that starts with "/" is under the root; {root} is the root, and
+// {base} its last component.
+//
+// nt.link and ntc.link step through s 130 times, which is past os.Root's 255
+// steps, and it is the steps os.Root counts, not the bytes. They used sub,
+// until the first CI run: unconfined, the destination is spliced into an
+// absolute path, and under a runner's /private/var/folders/... temp directory
+// 130 "sub/../" took it past macOS's 1024-byte limit, which is a different
+// refusal from the one the rows pin. With s it is about 650 bytes plus the root.
+var dotDotLinks = map[string]string{
+	"abs.link":    "/x/../c.txt",
+	"absup.link":  "/x/../../c.txt",
+	"absout.link": "/../{base}2/c.txt",
+	"sib.link":    "{root}2/c.txt",
+	"el.link":     "b/../c.txt",
+	"el8.link":    "k/../c.txt",
+	"nd.link":     "top.txt/../c.txt",
+	"self.link":   "self.link/../c.txt",
+	"nt.link":     strings.Repeat("s/../", 130) + "x/../c.txt",
+	"ntc.link":    strings.Repeat("s/../", 130) + "c.txt",
+	"ndd.link":    "top.txt/../d/f.txt",
+	"nd2.link":    "top.txt/../alias",
+	"up.link":     "x/../../c.txt",
+	"out.link":    "x/../../../{base}2/c.txt",
+	"above.link":  "{parent}",
+}
+
+func makeDotDotLinks(t *testing.T, root string) {
+	t.Helper()
+	for name, dest := range dotDotLinks {
+		if strings.HasPrefix(dest, "/") {
+			dest = root + dest
+		}
+		dest = strings.NewReplacer(
+			"{root}", root, "{base}", filepath.Base(root), "{parent}", filepath.Dir(root),
+		).Replace(dest)
+		must(t, os.Symlink(native(dest), filepath.Join(root, name)))
+	}
+}
+
+// A ".." in a link's destination means whatever walking it finds, which is
+// what the kernel does and what resolveLinks says it does. Until 2026-10-06 two
+// branches cleaned it as text instead: an absolute final link, through
+// filepath.Rel, and the fallback for a path os.Root cannot walk. Either named a
+// file the kernel does not reach, so a modify, an append or a delete of the
+// link acted on c.txt where every other reader sees sub/c.txt, or nothing at
+// all. A third, the text check on a final relative link, refused links that
+// stay inside once walked.
+//
+// The whole suite passed against the fix unchanged, so nothing pinned the old
+// answers and nothing would have noticed them coming back. These rows do.
+func TestALinkLeadsWhereTheKernelWalksIt(t *testing.T) {
+	root := mktree(t)
+	dotDotTree(t, root)
+	makeDotDotLinks(t, root)
+
+	const (
+		loop    = "too many levels of symbolic links"
+		notDir  = "not a directory"
+		tooLong = "file name too long"
+		cannot  = "cannot be followed"
+		outOfIt = "it is a symlink out of the root"
+	)
+	// A want with no reason resolves, to name: {root} is the root, {parent}
+	// the directory above it.
+	type want struct{ name, reason, why string }
+	// Where a row's answer holds. A row that pins a refusal of a walk os.Root
+	// cannot make, or that rests on a ".." being walked rather than cleaned as
+	// text, holds on POSIX: os.Root is not the same code on Windows, and the
+	// first CI run there walked every one of them. See dotDotIsWalked.
+	const (
+		anywhere = iota
+		onPOSIX
+	)
+	for _, c := range []struct {
+		name, link string
+		confined   want
+		unconfined want
+		holds      int
+	}{
+		{
+			"an absolute link with a .. after a directory link", "abs.link",
+			want{name: "sub/c.txt"},
+			want{name: "{root}/sub/c.txt"},
+			onPOSIX,
+		},
+		{
+			"an absolute link whose text climbs out and whose walk stays in", "absup.link",
+			want{name: "c.txt"},
+			want{name: "{root}/c.txt"},
+			onPOSIX,
+		},
+		{
+			"an absolute link that climbs out and into a sibling", "absout.link",
+			want{reason: outOfIt},
+			want{name: "{root}2/c.txt"},
+			anywhere,
+		},
+		{
+			"an absolute link to a sibling whose name extends the root's", "sib.link",
+			want{reason: outOfIt},
+			want{name: "{root}2/c.txt"},
+			anywhere,
+		},
+		{
+			"a .. after nine directory links, one more than os.Root follows", "el.link",
+			want{reason: cannot, why: loop},
+			want{name: "{root}/sub/c.txt"},
+			onPOSIX,
+		},
+		{
+			"a .. after eight directory links", "el8.link",
+			want{name: "sub/c.txt"},
+			want{name: "{root}/sub/c.txt"},
+			anywhere,
+		},
+		{
+			"a .. after a file", "nd.link",
+			want{reason: cannot, why: notDir},
+			want{reason: cannot, why: notDir},
+			onPOSIX,
+		},
+		{
+			"a .. after the link itself, which loops", "self.link",
+			want{reason: cannot, why: loop},
+			want{reason: cannot, why: loop},
+			onPOSIX,
+		},
+		{
+			"a .. past more steps than os.Root takes", "nt.link",
+			want{reason: cannot, why: tooLong},
+			want{name: "{root}/sub/c.txt"},
+			onPOSIX,
+		},
+		{
+			"the same, where the text and the walk agree", "ntc.link",
+			want{reason: cannot, why: tooLong},
+			want{name: "{root}/c.txt"},
+			onPOSIX,
+		},
+		{
+			"a .. after a file, then a directory link", "ndd.link",
+			want{reason: cannot, why: notDir},
+			want{reason: cannot, why: notDir},
+			onPOSIX,
+		},
+		{
+			"a .. after a file, then a link to a file", "nd2.link",
+			want{reason: cannot, why: notDir},
+			want{reason: cannot, why: notDir},
+			onPOSIX,
+		},
+		{
+			"a relative link whose text climbs out and whose walk stays in", "up.link",
+			want{name: "c.txt"},
+			want{name: "{root}/c.txt"},
+			onPOSIX,
+		},
+		{
+			"a relative link that climbs out through a directory link", "out.link",
+			want{reason: outOfIt},
+			want{name: "{root}2/c.txt"},
+			anywhere,
+		},
+		{
+			"an absolute link to a directory above the root", "above.link",
+			want{reason: outOfIt},
+			want{name: "{parent}"},
+			anywhere,
+		},
+	} {
+		for _, mode := range []struct {
+			name     string
+			unconfin bool
+		}{{"confined", false}, {"unconfined", true}} {
+			t.Run(mode.name+", "+c.name, func(t *testing.T) {
+				w := c.confined
+				if mode.unconfin {
+					w = c.unconfined
+				}
+				if !dotDotIsWalked() && c.holds == onPOSIX {
+					t.Skip("this platform may clean a .. as text before anything walks it; see dotDotIsWalked")
+				}
+				tree, err := OpenTree(root, mode.unconfin)
+				must(t, err)
+				defer tree.Close()
+				tg, err := tree.Resolve(c.link)
+				if w.reason == "" {
+					if err != nil {
+						t.Fatalf("Resolve(%q): %v", c.link, err)
+					}
+					named := strings.NewReplacer("{root}", root, "{parent}", filepath.Dir(root)).Replace(w.name)
+					if want := native(named); tg.name != want {
+						t.Errorf("name = %q, want %q", tg.name, want)
+					}
+					// And it is the file the kernel reaches through the link,
+					// where the kernel walks a .. too.
+					if dotDotIsWalked() {
+						at := filepath.Join(root, tg.name)
+						if mode.unconfin {
+							at = tg.name
+						}
+						got, err := os.Stat(at)
+						must(t, err)
+						kernel, err := os.Stat(filepath.Join(root, c.link))
+						must(t, err)
+						if !os.SameFile(got, kernel) {
+							t.Errorf("%s is not the file the kernel reaches through %s", tg.name, c.link)
+						}
+					}
+					return
+				}
+				var pr *PathRefusal
+				if !errors.As(err, &pr) {
+					t.Fatalf("Resolve(%q) = %q, %v; want a *PathRefusal saying %q", c.link, tg.name, err, w.reason)
+				}
+				if pr.Path != c.link {
+					t.Errorf("Path = %q, want the link as written, %q", pr.Path, c.link)
+				}
+				for _, s := range []string{w.reason, w.why, tree.Root()} {
+					if !strings.Contains(err.Error(), s) {
+						t.Errorf("%q does not say %q", err.Error(), s)
+					}
+				}
+				if w.reason == cannot && !strings.Contains(pr.Reason, c.link+" -> ") {
+					t.Errorf("%q does not name the link it could not follow", pr.Reason)
+				}
+			})
+		}
+	}
+}
+
+// A link Lstat finds and Readlink cannot read is refused, naming the link and
+// the system's reason, in both modes.
+func TestALinkThatCannotBeReadIsRefused(t *testing.T) {
+	root := mktree(t)
+	if !unreadableLink(t, filepath.Join(root, "shut.link")) {
+		t.Skip("this platform keeps no mode on a symlink to stop readlink; see unreadableLink")
+	}
+	for _, unconfin := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unconfined=%v", unconfin), func(t *testing.T) {
+			tree, err := OpenTree(root, unconfin)
+			must(t, err)
+			defer tree.Close()
+			_, err = tree.Resolve("shut.link")
+			var pr *PathRefusal
+			if !errors.As(err, &pr) {
+				t.Fatalf("Resolve = %v, want a *PathRefusal", err)
+			}
+			for _, s := range []string{"the symlink could not be read", "permission denied", "shut.link", tree.Root()} {
+				if !strings.Contains(err.Error(), s) {
+					t.Errorf("%q does not say %q", err.Error(), s)
+				}
+			}
+		})
+	}
+}
+
+// The same links through a whole batch, confined, with the tree read
+// afterwards: a refusal is exit 2 with nothing written, and a link that
+// resolves edits the file the kernel reaches, and only that file.
+func TestABatchThroughALinkEditsTheFileTheKernelReaches(t *testing.T) {
+	// Every row is one TestALinkLeadsWhereTheKernelWalksIt holds on POSIX only:
+	// a refusal of a walk os.Root on Windows makes, or a ".." Windows may clean.
+	if !dotDotIsWalked() {
+		t.Skip("os.Root on Windows walks what these rows pin as refused; see dotDotIsWalked")
+	}
+	for _, c := range []struct {
+		name, patch string
+		changed     string // "": refused, and the tree is unchanged
+		file, body  string
+	}{
+		{name: "a delete through a link that loops", patch: "@@ delete self.link\n"},
+		{name: "a delete through a .. after a file", patch: "@@ delete nd.link\n"},
+		{
+			name:  "a modify past nine directory links",
+			patch: "@@ file el.link\n@@ old\nlexical\n@@ new\nEDIT\n",
+		},
+		{name: "an append past nine directory links", patch: "@@ append el.link\nmore\n@@ end\n"},
+		{
+			name:  "a modify past more steps than os.Root takes",
+			patch: "@@ file nt.link\n@@ old\nlexical\n@@ new\nEDIT\n",
+		},
+		{
+			// It used to replace alias, a link, with a regular file (§6.5).
+			name:  "a modify through a .. after a file, to a link",
+			patch: "@@ file nd2.link\n@@ old\nlexical\n@@ new\nEDIT\n",
+		},
+		{
+			// It used to load sub/f.txt under two names and lose the first edit.
+			name: "two names for one file, one through a .. after a file",
+			patch: "@@ file ndd.link\n@@ old\nf\n@@ new\nONE\n" +
+				"@@ file sub/f.txt\n@@ old\nf\n@@ new\nf\nTWO\n",
+		},
+		{
+			name:    "a modify through an absolute link with a .. after a directory link",
+			patch:   "@@ file abs.link\n@@ old\nphysical\n@@ new\nEDIT\n",
+			changed: "sub/c.txt changed", file: "sub/c.txt", body: "EDIT\n",
+		},
+		{
+			name:    "a modify through a relative link whose text climbs out",
+			patch:   "@@ file up.link\n@@ old\nlexical\n@@ new\nEDIT\n",
+			changed: "c.txt changed", file: "c.txt", body: "EDIT\n",
+		},
+		{
+			name:    "a modify through an absolute link whose text climbs out",
+			patch:   "@@ file absup.link\n@@ old\nlexical\n@@ new\nEDIT\n",
+			changed: "c.txt changed", file: "c.txt", body: "EDIT\n",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tree, root := fixture(t, nil)
+			dotDotTree(t, root)
+			makeDotDotLinks(t, root)
+			before := snapshot(t, root)
+			_, err := run(t, tree, c.patch, Options{})
+			if c.changed == "" {
+				if code := ExitCode(err); code != exitNoMatch {
+					t.Errorf("exit %d (%v), want %d", code, err, exitNoMatch)
+				}
+				var pr *PathRefusal
+				if !errors.As(err, &pr) || !strings.Contains(pr.Reason, "cannot be followed") {
+					t.Errorf("err = %v, want the refusal of a .. it cannot walk", err)
+				}
+				assertUnchanged(t, root, before)
+				return
+			}
+			must(t, err)
+			if got := snapshotDiff(before, snapshot(t, root)); len(got) != 1 || got[0] != c.changed {
+				t.Errorf("the tree changed in %q, want only %q", got, c.changed)
+			}
+			if got := readFile(t, root, c.file); got != c.body {
+				t.Errorf("%s = %q, want %q", c.file, got, c.body)
+			}
+		})
+	}
+}
+
+// The refusal is new wording, so it is a contract (§8.1), in both renderings.
+// The root is substituted as in TestAPathRefusalIsGolden, and so are the
+// separators, since the link's destination is printed as Readlink gave it.
+func TestALinkThatCannotBeFollowedIsGolden(t *testing.T) {
+	if !dotDotIsWalked() {
+		t.Skip("os.Root on Windows walks self.link's .. rather than refusing it; see dotDotIsWalked")
+	}
+	root := cliTree(t, map[string]string{"c.txt": "lexical\n"})
+	must(t, os.Symlink(native("self.link/../c.txt"), filepath.Join(root, "self.link")))
+	before := snapshot(t, root)
+
+	code, out, errOut := runCLI(t, root, nil, "@@ delete self.link\n")
+	if code != exitNoMatch {
+		t.Fatalf("exit %d, want %d: %s", code, exitNoMatch, errOut)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
+	}
+	golden(t, "cli-path-refused-link-cannot-be-followed", slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
+
+	code, out, errOut = runCLI(t, root, []string{"--json"}, "@@ delete self.link\n")
+	if code != exitNoMatch || errOut != "" {
+		t.Fatalf("exit %d, stderr %q; want %d and nothing on stderr", code, errOut, exitNoMatch)
+	}
+	// In JSON a backslash is escaped, so the root is found in its escaped form
+	// and an escaped separator folds to a slash.
+	escaped, err := json.Marshal(root)
+	must(t, err)
+	out = strings.ReplaceAll(out, strings.Trim(string(escaped), `"`), "/the/root")
+	golden(t, "cli-path-refused-link-cannot-be-followed-json", strings.ReplaceAll(out, `\\`, "/"))
+	assertUnchanged(t, root, before)
+}
+
+// asksForADirectory reports whether a destination can only lead to a
+// directory, by its text: it ends in a separator or a ".", or is empty.
+func asksForADirectory(dest string) bool {
+	return dest == "" || dest == "." || strings.HasSuffix(dest, "/") ||
+		strings.HasSuffix(dest, string(filepath.Separator)) || strings.HasSuffix(dest, "/.")
+}
+
+// A link's destination is the half of a path the repository writes and the
+// patch does not, so it is fuzzed here with the patch's half fixed. The
+// property is the one resolveLinks claims and nothing asserted until
+// 2026-10-06: it walks a path as the kernel does. Where Resolve answers, its
+// name is the file the kernel reaches through the link, or is as absent as the
+// kernel finds it. A refusal is always allowed, since refusing where the
+// kernel would succeed is what not having a second walker costs; a refusal
+// that is not a PathRefusal is not.
+func FuzzALinkLeadsWhereTheKernelWalks(f *testing.F) {
+	root := f.TempDir()
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		f.Fatal(err)
+	}
+	dotDotTree(f, root)
+	// In name order, so a seed's number names the same link on every run.
+	for _, name := range slices.Sorted(maps.Keys(dotDotLinks)) {
+		dest := dotDotLinks[name]
+		if strings.HasPrefix(dest, "/") {
+			dest = root + dest
+		}
+		f.Add(strings.NewReplacer(
+			"{root}", root, "{base}", filepath.Base(root), "{parent}", filepath.Dir(root),
+		).Replace(dest))
+	}
+	for _, dest := range []string{
+		"fz.link", "fz.link/../c.txt", "x/..", "x/../..", "d/../top.txt", "c.txt/", "sub/./c.txt",
+		"alias/../c.txt", "missing/../c.txt", "../" + filepath.Base(root) + "/c.txt", "/", "",
+	} {
+		f.Add(dest)
+	}
+	var trees []*Tree
+	for _, unconfin := range []bool{false, true} {
+		tree, err := OpenTree(root, unconfin)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Cleanup(func() { tree.Close() })
+		trees = append(trees, tree)
+	}
+	link := filepath.Join(root, "fz.link")
+
+	f.Fuzz(func(t *testing.T, dest string) {
+		_ = os.Remove(link)
+		if os.Symlink(dest, link) != nil {
+			return // a destination no filesystem stores, such as one with a NUL
+		}
+		for _, tree := range trees {
+			tg, err := tree.Resolve("fz.link")
+			if err != nil {
+				var pr *PathRefusal
+				if !errors.As(err, &pr) {
+					t.Fatalf("fz.link -> %q: a %T, not a refusal: %v", dest, err, err)
+				}
+				continue
+			}
+			if !dotDotIsWalked() {
+				continue
+			}
+			at := tg.name
+			if !filepath.IsAbs(at) {
+				at = filepath.Join(root, at)
+			}
+			kernel, kErr := os.Stat(link)
+			got, gErr := os.Stat(at)
+			// Two shapes this property found on its first run that hold no
+			// "..", and are left for their own card rather than given a new
+			// refusal here: a destination ending in a separator or a ".",
+			// which the kernel follows only to a directory, and an empty one,
+			// which macOS stores and nothing follows. Resolve names the file
+			// the text names, or the root. Skipped by shape, so the day they
+			// are refused this is the line to delete.
+			if kErr != nil && asksForADirectory(dest) {
+				continue
+			}
+			switch {
+			case kErr == nil && gErr != nil:
+				t.Fatalf("fz.link -> %q: the kernel reaches a file, and Resolve named %q, where there is none: %v", dest, tg.name, gErr)
+			case kErr == nil && !os.SameFile(kernel, got):
+				t.Fatalf("fz.link -> %q: Resolve named %q, which is not the file the kernel reaches", dest, tg.name)
+			case kErr != nil && gErr == nil:
+				t.Fatalf("fz.link -> %q: the kernel reaches nothing (%v), and Resolve named %q, which exists", dest, kErr, tg.name)
+			}
+		}
+	})
 }
