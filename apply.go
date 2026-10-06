@@ -209,6 +209,11 @@ type file struct {
 	// cannot exist, and no hunk can make it.
 	inFile, inFileName string
 
+	// notAFile is what stands at the path when it is a named pipe, a socket
+	// or a device: "a named pipe", and so on. Nothing was read from it, and
+	// every hunk that names it is refused, so it is never committed.
+	notAFile string
+
 	// seamAdded records that append ended the file's last line first (§3.3).
 	// Reported rather than done quietly, which is the whole reason normalizing
 	// the seam was acceptable.
@@ -319,6 +324,11 @@ func (x *Txn) Load(p *Patch) error {
 // and rollback cannot do in order, so it is refused rather than half-supported
 // and deletesAbove says so in the message.
 func requireState(f *file, h Hunk, root string, deletesAbove bool) *PathRefusal {
+	// For every op, create included: a create would rename a regular file
+	// over the pipe, which is the thing this refuses.
+	if f.notAFile != "" {
+		return &PathRefusal{Path: h.Path, Root: root, Reason: "it is " + f.notAFile + ", not a file"}
+	}
 	if f.inFile != "" {
 		reason := "no such file; " + f.inFile + " is a file, so nothing can be inside it"
 		if h.Op == OpCreate {
@@ -379,6 +389,11 @@ func (x *Txn) load(h Hunk) (*file, error) {
 			Path: h.Path, Root: x.tree.Root(),
 			Reason: "it is a directory, not a file",
 		}
+	case err == nil && notAFile(fi) != "":
+		// Refused per hunk by requireState, so the batch's other failures are
+		// reported beside it. Until 2026-10-06 a named pipe held load in its
+		// open, and the mismatch beside it was never reported at all.
+		f.notAFile = notAFile(fi)
 	case err == nil:
 		f.existed = true
 		f.info = fi

@@ -1,0 +1,10 @@
+hunk: 2 hunks did not match; nothing was written
+
+hunk 1  a.txt  (patch line 2)
+  expected 1 occurrence, found 0
+
+  no anchor found: not one line of your old appears in the file,
+  even ignoring whitespace. The text is not there.
+
+hunk 2  p  (patch line 7)
+  it is a named pipe, not a file; the root is /the/root

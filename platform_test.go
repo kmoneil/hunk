@@ -92,6 +92,42 @@ func needsMake(t *testing.T) {
 	}
 }
 
+// makeFIFO makes a named pipe at name, or skips. Windows has no named pipes in
+// a filesystem (its pipes live under \\.\pipe\, which no tree contains), so
+// there is nothing for load to meet there. The mkfifo command rather than
+// syscall.Mkfifo, which does not exist on Windows and would stop this file
+// compiling there.
+func makeFIFO(t *testing.T, name string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no named pipes in a filesystem")
+	}
+	if out, err := exec.Command("mkfifo", name).CombinedOutput(); err != nil {
+		t.Fatalf("mkfifo %s: %v: %s", name, err, out)
+	}
+}
+
+// needsUnixSocketFiles skips a test that binds a unix socket in the tree.
+// Windows has AF_UNIX since 2018, as a reparse point, but whether os.Stat
+// reports one as ModeSocket there has not been seen on a runner, and a row
+// that asserted it would be asserting a guess.
+func needsUnixSocketFiles(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("a unix socket file's mode on Windows has not been observed; see needsUnixSocketFiles")
+	}
+}
+
+// needsDeviceFiles skips a test that links to /dev/null and /dev/zero. Windows
+// has no device nodes in a filesystem; its NUL is a reserved name, which
+// os.Root refuses and which no tree holds.
+func needsDeviceFiles(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no /dev")
+	}
+}
+
 // needsPOSIXNames skips a test whose subject is a file name Windows cannot
 // hold. The skill's loop is tested against directory names carrying a line
 // break and a literal backslash, because those are the two ways a name reached
