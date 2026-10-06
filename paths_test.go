@@ -534,7 +534,7 @@ func TestWriteAtomic(t *testing.T) {
 
 		tg, err := tree.Resolve("top.txt")
 		must(t, err)
-		must(t, tree.WriteAtomic(tg, []byte("rewritten\n"), 0o640))
+		must(t, tree.WriteAtomic(tg, []byte("rewritten\n"), 0o640, nil))
 
 		got, err := os.ReadFile(filepath.Join(root, "top.txt"))
 		must(t, err)
@@ -557,7 +557,7 @@ func TestWriteAtomic(t *testing.T) {
 
 		tg, err := tree.Resolve("rel.link")
 		must(t, err)
-		must(t, tree.WriteAtomic(tg, []byte("through\n"), 0o644))
+		must(t, tree.WriteAtomic(tg, []byte("through\n"), 0o644, nil))
 
 		fi, err := os.Lstat(filepath.Join(root, "rel.link"))
 		must(t, err)
@@ -578,7 +578,7 @@ func TestWriteAtomic(t *testing.T) {
 		defer tree.Close()
 		tg, err := tree.Resolve("top.txt")
 		must(t, err)
-		must(t, tree.WriteAtomic(tg, []byte("x\n"), 0o644))
+		must(t, tree.WriteAtomic(tg, []byte("x\n"), 0o644, nil))
 
 		ents, err := os.ReadDir(root)
 		must(t, err)
@@ -594,7 +594,7 @@ func TestWriteAtomic(t *testing.T) {
 		tree, err := OpenTree(root, false)
 		must(t, err)
 		defer tree.Close()
-		if err := tree.WriteAtomic(Target{}, []byte("x"), 0o644); err == nil {
+		if err := tree.WriteAtomic(Target{}, []byte("x"), 0o644, nil); err == nil {
 			t.Error("a zero Target was written")
 		}
 	})
@@ -606,7 +606,7 @@ func TestWriteAtomic(t *testing.T) {
 		defer tree.Close()
 		tg, err := tree.Resolve("nodir/f.txt")
 		must(t, err)
-		if err := tree.WriteAtomic(tg, []byte("x"), 0o644); err == nil {
+		if err := tree.WriteAtomic(tg, []byte("x"), 0o644, nil); err == nil {
 			t.Error("wrote into a directory that does not exist")
 		}
 	})
@@ -643,7 +643,7 @@ func TestMkdirAllAndRemove(t *testing.T) {
 		t.Errorf("made %v, want just sub/deeper", made2)
 	}
 
-	must(t, tree.WriteAtomic(tg, []byte("x\n"), 0o644))
+	must(t, tree.WriteAtomic(tg, []byte("x\n"), 0o644, nil))
 	must(t, tree.Remove(tg))
 	if _, err := os.Stat(filepath.Join(root, "a/b/c/f.txt")); !errors.Is(err, fs.ErrNotExist) {
 		t.Error("Remove did not remove")
@@ -873,7 +873,7 @@ func TestWriteAtomicCleansUpAfterAFailedRename(t *testing.T) {
 
 	tg, err := tree.Resolve("adir")
 	must(t, err)
-	if err := tree.WriteAtomic(tg, []byte("x\n"), 0o644); err == nil {
+	if err := tree.WriteAtomic(tg, []byte("x\n"), 0o644, nil); err == nil {
 		t.Fatal("renamed a file over a directory")
 	}
 	ents, err := os.ReadDir(root)
@@ -901,7 +901,7 @@ func TestUnconfinedWriteCycle(t *testing.T) {
 	if len(made) != 2 {
 		t.Fatalf("made %v, want two directories", made)
 	}
-	must(t, tree.WriteAtomic(tg, []byte("unconfined\n"), 0o600))
+	must(t, tree.WriteAtomic(tg, []byte("unconfined\n"), 0o600, nil))
 
 	fi, err := tree.Stat(tg)
 	must(t, err)
@@ -919,7 +919,7 @@ func TestUnconfinedWriteCycle(t *testing.T) {
 	must(t, os.Symlink(filepath.Join(outside, "o.txt"), filepath.Join(root, "out.link")))
 	otg, err := tree.Resolve("out.link")
 	must(t, err)
-	must(t, tree.WriteAtomic(otg, []byte("new\n"), 0o644))
+	must(t, tree.WriteAtomic(otg, []byte("new\n"), 0o644, nil))
 	got, err := os.ReadFile(filepath.Join(outside, "o.txt"))
 	must(t, err)
 	if string(got) != "new\n" {
@@ -976,7 +976,7 @@ func TestUnconfinedFailurePaths(t *testing.T) {
 
 	dtg, err := tree.Resolve("adir")
 	must(t, err)
-	if err := tree.WriteAtomic(dtg, []byte("x\n"), 0o644); err == nil {
+	if err := tree.WriteAtomic(dtg, []byte("x\n"), 0o644, nil); err == nil {
 		t.Fatal("renamed a file over a directory")
 	}
 	ents, err := os.ReadDir(root)
@@ -1159,6 +1159,81 @@ func TestAPathRefusalIsGolden(t *testing.T) {
 				t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
 			}
 			golden(t, c.golden, slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
+		})
+	}
+}
+
+// keepOwner's order, through fchown. TestEveryRewriteKeepsTheGroup and
+// TestAGroupThatCannotBeKeptGetsWhatOthersHad reach it with real groups; the
+// second can only run where a foreign group can be made without privilege,
+// which no CI runner offers, and an owner that is not the invoker's needs root.
+// So each refusal is made here, and what is asserted is still the file on disk.
+func TestKeepOwnerWhenChownIsRefused(t *testing.T) {
+	needsPOSIXPerms(t)
+	refuse := func(owner, group bool) func(*os.File, int, int) error {
+		return func(f *os.File, uid, gid int) error {
+			if (uid != -1 && owner) || (uid == -1 && group) {
+				return fs.ErrPermission
+			}
+			return f.Chown(uid, gid)
+		}
+	}
+	for _, c := range []struct {
+		name         string
+		owner, group bool // whether each chown is refused
+		keepGroup    bool // whether the file starts in a group a new file would not get
+		like         bool // false for a file that was not there
+		wantMode     fs.FileMode
+		wantGroup    string // "had" or "new"
+		wantCalls    int
+	}{
+		{"nothing refused", false, false, true, true, 0o640, "had", 1},
+		{"the owner refused, the group not", true, false, true, true, 0o640, "had", 2},
+		{"both refused, a group that differs", true, true, true, true, 0o600, "new", 2},
+		{"both refused, the group already right", true, true, false, true, 0o640, "new", 2},
+		{"a new file has nothing to keep", true, true, true, false, 0o640, "new", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := mktree(t)
+			p := filepath.Join(root, "top.txt")
+			fresh := newFileGroup(t, root)
+			had := fresh
+			if c.keepGroup {
+				had = otherGroup(t, fresh)
+				must(t, os.Chown(p, -1, had))
+			}
+			must(t, os.Chmod(p, 0o640))
+			var like fs.FileInfo
+			if c.like {
+				fi, err := os.Stat(p)
+				must(t, err)
+				like = fi
+			}
+			calls := 0
+			orig := fchown
+			t.Cleanup(func() { fchown = orig })
+			fchown = func(f *os.File, uid, gid int) error {
+				calls++
+				return refuse(c.owner, c.group)(f, uid, gid)
+			}
+
+			tree, err := OpenTree(root, false)
+			must(t, err)
+			defer tree.Close()
+			tg, err := tree.Resolve("top.txt")
+			must(t, err)
+			must(t, tree.WriteAtomic(tg, []byte("rewritten\n"), 0o640, like))
+
+			want := map[string]int{"had": had, "new": fresh}[c.wantGroup]
+			if got := groupOf(t, p); got != want {
+				t.Errorf("group %d, want %d (%s)", got, want, c.wantGroup)
+			}
+			fi, err := os.Stat(p)
+			must(t, err)
+			assertMode(t, fi.Mode(), c.wantMode)
+			if calls != c.wantCalls {
+				t.Errorf("fchown called %d times, want %d", calls, c.wantCalls)
+			}
 		})
 	}
 }

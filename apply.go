@@ -748,7 +748,7 @@ func (x *Txn) commit(f *file) error {
 		}
 		fallthrough
 	case "modify":
-		if err := x.tree.WriteAtomic(f.target, f.cur, f.mode); err != nil {
+		if err := x.tree.WriteAtomic(f.target, f.cur, f.mode, f.info); err != nil {
 			return err
 		}
 		f.wrote = sha256.Sum256(f.cur)
@@ -933,7 +933,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 					continue
 				}
 			}
-			if err := x.tree.WriteAtomic(f.target, f.orig, f.mode); err != nil {
+			if err := x.tree.WriteAtomic(f.target, f.orig, f.mode, f.info); err != nil {
 				notRestored = append(notRestored, NotRestored{
 					Path: f.target.Orig(), Reason: "It could not be written: " + err.Error(),
 				})
@@ -965,7 +965,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 				continue
 			}
 		}
-		if err := x.tree.WriteAtomic(f.target, f.orig, f.mode); err != nil {
+		if err := x.tree.WriteAtomic(f.target, f.orig, f.mode, f.info); err != nil {
 			notRestored = append(notRestored, NotRestored{
 				Path:   f.target.Orig(),
 				Reason: "It could not be written: " + err.Error(),

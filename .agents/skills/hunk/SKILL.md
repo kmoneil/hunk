@@ -31,7 +31,7 @@ success.
 | `no anchor found` | Try a shorter `old` | Every line of your `old` was compared with every line of the file, whitespace ignored, and not one of them is there. Check the path, or that an earlier hunk did not already change it |
 | `would fall above the top of the file` | Re-read the file | Your `old` overhangs the top. The line it did find is printed with its number; drop the lines above it from your `old` |
 | `skipped: same file as hunk N` | Fix this hunk | It was never evaluated. Fix hunk N; this one may then be fine |
-| exit 3, `verify failed, rolled back` | Re-apply and hope | The tree is back to how it was. The verify output is below the line; fix the patch |
+| exit 3, `verify failed, rolled back` | Re-apply and hope | Every file is back to the same bytes and mode. The verify output is below the line; fix the patch |
 | exit 4, `was not restored` | Ignore it | The tree is inconsistent. Read which file and why, then repair it before doing anything else |
 | exit 5 | Assume the edit landed | Read the message. Unless it says otherwise, nothing was written, or it was put back. The cause is outside the patch: a missing shell, a name the filesystem refused, a full disk |
 | exit 6, `changed on disk` | Retry the same patch | Something else wrote the tree. Re-read the file and rebuild the patch against what is there now |
