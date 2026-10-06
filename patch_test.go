@@ -180,6 +180,75 @@ func TestParse(t *testing.T) {
 			in:   "@@ delete some file.go\n",
 			want: []Hunk{body(OpDelete, "some file.go", 1, "")},
 		},
+
+		// --- CRLF and control characters ---
+		// One trailing CR is a directive line's ending. Payload bytes are the
+		// parser's to keep: whether a payload's CRs are line endings is
+		// --eol's question, answered in convert.
+		{
+			name: "a wholly CRLF patch, every directive",
+			in: "@@ file a.go\r\n@@ old x2\r\nx\r\n@@ new\r\ny\r\n" +
+				"@@ create b.go\r\nB\r\n@@ append c.go\r\nC\r\n@@ prepend d.go\r\nD\r\n" +
+				"@@ delete e.go\r\n@@ end\r\n",
+			want: []Hunk{
+				rep("a.go", 2, 2, "x\r", "y\r"),
+				body(OpCreate, "b.go", 6, "B\r"),
+				body(OpAppend, "c.go", 8, "C\r"),
+				body(OpPrepend, "d.go", 10, "D\r"),
+				body(OpDelete, "e.go", 12, ""),
+			},
+		},
+		{
+			name: "a CRLF directive in an LF patch",
+			in:   "@@ file a.go\r\n@@ old\nx\n@@ new\ny\n",
+			want: []Hunk{rep("a.go", 2, 1, "x", "y")},
+		},
+		{
+			name: "@@ end with a CR ends a create's payload, which it used to join",
+			in:   "@@ create c.txt\nhello\n@@ end\r\n",
+			want: []Hunk{body(OpCreate, "c.txt", 1, "hello")},
+		},
+		{
+			name: "and a replace's, which it used to write into the file",
+			in:   "@@ file a.go\n@@ old\nx\n@@ new\ny\n@@ end\r\n",
+			want: []Hunk{rep("a.go", 2, 1, "x", "y")},
+		},
+		{
+			name: "@@ end with a CR and no final newline",
+			in:   "@@ delete a.go\n@@ end\r",
+			want: []Hunk{body(OpDelete, "a.go", 1, "")},
+		},
+		{
+			name: "trailing spaces before the CR are trimmed as before",
+			in:   "@@ delete a.go  \r\n",
+			want: []Hunk{body(OpDelete, "a.go", 1, "")},
+		},
+		{
+			name: "a CR inside a path stays, for Resolve to refuse",
+			in:   "@@ delete a\rb.go\n",
+			want: []Hunk{body(OpDelete, "a\rb.go", 1, "")},
+		},
+		{
+			name: "only one CR is a line ending, so a second stays, for Resolve to refuse",
+			in:   "@@ delete a.go\r\r\n",
+			want: []Hunk{body(OpDelete, "a.go\r", 1, "")},
+		},
+		{
+			name: "a tab inside a path is allowed, as it always was",
+			in:   "@@ delete a\tb.go\n",
+			want: []Hunk{body(OpDelete, "a\tb.go", 1, "")},
+		},
+		{
+			name: "in a patch that mixes endings, an old that is one CR is a CR",
+			in:   "@@ file a.go\n@@ old\n\r\n@@ new\nx\n",
+			want: []Hunk{rep("a.go", 2, 1, "\r", "x")},
+		},
+		{
+			name:   "--marker makes a directive with a control character stuck to it payload",
+			marker: "%%",
+			in:     "%% create a.txt\n@@ end\f\n",
+			want:   []Hunk{body(OpCreate, "a.txt", 1, "@@ end\f")},
+		},
 	}
 
 	for _, c := range cases {
@@ -232,6 +301,9 @@ func TestParseErrors(t *testing.T) {
 		// and on an empty file it is 1, so it would apply.
 		{"an empty old", "", "@@ file a.go\n@@ old\n@@ new\nx\n", 2, "every position"},
 		{"an old of one blank line joins to nothing", "", "@@ file a.go\n@@ old\n\n@@ new\nx\n", 2, "every position"},
+		// Found by fuzzing the CRLF rule before it was committed: in a CRLF
+		// patch the blank line is "\r", which --eol auto reads as empty.
+		{"and so does a CRLF patch's", "", "@@ file a.go\r\n@@ old\r\n\r\n@@ new\r\nx\r\n", 2, "every position"},
 		{"@@ new takes no argument", "", "@@ file a.go\n@@ old\nx\n@@ new x2\ny\n", 4, "takes no argument"},
 
 		{"@@ file with no path", "", "@@ file\n", 1, "needs a path"},
@@ -248,6 +320,20 @@ func TestParseErrors(t *testing.T) {
 
 		{"@@ end takes no argument", "", "@@ delete a.go\n@@ end now\n", 2, "takes no argument"},
 		{"content after @@ end", "", "@@ delete a.go\n@@ end\njunk\n", 3, "terminates the patch"},
+		{"content after @@ end with a CR", "", "@@ delete a.go\r\n@@ end\r\njunk\r\n", 3, "terminates the patch"},
+
+		// A directive with a control character stuck to it used to become
+		// payload in silence. Named, in a message with no raw control byte.
+		{"a form feed after @@ end", "", "@@ delete a.go\n@@ end\f\n", 2, `would be the directive "@@ end" but for U+000C in it`},
+		{"and inside a payload, where it was absorbed", "", "@@ create a.go\nx\n@@ end\f\n", 3, `"@@ end" but for U+000C`},
+		{"an escape after @@ old", "", "@@ file a.go\n@@ old\x1b\nx\n@@ new\ny\n", 2, `"@@ old" but for U+001B`},
+		{"an escape before the word", "", "@@ file a.go\n@@ \x1bold\nx\n@@ new\ny\n", 2, `"@@ old" but for U+001B`},
+		{"a control character inside the marker", "", "@\x7f@ delete a.go\n", 1, `"@@ delete" but for U+007F`},
+		{"a C1 control after the word", "", "@@ delete a.go\n@@ end\u0085\n", 2, `"@@ end" but for U+0085`},
+		{"a vertical tab as the separator", "", "@@\x0bdelete a.go\n", 1, `"@@ delete" but for U+000B`},
+		{"a second CR is not a line ending", "", "@@ delete a.go\n@@ end\r\r\n", 2, `"@@ end" but for U+000D`},
+		{"a lone C1 byte after the word, which is not UTF-8", "", "@@ delete a.go\n@@ end\x9b\n", 2, `"@@ end" but for 0x9B`},
+		{"the message says what to do", "", "@@ delete a.go\n@@ end\f\n", 2, "remove it, or if the line is payload text, choose another directive prefix with --marker"},
 
 		{"an empty marker", "%%%", "", 0, "marker"},
 	}
@@ -275,7 +361,59 @@ func TestParseErrors(t *testing.T) {
 			if !bytes.Contains([]byte(pe.Msg), []byte(c.msg)) {
 				t.Errorf("message %q does not contain %q", pe.Msg, c.msg)
 			}
+			if name, ok := firstControl(pe.Msg); ok {
+				t.Errorf("message %q prints %s raw", pe.Msg, name)
+			}
 		})
+	}
+}
+
+// Patch.CRLF is "every line the patch terminates ends in CRLF", and only that
+// lets --eol auto read a payload's CRs as line endings. A patch that mixes
+// endings keeps its bytes.
+func TestParseSaysWhetherThePatchIsCRLF(t *testing.T) {
+	for _, c := range []struct {
+		name, in string
+		want     bool
+	}{
+		{"every line CRLF", "@@ create a\r\nx\r\n", true},
+		{"an unterminated last line does not count", "@@ create a\r\nx", true},
+		{"a CRLF line among LF ones", "@@ create a\r\nx\n", false},
+		{"LF", "@@ create a\nx\n", false},
+		{"no newline at all", "@@ delete a", false},
+		{"a CR alone at the end of a line still makes it CRLF", "@@ create a\r\nx\r\r\n", true},
+		{"a CR inside a line does not", "@@ create a\nx\ry\n", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, err := Parse([]byte(c.in), DefaultMarker)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if p.CRLF != c.want {
+				t.Errorf("CRLF = %v, want %v", p.CRLF, c.want)
+			}
+		})
+	}
+}
+
+// showControls is what a message prints in place of text it is refusing.
+func TestShowControls(t *testing.T) {
+	for in, want := range map[string]string{
+		"plain.go":         "plain.go",
+		"x\x1b[31mred.txt": "x<U+001B>[31mred.txt",
+		"a\rb":             "a<U+000D>b",
+		"\x00":             "<U+0000>",
+		"a\u009bb\u0085":   "a<U+009B>b<U+0085>",
+		"a\x7f":            "a<U+007F>",
+		"a\tb":             "a\tb",
+		"café":             "café",
+		"bad\xff":          "bad\xff",
+		"a\x9bb":           "a<0x9B>b",
+		"\x80":             "<0x80>",
+	} {
+		if got := showControls(in); got != want {
+			t.Errorf("showControls(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -322,7 +460,9 @@ func TestParserHasNoFileAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse patch.go: %v", err)
 	}
-	allowed := map[string]bool{"bytes": true, "fmt": true, "strconv": true, "strings": true}
+	// unicode/utf8 joined on 2026-10-06, to tell a lone C1 byte from a byte of
+	// another character; it decodes bytes in memory and opens nothing.
+	allowed := map[string]bool{"bytes": true, "fmt": true, "strconv": true, "strings": true, "unicode/utf8": true}
 	for _, im := range f.Imports {
 		path, err := strconv.Unquote(im.Path.Value)
 		if err != nil {
@@ -367,6 +507,10 @@ func FuzzParse(f *testing.F) {
 	f.Add("@@ -1,3 +1,4 @@\n")
 	f.Add("@@\t\tcreate  \n")
 	f.Add("")
+	f.Add("@@ create c.txt\r\nhello\r\n@@ end\r\n")
+	f.Add("@@ delete a.go\n@@ end\f\n")
+	f.Add("@@\x0bdelete a\n")
+	f.Add("@@ file a\n@@ old x2\nx\n\n@@ new\n\n@@ end\n")
 
 	f.Fuzz(func(t *testing.T, s string) {
 		// Total: every input is either a Patch or a *ParseError, never a panic.
@@ -376,20 +520,69 @@ func FuzzParse(f *testing.F) {
 			if !errors.As(err, &pe) {
 				t.Fatalf("non-ParseError %T: %v", err, err)
 			}
+			// A parse error names a control character; it never prints one.
+			if name, ok := firstControl(pe.Error()); ok {
+				t.Fatalf("%q prints %s raw", pe.Error(), name)
+			}
+		} else {
+			if len(p.Hunks) == 0 {
+				t.Fatal("a successful parse with no hunks")
+			}
+			for _, h := range p.Hunks {
+				if h.Path == "" {
+					t.Errorf("hunk at line %d has no path", h.Line)
+				}
+				if h.Op == OpReplace && h.Count < 1 {
+					t.Errorf("replace at line %d has count %d", h.Line, h.Count)
+				}
+				if h.Op == OpReplace && len(h.Old) == 0 {
+					t.Errorf("replace at line %d has an empty old, which matches everywhere", h.Line)
+				}
+				// Nor empty as --eol auto reads a CRLF patch's old.
+				if h.Op == OpReplace && p.CRLF && len(stripCR(h.Old)) == 0 {
+					t.Errorf("replace at line %d has an old that --eol auto reads as empty: %q", h.Line, h.Old)
+				}
+			}
+		}
+
+		// A CRLF patch is the same patch. Every \n made \r\n changes no
+		// directive, path, count or line, and no error's line, and leaves each
+		// payload line one CR longer, which is exactly what --eol auto takes
+		// away again. So "@@ end" with a CR ends a payload as "@@ end" does.
+		// Asked of inputs with no CR of their own, whose lines would end
+		// differently once converted.
+		if strings.Contains(s, "\r") {
 			return
 		}
-		if len(p.Hunks) == 0 {
-			t.Fatal("a successful parse with no hunks")
+		q, qerr := Parse([]byte(strings.ReplaceAll(s, "\n", "\r\n")), DefaultMarker)
+		if (err == nil) != (qerr == nil) {
+			t.Fatalf("LF: %v\nCRLF: %v", err, qerr)
 		}
-		for _, h := range p.Hunks {
-			if h.Path == "" {
-				t.Errorf("hunk at line %d has no path", h.Line)
+		if err != nil {
+			var pe, qe *ParseError
+			errors.As(err, &pe)
+			errors.As(qerr, &qe)
+			if pe.Line != qe.Line {
+				t.Fatalf("LF fails at line %d, CRLF at %d: %v / %v", pe.Line, qe.Line, err, qerr)
 			}
-			if h.Op == OpReplace && h.Count < 1 {
-				t.Errorf("replace at line %d has count %d", h.Line, h.Count)
+			return
+		}
+		if strings.Contains(s, "\n") && !q.CRLF {
+			t.Errorf("a patch with every \\n made \\r\\n is not CRLF")
+		}
+		if len(q.Hunks) != len(p.Hunks) {
+			t.Fatalf("LF has %d hunks, CRLF %d", len(p.Hunks), len(q.Hunks))
+		}
+		for i, a := range p.Hunks {
+			b := q.Hunks[i]
+			if a.Op != b.Op || a.Path != b.Path || a.Line != b.Line || a.Count != b.Count {
+				t.Errorf("hunk %d: LF %s %q line %d x%d, CRLF %s %q line %d x%d",
+					i+1, a.Op, a.Path, a.Line, a.Count, b.Op, b.Path, b.Line, b.Count)
 			}
-			if h.Op == OpReplace && len(h.Old) == 0 {
-				t.Errorf("replace at line %d has an empty old, which matches everywhere", h.Line)
+			for _, pair := range [][2][]byte{{a.Old, b.Old}, {a.New, b.New}, {a.Body, b.Body}} {
+				if !bytes.Equal(stripCR(pair[1]), pair[0]) {
+					t.Errorf("hunk %d: LF payload %q, CRLF payload %q", i+1, pair[0], pair[1])
+				}
 			}
 		}
 	})

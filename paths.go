@@ -48,7 +48,11 @@ type PathRefusal struct {
 	Reason   string
 }
 
-func (e *PathRefusal) Error() string { return e.Path + ": " + e.Detail() }
+// Error names the path with any control character in it shown by name, since
+// a terminal takes ESC printed raw as an instruction and a CR as a carriage
+// return. Path itself stays as written, which is what JSON escapes and a caller
+// compares.
+func (e *PathRefusal) Error() string { return showControls(e.Path) + ": " + e.Detail() }
 
 // Detail is the message without the leading path, for a report that has already
 // printed the path on a line of its own (§5.2).
@@ -160,6 +164,19 @@ func (t *Tree) Resolve(p string) (Target, error) {
 		return Target{}, &PathRefusal{
 			Path: p, Root: t.root,
 			Reason: "the path contains a NUL byte, which no filesystem accepts",
+		}
+	}
+	// Nor does anybody mean a control character in one. Until 2026-10-06
+	// "@@ create x" with an escape sequence in the name created that file at
+	// exit 0, and the report printed the sequence raw, colouring the
+	// terminal; a CR left in a path by a CRLF patch named a file that looked
+	// like the one meant and was not. Refused here, beside NUL, so it is one
+	// refusal for every op, before anything is read.
+	if name, ok := firstControl(p); ok {
+		return Target{}, &PathRefusal{
+			Path: p, Root: t.root,
+			Reason: "the path contains " + name +
+				", a control character, which hunk does not allow in a file name; remove it from the patch",
 		}
 	}
 	name, err := t.toName(p)

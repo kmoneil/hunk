@@ -181,6 +181,16 @@ Three rules worth knowing before the first patch:
    payload really does contain a line like `@@ old`, `--marker` picks a
    different prefix for the whole patch.
 
+A patch may end its lines with CRLF, as PowerShell does when it pipes text: one
+carriage return at the end of a directive line is the line's ending, not part
+of a path or a directive. Under the default `--eol auto`, a patch whose every
+line ends in CRLF has its payload read the same way, so it matches an LF file
+and creates a CRLF one; `--eol strict` keeps every payload byte as written. A
+control character anywhere else in a directive line is refused and named
+rather than printed: in a path, such as an escape sequence or a carriage return
+inside the name, with exit 2, and stuck to a directive word, such as `@@ end`
+followed by a form feed, as a syntax error with exit 1.
+
 The heredoc around a patch has one rule of its own, and it is the shell's, not
 `hunk`'s: **a payload line that is exactly the delimiter ends the heredoc.**
 With `<<'HUNK'`, a line reading `HUNK` in the text you paste stops the patch

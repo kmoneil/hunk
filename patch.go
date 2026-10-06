@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // DefaultMarker is the directive prefix (§3.2). --marker replaces it for a
@@ -68,8 +69,15 @@ type Hunk struct {
 // A Patch is a batch of hunks in the order they were written. §3.5: they apply
 // in that order, against the file as previous hunks in the same batch have
 // left it.
+//
+// CRLF says every line the patch terminates ends in \r\n, which is what
+// PowerShell sends down a pipe and what an editor set to CRLF writes. Under
+// --eol auto the CR is then the patch's line terminator rather than payload
+// (§6.4). A patch that mixes endings keeps its bytes, so a CR somebody put in a
+// payload on purpose survives anywhere a patch is not uniformly CRLF.
 type Patch struct {
 	Hunks []Hunk
+	CRLF  bool
 }
 
 // ParseError is every failure this file can produce, and all of them are
@@ -98,7 +106,14 @@ var directiveWords = map[string]bool{
 
 // directive reports whether line is a directive, and if so its keyword and the
 // argument text after it. All three of §3.2's conditions have to hold.
+//
+// One trailing CR is the line's terminator, not part of it. Until 2026-10-06 it
+// stayed on whatever line carried it, so a patch sent through PowerShell ended
+// in "@@ end\r", which is not "@@ end": it was written into the file as a line
+// of text, at exit 0, and "@@ create b.txt\r" created a file whose name ended
+// in a carriage return.
 func directive(line []byte, marker string) (word, arg string, ok bool) {
+	line = bytes.TrimSuffix(line, cr)
 	if !bytes.HasPrefix(line, []byte(marker)) {
 		return "", "", false
 	}
@@ -116,6 +131,92 @@ func directive(line []byte, marker string) (word, arg string, ok bool) {
 		return "", "", false
 	}
 	return word, arg, true
+}
+
+// isControl reports whether r is a control character nobody puts in a file name
+// or a directive on purpose: C0 but tab, DEL, and C1. Tab is a separator in a
+// directive line (§3.2) and was always allowed inside a path. U+009B is a
+// terminal's escape introducer as surely as ESC is.
+func isControl(r rune) bool {
+	return (r < 0x20 && r != '\t') || r == 0x7f || (r >= 0x80 && r <= 0x9f)
+}
+
+// controlAt reports whether s[i:] starts with a control character, by
+// isControl, the name a message gives it, and how many bytes it takes either
+// way. A C1 control is one as the code point and also as a lone byte 0x80 to
+// 0x9F that is not part of a UTF-8 sequence: that is how an 8-bit terminal
+// reads it, and Linux takes any byte in a name. Inside a valid sequence such a
+// byte belongs to another character, as 0xA9 does to the é in "café", and is
+// not one. Any other byte that is not UTF-8 is not a control character.
+func controlAt(s string, i int) (name string, width int, ok bool) {
+	r, w := utf8.DecodeRuneInString(s[i:])
+	if r == utf8.RuneError && w == 1 && s[i] >= 0x80 && s[i] <= 0x9f {
+		return fmt.Sprintf("0x%02X", s[i]), 1, true
+	}
+	if isControl(r) {
+		return codePoint(r), w, true
+	}
+	return "", w, false
+}
+
+// firstControl names the first control character in s, by controlAt.
+func firstControl(s string) (string, bool) {
+	for i := 0; i < len(s); {
+		name, w, ok := controlAt(s, i)
+		if ok {
+			return name, true
+		}
+		i += w
+	}
+	return "", false
+}
+
+// codePoint names a character the way a message can print it, which a control
+// character cannot be: ESC printed raw is an instruction to the terminal.
+func codePoint(r rune) string { return fmt.Sprintf("U+%04X", r) }
+
+// showControls is s with every control character replaced by its name in angle
+// brackets, for a message that has to repeat text it is refusing.
+func showControls(s string) string {
+	if _, ok := firstControl(s); !ok {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		name, w, ok := controlAt(s, i)
+		if ok {
+			b.WriteString("<" + name + ">")
+		} else {
+			b.WriteString(s[i : i+w])
+		}
+		i += w
+	}
+	return b.String()
+}
+
+// nearDirective reports the directive line would have been but for a control
+// character in it: "@@ end" with a form feed after it, "@@ old" with an escape
+// inside it, "@@" and "delete" with a vertical tab between them. The character
+// is tried both ways, as nothing and as a space, since it can stand in a word or
+// in place of the separator.
+func nearDirective(line []byte, marker string) (string, bool) {
+	s := string(line)
+	for _, as := range []string{"", " "} {
+		var b strings.Builder
+		for i := 0; i < len(s); {
+			_, w, ok := controlAt(s, i)
+			if ok {
+				b.WriteString(as)
+			} else {
+				b.WriteString(s[i : i+w])
+			}
+			i += w
+		}
+		if word, _, ok := directive([]byte(b.String()), marker); ok {
+			return word, true
+		}
+	}
+	return "", false
 }
 
 // splitLines splits on \n. A final \n terminates the last line rather than
@@ -195,7 +296,27 @@ func Parse(src []byte, marker string) (*Patch, error) {
 		return nil, &ParseError{0, "marker must not be empty"}
 	}
 	lines := splitLines(src)
-	p := &Patch{}
+	nl := bytes.Count(src, lf)
+	p := &Patch{CRLF: nl > 0 && bytes.Count(src, crlf) == nl}
+
+	// A directive with a control character stuck to it, "@@ end" followed by a
+	// form feed or "@@ old" by an escape, is not a directive, so it used to
+	// become payload in silence, as "@@ end\r" did. That is never what was
+	// meant, and wherever the line is, including inside a payload, it is
+	// refused. The way to write such a line as payload is --marker, as for a
+	// payload line that is a directive.
+	for i, line := range lines {
+		if _, _, ok := directive(line, marker); ok {
+			continue
+		}
+		bare := bytes.TrimSuffix(line, cr)
+		if word, ok := nearDirective(bare, marker); ok {
+			name, _ := firstControl(string(bare))
+			return nil, &ParseError{i + 1, fmt.Sprintf(
+				"the line would be the directive %q but for %s in it, a control character; remove it, or if the line is payload text, choose another directive prefix with --marker",
+				marker+" "+word, name)}
+		}
+	}
 
 	// The current-file register (§3.5). "@@ file" sets it, and so does every
 	// other directive that names a path: a "@@ old" following a "@@ delete"
@@ -291,7 +412,14 @@ loop:
 			// That is the wrong-position edit §2 exists to refuse, so it is
 			// refused here rather than left to produce a count nobody can act
 			// on. §3.3's "a payload may be empty" is about new, not old.
-			if len(old) == 0 {
+			//
+			// In a CRLF patch a blank line is "\r", and --eol auto reads the
+			// CR as its ending (convert), so an old of one blank line is empty
+			// there too. Left to the parser's bytes it was "\r", passed this
+			// check, and on an empty file inserted at offset 0: the fuzz
+			// property that a CRLF patch is the same patch found it, on the
+			// day the CR stripping was written, before it was committed.
+			if len(old) == 0 || (p.CRLF && len(stripCR(old)) == 0) {
 				return nil, &ParseError{ln, fmt.Sprintf(
 					"%s has an empty payload, which would match at every position in the file rather than at one. A single blank line joins to nothing, so leave two to match an empty line. To insert text, put a surrounding line in old and repeat it in new, or use %s or %s at a file boundary",
 					marker+" old", marker+" append", marker+" prepend")}
@@ -404,6 +532,14 @@ payload. So a Markdown file full of "@@" passes through untouched, and so does
 a unified diff pasted into a payload, whose "@@ -1,3 +1,4 @@" fails the third
 test. If a payload really does contain a line like "@@ old", --marker picks
 another prefix.
+
+A carriage return at the end of a directive line is its line ending, so a
+patch written with CRLF line endings, as PowerShell pipes text, parses the
+same. Under --eol auto, a patch whose every line ends in CRLF has its payload
+read the same way; --eol strict keeps every payload byte. A control character
+anywhere else in a directive line is refused and named, never written: in a
+path with exit 2, and stuck to a directive word, as in "@@ end" followed by a
+form feed, with exit 1.
 
 The heredoc around a patch has a rule of its own, which is the shell's: a
 payload line that is exactly the heredoc's delimiter (HUNK in the example

@@ -622,10 +622,14 @@ func TestANulByteInAPathIsRefused(t *testing.T) {
 				if pr.Path != c.in {
 					t.Errorf("path = %q, want it as written, %q", pr.Path, c.in)
 				}
-				for _, want := range []string{"the path contains a NUL byte", tree.Root()} {
+				for _, want := range []string{"the path contains a NUL byte", "<U+0000>", tree.Root()} {
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("%q does not say %q", err.Error(), want)
 					}
+				}
+				// Until 2026-10-06 the message printed the path, NUL and all.
+				if strings.Contains(err.Error(), "\x00") {
+					t.Errorf("%q prints the NUL raw", err.Error())
 				}
 			})
 		}
@@ -648,6 +652,71 @@ func TestANulByteInAPathIsRefused(t *testing.T) {
 				if _, err := os.Lstat(filepath.Join(root, name)); !errors.Is(err, fs.ErrNotExist) {
 					t.Errorf("%s is on disk: %v", name, err)
 				}
+			}
+		})
+	}
+}
+
+// Nobody means a control character in a file name. Until 2026-10-06 one in a
+// create's path made the file, at exit 0, and the report printed the name raw:
+// an escape sequence coloured the terminal, and a CR left by a CRLF patch named
+// a file that looked like the one meant and was not. It is a path refusal
+// beside NUL, confined or not, and the message names the character instead of
+// printing it, while Path stays exactly as written.
+func TestAControlCharacterInAPathIsRefused(t *testing.T) {
+	root := mktree(t)
+	for _, mode := range []struct {
+		name         string
+		allowOutside bool
+	}{{"confined", false}, {"unconfined", true}} {
+		tree, err := OpenTree(root, mode.allowOutside)
+		must(t, err)
+		t.Cleanup(func() { tree.Close() })
+		for _, c := range []struct{ name, in, char string }{
+			{"an escape sequence", "x\x1b[31mred.txt", "U+001B"},
+			{"a vertical tab", "a\x0bb.go", "U+000B"},
+			{"a bell", "a\x07.go", "U+0007"},
+			{"DEL", "a\x7f.go", "U+007F"},
+			{"NEL, a C1 control", "a\u0085b.go", "U+0085"},
+			{"CSI, the C1 escape introducer", "a\u009b31m.go", "U+009B"},
+			{"CSI as a lone byte, which is not UTF-8", "a\x9b31m.go", "0x9B"},
+			{"a CR inside a name", "a\rb.go", "U+000D"},
+			{"a CR at the end, where a second CR is left", "a.go\r", "U+000D"},
+			{"in a directory", "sub\x1b/in.txt", "U+001B"},
+			{"first in the path", "\x1bx", "U+001B"},
+			{"under a directory that does not exist", "new/\x1b", "U+001B"},
+			{"the first of two is named", "a\x07\x1b.go", "U+0007"},
+		} {
+			t.Run(mode.name+", "+c.name, func(t *testing.T) {
+				_, err := tree.Resolve(c.in)
+				var pr *PathRefusal
+				if !errors.As(err, &pr) {
+					t.Fatalf("Resolve(%q) = %v, want a *PathRefusal", c.in, err)
+				}
+				if got := ExitCode(err); got != exitNoMatch {
+					t.Errorf("exit %d, want %d", got, exitNoMatch)
+				}
+				if pr.Path != c.in {
+					t.Errorf("path = %q, want it as written, %q", pr.Path, c.in)
+				}
+				for _, want := range []string{
+					"the path contains " + c.char + ", a control character, which hunk does not allow in a file name; remove it from the patch",
+					"<" + c.char + ">", tree.Root(),
+				} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%q does not say %q", err.Error(), want)
+					}
+				}
+				if name, ok := firstControl(err.Error()); ok {
+					t.Errorf("%q prints %s raw", err.Error(), name)
+				}
+			})
+		}
+		// A tab is allowed in a path, as it always was: it is not refused as a
+		// control character, whatever the platform makes of the name.
+		t.Run(mode.name+", a tab", func(t *testing.T) {
+			if _, err := tree.Resolve("a\tb.go"); err != nil && strings.Contains(err.Error(), "control character") {
+				t.Errorf("a tab was refused as a control character: %v", err)
 			}
 		})
 	}
@@ -937,10 +1006,19 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 			if !errors.As(err, &pr) {
 				t.Fatalf("non-PathRefusal %T: %v", err, err)
 			}
+			// A refusal names a control character; it never prints one.
+			if name, ok := firstControl(pr.Error()); ok {
+				t.Fatalf("Resolve(%q): %q prints %s raw", p, pr.Error(), name)
+			}
 			return
 		}
 		if tg.name == "" {
 			t.Fatalf("Resolve(%q) allowed an empty target", p)
+		}
+		// Nobody means a control character in a file name, and no path holding
+		// one resolves (2026-10-06).
+		if name, ok := firstControl(p); ok {
+			t.Fatalf("Resolve(%q) = %q, a path holding %s", p, tg.name, name)
 		}
 		abs := filepath.Join(tree.Root(), tg.name)
 		if !filepath.IsAbs(tg.name) && abs != tree.Root() &&

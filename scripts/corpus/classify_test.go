@@ -442,6 +442,14 @@ var reportGoldens = map[string]int{
 	"cli-delete-through-a-link-json":                2,
 	"cli-path-inside-dot-git":                       ExitNoMatch,
 	"cli-path-inside-dot-git-json":                  2,
+	"cli-path-control-character":                    ExitNoMatch,
+	"cli-path-control-character-json":               2,
+	"cli-path-refused-nul":                          ExitNoMatch,
+	"cli-path-refused-nul-json":                     2,
+	"cli-parse-control-character":                   1,
+	"cli-parse-control-character-json":              1,
+	"cli-crlf-payload-on-an-lf-file":                2,
+	"cli-crlf-payload-on-an-lf-file-json":           2,
 }
 
 // The classifier reads hunk's diagnostics, and SPEC §8.1 says "a reworded

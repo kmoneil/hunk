@@ -1,0 +1,8 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  f.txt  (patch line 2)
+  expected 1 occurrence, found 0
+
+  the text is there with different line endings, at line 1:
+      1 | alpha
+  the patch's lines end in CRLF and the file's in LF; write the patch with LF line endings

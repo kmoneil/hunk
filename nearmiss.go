@@ -830,11 +830,15 @@ func describeIndent(line []byte) string {
 	return "no indentation"
 }
 
-// detailEOL distinguishes the two ways this row fires. Under --eol strict it
-// means the file is CRLF and the payload is not, and the useful sentence is
-// that --eol auto translates that. Under --eol auto the payload has already
-// been converted, so reaching here means the file is mixed and this span is the
-// minority.
+// detailEOL distinguishes the three ways this row fires, by the file. Mixed: the
+// span is in the minority ending. CRLF: only under --eol strict, with a payload
+// that is not, and the useful sentence is that --eol auto translates that. LF:
+// the payload carries CRs the file does not, which is a CRLF patch, under
+// --eol strict or with endings mixed enough that auto keeps its bytes.
+//
+// That last row said "--eol auto translates that for you" until 2026-10-06,
+// under --eol auto, which had not. Writing the patch with LF endings is the
+// remedy that is true in both modes.
 func detailEOL(_, _ [][]byte, file []byte) string {
 	nCRLF := bytes.Count(file, crlf)
 	nLF := bytes.Count(file, lf) - nCRLF
@@ -844,7 +848,7 @@ func detailEOL(_, _ [][]byte, file []byte) string {
 	if nCRLF > 0 {
 		return "the file is CRLF; --eol auto translates that for you"
 	}
-	return "the file is LF; --eol auto translates that for you"
+	return "the patch's lines end in CRLF and the file's in LF; write the patch with LF line endings"
 }
 
 // detailUnicode names the first rune where the two actually diverge, rather

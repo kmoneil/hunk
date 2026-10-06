@@ -1,0 +1,19 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 1,
+      "path": "f.txt",
+      "patch_line": 2,
+      "expected": 1,
+      "found": 0,
+      "near_miss": {
+        "cause": "line endings",
+        "line": 1,
+        "span": "alpha",
+        "detail": "the patch's lines end in CRLF and the file's in LF; write the patch with LF line endings"
+      }
+    }
+  ]
+}

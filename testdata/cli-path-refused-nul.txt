@@ -1,0 +1,1 @@
+hunk: a<U+0000>b.txt: the path contains a NUL byte, which no filesystem accepts; the root is /the/root

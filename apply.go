@@ -252,6 +252,8 @@ type Txn struct {
 	// resolved name and keeps the target of the first hunk that named it, so
 	// whether a later hunk reached it through a link has to be kept here.
 	hunkTarget []Target
+	// crlfPatch is Patch.CRLF, kept by Load for convert and created.
+	crlfPatch bool
 }
 
 func NewTxn(tree *Tree, opt Options) *Txn {
@@ -297,6 +299,7 @@ func (x *Txn) Preview(p *Patch) (*Result, error) {
 // §6.1 draws that line explicitly and the rule generalizes: if editing the
 // patch would fix it, it is a validation failure.
 func (x *Txn) Load(p *Patch) error {
+	x.crlfPatch = p.CRLF
 	x.hunkFile = make([]*file, len(p.Hunks))
 	x.hunkTarget = make([]Target, 0, len(p.Hunks))
 	for i, h := range p.Hunks {
@@ -654,7 +657,7 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 		// file to LF and made this sampling a no-op: a CRLF payload created an
 		// LF file, and a later append to it then used the wrong seam byte. A
 		// mutation check found it, by surviving.
-		f.cur = append([]byte{}, h.Body...)
+		f.cur = x.created(h.Body)
 		f.deleted = false
 		f.created = true
 		f.eol = dominantEOL(f.cur)
@@ -1108,14 +1111,38 @@ func (x *Txn) result(hunks int) *Result {
 
 // convert applies --eol (§6.4). Under EOLStrict the payload is matched as
 // given.
+//
+// Under auto, the payload of a patch whose every line ends in CRLF loses one
+// trailing CR per line first, because there the CR is the patch's line
+// terminator and not text. toEOL already folds a CR before an LF, so what this
+// adds is the last line's: a payload never carries its final newline (§3.3),
+// and the CR that came before it was left behind, alone, where no file has
+// one. Against an LF file that byte was refused until 2026-10-06.
 func (x *Txn) convert(b []byte, eol string) []byte {
 	if x.opt.EOL == EOLStrict {
 		return b
 	}
+	if x.crlfPatch {
+		b = stripCR(b)
+	}
 	return toEOL(b, eol)
 }
 
+// created is a create's payload as the new file's bytes. §6.4 has no file to
+// convert to, so the payload is written as given and the file's ending is
+// sampled from it. A CRLF patch's payload under auto is its lines with CRLF
+// endings: the CR is a terminator, as convert says, and the file it makes is
+// CRLF, as the patch was. Written exactly as given, the blank line that gives a
+// payload its final newline left a lone CR at the end of the file.
+func (x *Txn) created(b []byte) []byte {
+	if x.opt.EOL == EOLStrict || !x.crlfPatch {
+		return append([]byte{}, b...)
+	}
+	return toEOL(stripCR(b), "\r\n")
+}
+
 var (
+	cr   = []byte("\r")
 	lf   = []byte("\n")
 	crlf = []byte("\r\n")
 )

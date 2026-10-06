@@ -89,6 +89,13 @@ When a payload is text you have not read line by line, write the patch to a
 file with your file-writing tool, outside the tree, and run `hunk -f FILE`. A
 file does not pass through the shell, so no line in it can end anything.
 
+A patch may use CRLF line endings, as a file written on Windows or text piped
+from PowerShell does. A carriage return at the end of a directive line is its
+ending; under the default `--eol auto`, a patch whose every line ends in CRLF
+reads its payloads the same way, and `--eol strict` keeps every payload byte. A
+control character anywhere else in a directive line is refused and named: in a
+path with exit 2, stuck to a directive word with exit 1.
+
 ## The five directives
 
 `@@ old` / `@@ new` is the one you want most of the time. The other four exist,
