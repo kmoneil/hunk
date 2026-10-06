@@ -107,6 +107,84 @@ jobs:
           if ([IO.File]::ReadAllText($file) -ne "goodbye`n") { throw "with Git for Windows' sh, the edit did not land" }
           'without sh: refused, nothing written; with Git for Windows: applied'
 
+  # The README says the block "installs nothing unless both match". That is
+  # held here where a user runs it, in a console under PowerShell's default,
+  # Continue, rather than under the Stop that every step above runs with and
+  # Actions itself puts first in a PowerShell step. The block runs against an
+  # architecture the release does not have, whose binary is a 404 and has no
+  # SHA256SUMS line. Until 2026-10-06 the hash check then compared $null with
+  # $null, and the block installed the skill and the PATH entry with no binary.
+  #
+  # Then the control: the same block without its Stop line, which has to do
+  # exactly that. A job that could not tell the two apart would pass for the
+  # wrong reason.
+  missing-asset:
+    name: windows (${{ matrix.shell }}, an asset the release lacks)
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: the block stops and installs nothing, and without Stop it would not
+        run: |
+          $readme = Get-Content README.md -Raw
+          $section = [regex]::Match($readme, '(?ms)^#### Without Scoop\r?\n(.*?)(?=^#{2,4} |\z)').Groups[1].Value
+          $block = [regex]::Matches($section, '(?s)```powershell\r?\n(.*?)```')[0].Groups[1].Value
+          $arch = [regex]::new('(?m)^(\s*)\$arch = if .*$')
+          if ($arch.Matches($block).Count -ne 1) { throw 'the block has no single $arch line to point at a missing asset' }
+          $missing = $arch.Replace($block, '$1$$arch = ''nosucharch''')
+          $stop = [regex]::new('(?m)^\s*\$ErrorActionPreference = ''Stop''\r?\n')
+          if ($stop.Matches($missing).Count -ne 1) { throw 'the block does not set Stop exactly once' }
+
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\hunk'
+          $installed = {
+            @(
+              (Test-Path (Join-Path $dir 'hunk.exe')),
+              (Test-Path (Join-Path $env:USERPROFILE '.claude\skills\hunk')),
+              (Test-Path (Join-Path $env:USERPROFILE '.agents\skills\hunk')),
+              (([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -contains $dir)
+            )
+          }
+
+          # As a user pastes it: a fresh PowerShell of this step's edition, with
+          # its default Continue and nothing around the block. A try here would
+          # catch the statement-terminating error Invoke-WebRequest raises for a
+          # 404 and stop the block whether or not it sets Stop: the first
+          # version of this job did that, and its control failed for it.
+          $shell = (Get-Process -Id $PID).Path
+          $paste = {
+            param($script)
+            $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+            # Continue around the call, or 5.1 turns the child's first line of
+            # stderr into this step's terminating error.
+            $ErrorActionPreference = 'Continue'
+            $out = & $shell -NoProfile -NonInteractive -EncodedCommand $enc 2>&1 | Out-String
+            if ($out.Length -gt 1500) { $out = '...' + $out.Substring($out.Length - 1500) }
+            [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out }
+          }
+
+          $run = & $paste $missing
+          $got = & $installed
+          if ($run.Code -eq 0) { throw "with an asset missing, the block ran to its end; binary, skill, agents skill, PATH = $got`n$($run.Out)" }
+          if ($got -contains $true) { throw "the block stopped (exit $($run.Code)) and still installed: binary, skill, agents skill, PATH = $got`n$($run.Out)" }
+          "stopped with exit $($run.Code), nothing installed"
+
+          # The control: the same paste without its Stop line goes on past the
+          # 404 and installs the skill and the PATH entry with no binary.
+          $run = & $paste $stop.Replace($missing, '')
+          $got = & $installed
+          if ($got[0] -or -not $got[1] -or -not $got[2] -or -not $got[3]) {
+            throw "without Stop the block should have installed the skill and the PATH entry and no binary; binary, skill, agents skill, PATH = $got; exit $($run.Code)`n$($run.Out)"
+          }
+          "control: without Stop, exit $($run.Code), and the skill and the PATH entry were installed with no binary"
+          exit 0
+
   # The README's Scoop lines, with real Scoop. The version is checked against
   # the bucket's own manifest rather than the latest release: the bucket moves
   # a few minutes after a release, by its own verified bump, and a check run

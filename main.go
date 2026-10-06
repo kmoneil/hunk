@@ -145,7 +145,10 @@ FLAGS
                         (20)
   --eol auto|strict     auto converts payload line endings to the file's
                         dominant ending before matching and on write. (auto)
-  --allow-outside-root  Permit paths that resolve outside --root.
+  --allow-outside-root  Permit paths that resolve outside --root. It applies
+                        to every path in the batch, and opens each by name
+                        rather than through the root, so a symlink on any of
+                        them is followed wherever it leads.
   --version             Print the version and exit.
 
 EXIT CODES

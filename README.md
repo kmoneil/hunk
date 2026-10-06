@@ -137,6 +137,14 @@ the link behind; the refusal names the file it leads to. Name that file to
 delete it, or remove the link with `rm`. A symlink in a directory above the
 file is fine: `@@ delete` removes the file the path names.
 
+Every path is resolved against `--root`, the current directory unless one is
+given, and a path that leads outside it, through `..` or a symlink, is refused
+with exit 2. `--allow-outside-root` lifts that for every path in the batch, not
+only the one that needed it, and those paths are then opened by name rather than
+through the handle `hunk` otherwise holds on the root: a symlink on any of them
+is followed wherever it leads at the moment it is used. Give a batch that has to
+reach outside the flag on its own, apart from the rest of the edit.
+
 hunk never edits `.git`, which is git's own and not part of the working tree.
 A path that is `.git` or inside it is refused with exit 2, whether `.git` is a
 directory or the `gitdir:` file of a worktree or submodule, whichever symlink
@@ -212,6 +220,11 @@ and read what broke before fixing forward, pass `--keep-on-fail`; the exit is
 still 3. If the command cannot start at all, with no `sh` on the `PATH` for
 instance, nothing is written and the exit is 5: an edit that was never checked
 is not kept.
+
+`CMD` is any shell command, run with your permissions, and so is `--try`'s:
+that is what the two flags are for. So a harness rule that allows `hunk` allows
+every command those flags carry. An agent that may run `hunk` without asking may
+run anything through `--verify`, and a rule should be written knowing that.
 
 This is the flag worth reaching for whenever a batch touches more than one file
 of a compiled language. Every hunk can match, every file can be plausible on its
@@ -363,41 +376,47 @@ the same version.
 
 In PowerShell. This downloads the binary for your machine and the skill from
 the latest release, checks both against the release's `SHA256SUMS` and installs
-nothing unless both match, then puts `hunk.exe` on your `PATH`:
+nothing unless both match, then puts `hunk.exe` on your `PATH`. It stops at the
+first thing that fails, a download included, with nothing installed:
 
 ```powershell
-# Windows PowerShell 5.1 does not always offer TLS 1.2, which GitHub requires.
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-$ProgressPreference = 'SilentlyContinue'
-$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
-$from = 'https://github.com/kmoneil/hunk/releases/latest/download'
-$get = Join-Path $env:TEMP 'hunk-install'
-New-Item -ItemType Directory -Force -Path $get | Out-Null
-foreach ($file in "hunk-windows-$arch.exe", 'hunk-skill.tar.gz', 'SHA256SUMS') {
-    Invoke-WebRequest "$from/$file" -OutFile (Join-Path $get $file) -UseBasicParsing
-}
-
-$want = @{}
-Get-Content (Join-Path $get 'SHA256SUMS') | ForEach-Object {
-    $digest, $name = $_ -split '\s+', 2
-    $want[$name] = $digest
-}
-foreach ($file in "hunk-windows-$arch.exe", 'hunk-skill.tar.gz') {
-    if ((Get-FileHash (Join-Path $get $file)).Hash -ne $want[$file]) {
-        throw "$file does not match SHA256SUMS; nothing was installed"
+& {
+    # Stop at the first thing that fails, so a file that did not download
+    # installs nothing. Inside & { } so the setting ends with the block.
+    $ErrorActionPreference = 'Stop'
+    # Windows PowerShell 5.1 does not always offer TLS 1.2, which GitHub requires.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $ProgressPreference = 'SilentlyContinue'
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+    $from = 'https://github.com/kmoneil/hunk/releases/latest/download'
+    $get = Join-Path $env:TEMP 'hunk-install'
+    New-Item -ItemType Directory -Force -Path $get | Out-Null
+    foreach ($file in "hunk-windows-$arch.exe", 'hunk-skill.tar.gz', 'SHA256SUMS') {
+        Invoke-WebRequest "$from/$file" -OutFile (Join-Path $get $file) -UseBasicParsing
     }
-}
 
-$dir = Join-Path $env:LOCALAPPDATA 'Programs\hunk'
-$skills = Join-Path $env:USERPROFILE '.claude\skills'
-$agents = Join-Path $env:USERPROFILE '.agents\skills'
-New-Item -ItemType Directory -Force -Path $dir, $skills, $agents | Out-Null
-Copy-Item (Join-Path $get "hunk-windows-$arch.exe") (Join-Path $dir 'hunk.exe') -Force
-& "$env:SystemRoot\System32\tar.exe" -xzf (Join-Path $get 'hunk-skill.tar.gz') -C $skills
-& "$env:SystemRoot\System32\tar.exe" -xzf (Join-Path $get 'hunk-skill.tar.gz') -C $agents
-$path = [Environment]::GetEnvironmentVariable('Path', 'User')
-if (($path -split ';') -notcontains $dir) {
-    [Environment]::SetEnvironmentVariable('Path', "$path;$dir", 'User')
+    $want = @{}
+    Get-Content (Join-Path $get 'SHA256SUMS') | ForEach-Object {
+        $digest, $name = $_ -split '\s+', 2
+        $want[$name] = $digest
+    }
+    foreach ($file in "hunk-windows-$arch.exe", 'hunk-skill.tar.gz') {
+        if ((Get-FileHash (Join-Path $get $file)).Hash -ne $want[$file]) {
+            throw "$file does not match SHA256SUMS; nothing was installed"
+        }
+    }
+
+    $dir = Join-Path $env:LOCALAPPDATA 'Programs\hunk'
+    $skills = Join-Path $env:USERPROFILE '.claude\skills'
+    $agents = Join-Path $env:USERPROFILE '.agents\skills'
+    New-Item -ItemType Directory -Force -Path $dir, $skills, $agents | Out-Null
+    Copy-Item (Join-Path $get "hunk-windows-$arch.exe") (Join-Path $dir 'hunk.exe') -Force
+    & "$env:SystemRoot\System32\tar.exe" -xzf (Join-Path $get 'hunk-skill.tar.gz') -C $skills
+    & "$env:SystemRoot\System32\tar.exe" -xzf (Join-Path $get 'hunk-skill.tar.gz') -C $agents
+    $path = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if (($path -split ';') -notcontains $dir) {
+        [Environment]::SetEnvironmentVariable('Path', "$path;$dir", 'User')
+    }
 }
 ```
 
