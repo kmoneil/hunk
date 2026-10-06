@@ -323,6 +323,83 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 	}
 }
 
+// isDotGit is git's rule for a component that names .git, every spelling of it
+// on every platform: case, NTFS's trailing dots and spaces, stream suffix and
+// short name, and HFS+'s ignorable code points. The names beside it that are
+// part of the working tree have to stay editable, and so does anything that is
+// only one rule's spelling away from .git under no filesystem at all.
+func TestIsDotGit(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want bool
+	}{
+		{".git", true},
+		{".GIT", true},
+		{".Git", true},
+		{".git.", true},
+		{".git ", true},
+		{".git. . ", true},
+		{".git:stream", true},
+		{".git::$INDEX_ALLOCATION", true},
+		{".git. :x", true},
+		{"git~1", true},
+		{"GIT~1", true},
+		{"git~1.", true},
+		{"git~1:x", true},
+		{".g\u200cit", true},
+		{"\u200d.git", true},
+		{".gi\u202et", true},
+		{".git\ufeff", true},
+		{".G\u206aIT", true},
+		{".git\u200f", true},
+
+		{"", false},
+		{"git", false},
+		{".gi", false},
+		{".gitignore", false},
+		{".github", false},
+		{".gitattributes", false},
+		{".gitmodules", false},
+		{".git.x", false},
+		{".git~1", false},
+		{"x.git", false},
+		{"repo.git", false},
+		{"..git", false},
+		{".g it", false},
+		{"git~2", false},
+		{"git~1x", false},
+		{"g\u200cit~1", false},
+		{".g\u200bit", false}, // ZERO WIDTH SPACE is not on HFS+'s list
+		{".g\u0131t", false},  // dotless i does not fold to i
+		{".g\u0130t", false},  // nor does dotted capital I
+		{".git\u200c.", false},
+	} {
+		if got := isDotGit(c.in); got != c.want {
+			t.Errorf("isDotGit(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestInsideDotGit(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want bool
+	}{
+		{native(".git/config"), true},
+		{native("a/.git"), true},
+		{native("a/.GIT/b/c"), true},
+		{filepath.Join(string(filepath.Separator)+"abs", "root", ".git", "HEAD"), true},
+		{native(".gitignore"), false},
+		{native("sub/.github/workflows/ci.yml"), false},
+		{native("repo.git/config"), false},
+		{"", false},
+	} {
+		if got := insideDotGit(c.in); got != c.want {
+			t.Errorf("insideDotGit(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
 // A delete cannot go through a link the patch named, and can go through one in a
 // directory above it, so Resolve has to tell the two apart. ViaSymlink cannot:
 // it is set by both. named is set by a link standing last on the path, however
@@ -822,6 +899,8 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 		"./x", "sub/./../top.txt", strings.Repeat("../", 40) + "etc/passwd",
 		"d/in.txt", "d/new/x.go", "l/x", "sub/../d/in.txt", "rel.link/x",
 		"SUB/IN.TXT", "Sub/New/X.go", "D/in.txt", "\u00e9.txt", "e\u0301.txt",
+		".git/config", ".GIT/config", "g/config", "cfg.link", "sub/../.git/HEAD", ".git", "sub/.git",
+		"g/" + strings.Repeat("0", 256),
 	} {
 		f.Add(s)
 	}
@@ -835,6 +914,14 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 	os.Symlink("/etc/passwd", filepath.Join(root, "bad.link"))
 	os.Symlink("sub", filepath.Join(root, "d"))
 	os.Symlink("internal", filepath.Join(root, "l"))
+	os.MkdirAll(filepath.Join(root, ".git"), 0o755)
+	os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[core]\n"), 0o644)
+	os.Symlink(".git", filepath.Join(root, "g"))
+	os.Symlink(filepath.Join(".git", "config"), filepath.Join(root, "cfg.link"))
+	gitDir, err := os.Stat(filepath.Join(root, ".git"))
+	if err != nil {
+		f.Fatal(err)
+	}
 	folds := foldsCase(f) || foldsNormalization(f)
 
 	tree, err := OpenTree(root, false)
@@ -869,6 +956,21 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 		// a path through a file, is load's to report and is not checked here.
 		if _, err := os.Lstat(abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return
+		}
+		// Nothing usable it hands back is .git or inside it, asked of the
+		// kernel rather than of the rule Resolve applies: no part of the
+		// target that exists is the .git directory, however the name spells
+		// it. A name nothing can use comes back as it stands and is not
+		// checked: g/ and a component too long for the filesystem is the
+		// first thing fuzzing found, and load stops it at exit 5 having
+		// written nothing.
+		for dir := abs; ; dir = filepath.Dir(dir) {
+			if fi, err := os.Stat(dir); err == nil && os.SameFile(fi, gitDir) {
+				t.Fatalf("Resolve(%q) = %q, which is inside .git", p, tg.name)
+			}
+			if dir == tree.Root() || dir == filepath.Dir(dir) {
+				break
+			}
 		}
 		for dir := tg.name; dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
 			if fi, err := os.Lstat(filepath.Join(tree.Root(), dir)); err == nil && fi.Mode()&fs.ModeSymlink != 0 {

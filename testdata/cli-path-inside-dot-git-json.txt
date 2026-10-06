@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "exit": 2,
+  "error": "x: it is .git or inside it, which is git's own and not the working tree; hunk never edits there (it resolves to .git/config); the root is /the/root"
+}

@@ -434,6 +434,8 @@ var reportGoldens = map[string]int{
 	"cli-help":                                      ExitProbe,
 	"cli-delete-through-a-link":                     ExitNoMatch,
 	"cli-delete-through-a-link-json":                2,
+	"cli-path-inside-dot-git":                       ExitNoMatch,
+	"cli-path-inside-dot-git-json":                  2,
 }
 
 // The classifier reads hunk's diagnostics, and SPEC §8.1 says "a reworded
