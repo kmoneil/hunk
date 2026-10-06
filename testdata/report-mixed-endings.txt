@@ -1,0 +1,7 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  config.ini  (patch line 2)
+  expected 1 occurrence, found 2 across both line endings
+  at lines 3 (CRLF), 6 (LF)
+
+  the file has mixed line endings, and --eol auto counted only the copies in its dominant one; add a line of context so old fits one place

@@ -69,6 +69,28 @@ func TestReportGoldens(t *testing.T) {
 		golden(t, "report-no-anchor-json", js)
 	})
 
+	// A count that missed copies, both ways it can, since 2026-10-06. Each
+	// says the true count, every copy's line, and the remedy, and neither
+	// suggests an xN.
+	t.Run("overlap", func(t *testing.T) {
+		text, js, rep := render(t, map[string]string{"main.go": "func f() {\n\tif x {\n\t}\n\t}\n\t}\n}\n"},
+			"@@ file main.go\n@@ old\n\t}\n\t}\n\n@@ new\n\t}\n\n", Options{})
+		if rep.Exit != exitNoMatch {
+			t.Fatalf("exit %d: %s", rep.Exit, text)
+		}
+		golden(t, "report-overlap", text)
+		golden(t, "report-overlap-json", js)
+	})
+	t.Run("mixed line endings", func(t *testing.T) {
+		text, js, rep := render(t, map[string]string{"config.ini": crlfMajority},
+			"@@ file config.ini\n@@ old\nkey = 1\nnext\n@@ new\nkey = 2\nnext\n", Options{})
+		if rep.Exit != exitNoMatch {
+			t.Fatalf("exit %d: %s", rep.Exit, text)
+		}
+		golden(t, "report-mixed-endings", text)
+		golden(t, "report-mixed-endings-json", js)
+	})
+
 	// The other half of that: the text is there, and old overhangs the top of
 	// the file. It carries a cause of its own rather than a null one, because
 	// §5.2 promises the JSON says everything the text says.

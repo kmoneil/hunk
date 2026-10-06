@@ -27,6 +27,7 @@ success.
 | --- | --- | --- |
 | `expected 1 occurrence, found 0` with a span printed | Re-read the file | The report printed the file's actual bytes. Paste that span into `old` and resend |
 | `expected 1 occurrence, found 5` with line numbers | Pick one and hope | Add surrounding context to `old` until it is unique, or say `@@ old x5` if you mean all five |
+| `found 2 that overlap`, or `found 2 across both line endings` | Say `@@ old x2` | Add a line of context until `old` fits one place. Overlapping copies share lines, and a copy in a file's other line ending is one this hunk cannot edit, so no count applies |
 | `the text is there with different leading whitespace` | Retype it by hand | The gutter shows the real line. Copy it, tabs and all |
 | `no anchor found` | Try a shorter `old` | Every line of your `old` was compared with every line of the file, whitespace ignored, and not one of them is there. Check the path, or that an earlier hunk did not already change it |
 | `would fall above the top of the file` | Re-read the file | Your `old` overhangs the top. The line it did find is printed with its number; drop the lines above it from your `old` |
@@ -143,6 +144,10 @@ example at the top leaves that blank line on purpose. `@@ append` and
 **2. `@@ old` means exactly one occurrence.** `@@ old x3` means exactly three,
 and replaces all three. There is no "one or more". If you do not know the count,
 that is the thing `hunk` is here to refuse: add context until it is unique.
+Every copy counts, including ones a left-to-right count would miss: copies that
+overlap, which a run of identical lines makes, and, in a file that mixes CRLF
+and LF, copies of a multi-line `old` in its other line ending. Those are refused
+rather than edited, whatever the count says.
 
 **3. Hunks apply in order, against the file as earlier hunks left it.** So a
 later hunk may match text an earlier one created. A hunk that fails stops the

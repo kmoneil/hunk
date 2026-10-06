@@ -284,11 +284,23 @@ func (r *Report) writeValidationFailure(w io.Writer) {
 			fmt.Fprintf(w, "  %s\n", f.Refusal)
 			continue
 		}
-		fmt.Fprintf(w, "  expected %s, found %d\n", count(f.Expected, "occurrence"), f.Found)
+		fmt.Fprintf(w, "  expected %s, found %d", count(f.Expected, "occurrence"), f.Found)
 		if f.Near == nil {
+			fmt.Fprintln(w)
 			continue
 		}
-		if f.Near.Kind != DiagTooMany {
+		// Where the count missed copies, the number found is the true one and
+		// says what kind it is, since it is not what a plain count would give.
+		switch f.Near.Kind {
+		case DiagOverlap:
+			fmt.Fprint(w, " that overlap")
+		case DiagMixedEndings:
+			fmt.Fprint(w, " across both line endings")
+		}
+		fmt.Fprintln(w)
+		switch f.Near.Kind {
+		case DiagTooMany, DiagOverlap, DiagMixedEndings:
+		default:
 			fmt.Fprintln(w)
 		}
 		fmt.Fprint(w, f.Near.Render("  "))
@@ -448,8 +460,11 @@ type jsonFailure struct {
 	Refusal      string `json:"refusal,omitempty"`
 	// Lines sits beside expected and found, not inside near_miss. That is
 	// §5.2's shape and §10 makes it an interface.
-	Lines    []int     `json:"lines,omitempty"`
-	NearMiss *jsonNear `json:"near_miss,omitempty"`
+	Lines []int `json:"lines,omitempty"`
+	// LineEndings is each listed copy's line endings, parallel to Lines, when
+	// the count under --eol auto missed copies in the other one.
+	LineEndings []string  `json:"line_endings,omitempty"`
+	NearMiss    *jsonNear `json:"near_miss,omitempty"`
 }
 
 type jsonNear struct {
@@ -499,15 +514,22 @@ func (r *Report) JSON(w io.Writer) error {
 			jf.Found = &found
 		}
 		if d := f.Near; d != nil {
-			if d.Kind == DiagTooMany {
+			switch d.Kind {
+			case DiagTooMany:
 				jf.Lines = d.Lines
-			} else if d.Kind != DiagNoAnchor {
+			case DiagOverlap, DiagMixedEndings:
+				// The lines where copies are, as for too many, and the cause
+				// and the remedy, since found alone does not say why a count
+				// that equals the claim was refused.
+				jf.Lines, jf.LineEndings = d.Lines, d.Endings
+				jf.NearMiss = &jsonNear{Cause: d.causeName(), Detail: d.Detail, Shifted: d.Shifted}
+			case DiagNoAnchor:
+				jf.NearMiss = &jsonNear{Cause: d.causeName()}
+			default:
 				jf.NearMiss = &jsonNear{
 					Cause: d.causeName(), Line: d.Line,
 					Span: string(joinLines(d.Span)), Detail: d.Detail, Shifted: d.Shifted,
 				}
-			} else {
-				jf.NearMiss = &jsonNear{Cause: d.causeName()}
 			}
 		}
 		out.Failures = append(out.Failures, jf)

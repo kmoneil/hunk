@@ -318,7 +318,12 @@ func TestApplyRefuses(t *testing.T) {
 	// §6.4: overlapping matches are counted left to right, non-overlapping, the
 	// way strings.Count does. "aa" in "aaa" is 1, and the mismatch is reported
 	// rather than guessed at.
-	t.Run("overlapping matches are counted the way strings.Count does", func(t *testing.T) {
+	// §6.4 counted "aa" in "aaa" once, the way strings.Count does, and reported
+	// the mismatch with x2. Since 2026-10-06 an overlap is refused whatever the
+	// count says, and found is the true count, so x2 is refused for the
+	// overlap and not for a count of 1. The bare and x1 cases are in
+	// TestACountThatMissesACopyIsRefused.
+	t.Run("overlapping matches are refused, and found counts them all", func(t *testing.T) {
 		tree, root := fixture(t, map[string]string{"a.txt": "aaa"})
 		before := snapshot(t, root)
 		_, err := run(t, tree, "@@ file a.txt\n@@ old x2\naa\n@@ new\nb\n", Options{})
@@ -326,8 +331,8 @@ func TestApplyRefuses(t *testing.T) {
 		if !errors.As(err, &ve) {
 			t.Fatalf("got %T: %v", err, err)
 		}
-		if ve.Failures[0].Expected != 2 || ve.Failures[0].Found != 1 {
-			t.Errorf("expected/found = %d/%d, want 2/1", ve.Failures[0].Expected, ve.Failures[0].Found)
+		if f := ve.Failures[0]; f.Expected != 2 || f.Found != 2 || f.Near == nil || f.Near.Kind != DiagOverlap {
+			t.Errorf("expected/found = %d/%d, near %+v; want 2/2 and an overlap", f.Expected, f.Found, f.Near)
 		}
 		assertUnchanged(t, root, before)
 	})
@@ -1111,10 +1116,35 @@ func TestApplyThenInvertIsIdentity(t *testing.T) {
 		// A payload is the lines between two directives joined by \n, so
 		// emitting the span followed by a newline encodes it exactly.
 		fwd := "@@ file f.txt\n@@ old x" + itoa(n) + "\n" + span + "\n@@ new\n" + repl + "\n"
+		// A span whose copies overlap has no edit that is not a guess, so the
+		// forward patch is refused and there is nothing to invert. Counted
+		// here by brute force, not by the code under test.
+		if overlapping(body, span) > n {
+			_, err := run(t, tree, fwd, Options{})
+			var ve *ValidationError
+			if !errors.As(err, &ve) || ve.Failures[0].Near == nil || ve.Failures[0].Near.Kind != DiagOverlap {
+				t.Fatalf("apply %q -> %q in %q, whose copies overlap: %v, want the overlap refused", span, repl, body, err)
+			}
+			if got := readFile(t, root, "f.txt"); got != body {
+				t.Fatalf("a refused patch changed the file: %q", got)
+			}
+			continue
+		}
 		if _, err := run(t, tree, fwd, Options{}); err != nil {
 			t.Fatalf("apply %q -> %q in %q: %v", span, repl, body, err)
 		}
 		back := "@@ file f.txt\n@@ old x" + itoa(n) + "\n" + repl + "\n@@ new\n" + span + "\n"
+		// Copies of the replacement written side by side can overlap, as
+		// "YZYZ" twice does: "YZYZYZYZ" holds it three times. The inverse is
+		// then refused, and the forward edit is what stays.
+		if after := readFile(t, root, "f.txt"); overlapping(after, repl) > n {
+			_, err := run(t, tree, back, Options{})
+			var ve *ValidationError
+			if !errors.As(err, &ve) || ve.Failures[0].Near == nil || ve.Failures[0].Near.Kind != DiagOverlap {
+				t.Fatalf("invert %q -> %q in %q, whose copies overlap: %v, want the overlap refused", repl, span, after, err)
+			}
+			continue
+		}
 		if _, err := run(t, tree, back, Options{}); err != nil {
 			t.Fatalf("invert %q -> %q in %q: %v", repl, span, body, err)
 		}
@@ -1123,6 +1153,18 @@ func TestApplyThenInvertIsIdentity(t *testing.T) {
 				span, repl, body, got)
 		}
 	}
+}
+
+// overlapping counts every occurrence of sub in s, overlapping ones included,
+// by trying every offset: the slow obvious answer the tests hold the code to.
+func overlapping(s, sub string) int {
+	n := 0
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			n++
+		}
+	}
+	return n
 }
 
 func itoa(n int) string {

@@ -1,0 +1,7 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  main.go  (patch line 2)
+  expected 1 occurrence, found 2 that overlap
+  at lines 3, 4
+
+  overlapping copies share bytes, so one cannot be replaced without the other; add a line of context so old fits one place
