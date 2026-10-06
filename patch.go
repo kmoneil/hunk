@@ -423,7 +423,9 @@ COUNTS
 "@@ old" means exactly one occurrence. "@@ old x3" means exactly three, and
 replaces all three. There is no "one or more" and no "zero or more". If you do
 not know the count, that is the thing this tool exists to refuse: add
-surrounding context to the old text until it is unique.
+surrounding context to the old text until it is unique. Copies that overlap,
+and under --eol auto copies in a file's other line ending, count as well, and
+are refused rather than edited.
 
 PAYLOADS
 

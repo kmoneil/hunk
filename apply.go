@@ -500,11 +500,20 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		}
 		old := x.convert(h.Old, f.eol)
 		found := bytes.Count(f.cur, old)
-		if found != h.Count {
+		// The count is left to right and skips what it has passed, and under
+		// --eol auto it sees only the copies in the file's dominant ending, so
+		// it can be right about what it saw and still have missed a copy. Then
+		// whichever copies it did see, editing them is a guess (§3.4), and
+		// that is refused however many the hunk claimed.
+		missed := x.missed(f.cur, h.Old, old, found)
+		if found != h.Count || missed != nil {
 			f.failedAt = n
 			fail := Failure{
 				Hunk: n, Path: h.Path, PatchLine: h.Line,
 				Expected: h.Count, Found: found,
+			}
+			if missed != nil {
+				fail.Found = missed.Found
 			}
 			// §7.2 caps diagnosis at ten hunks per batch. Beyond that the
 			// failure is still reported; only the near-miss block is dropped,
@@ -512,9 +521,12 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			// failure than no diagnostic.
 			if diagnosed < diagnoseLimit {
 				diagnosed++
-				if found == 0 {
+				switch {
+				case missed != nil:
+					fail.Near = missed
+				case found == 0:
 					fail.Near = Diagnose(old, f.cur, x.opt.context())
-				} else {
+				default:
 					fail.Near = DiagnoseTooMany(old, f.cur)
 				}
 				// Validation writes nothing, so the file on disk is still the
@@ -1134,6 +1146,77 @@ func toEOL(b []byte, eol string) []byte {
 		return norm
 	}
 	return bytes.ReplaceAll(norm, lf, crlf)
+}
+
+// missed reports the copies of a replace hunk's old that a count of n did not
+// see, as the refusal to give, or nil when it saw them all. file is the file
+// as the batch has left it, payload the old as the patch wrote it, and old
+// the same converted for --eol.
+//
+// Two ways a copy goes unseen, both decided on 2026-10-06. Copies that overlap
+// share bytes, so the count, which skips what it has passed, sees only the
+// leftmost: "x\nx\n" is in "x\nx\nx\n" twice and counted once. And under --eol
+// auto the payload is translated to the file's dominant ending before it is
+// counted, so in a file with both endings an old that spans a line break
+// misses its copies in the other one. Until that day both applied at exit 0
+// to the copy the count happened to see.
+//
+// The checks cost nothing to a hunk that matches nowhere, and the scans stop
+// at the first copy past n, so the common case pays for n+1 searches and the
+// full count is taken only to refuse.
+func (x *Txn) missed(file, payload, old []byte, n int) *Diagnosis {
+	if n == 0 {
+		return nil
+	}
+	if copiesPast(file, old, n) {
+		return DiagnoseOverlap(old, file)
+	}
+	if x.opt.EOL == EOLStrict || !bytes.Contains(old, lf) || !mixedEndings(file) {
+		return nil
+	}
+	if copiesPast(toEOL(file, "\n"), toEOL(payload, "\n"), n) {
+		return DiagnoseMixedEndings(payload, file)
+	}
+	return nil
+}
+
+// copiesPast reports whether text holds more than n copies of pat, counting
+// overlapping ones. It resumes one byte past each copy and stops at the first
+// past n, so it makes at most n+1 searches, which between them read text once
+// plus pat once per copy; and n copies of pat already fit in text without
+// overlapping, so that is linear in text. No run of one repeated byte makes it
+// quadratic, which an unbounded overlapping scan of this kind is.
+func copiesPast(text, pat []byte, n int) bool {
+	past, _ := countCopies(text, pat, n)
+	return past
+}
+
+// countCopies is copiesPast with the number of searches it made, which is the
+// cost its comment promises. A scan that forgot to stop allocates nothing more
+// and changes no answer, so this is the only place a test can see it.
+func countCopies(text, pat []byte, n int) (past bool, searches int) {
+	if len(pat) == 0 {
+		return false, 0
+	}
+	seen := 0
+	for off := 0; ; {
+		searches++
+		i := bytes.Index(text[off:], pat)
+		if i < 0 {
+			return false, searches
+		}
+		seen++
+		if seen > n {
+			return true, searches
+		}
+		off += i + 1
+	}
+}
+
+// mixedEndings reports whether b has both CRLF and bare LF line breaks.
+func mixedEndings(b []byte) bool {
+	n := bytes.Count(b, crlf)
+	return n > 0 && bytes.Count(b, lf) > n
 }
 
 // lineCount is §5.1's diffstat unit: a run ending in a newline, plus a final

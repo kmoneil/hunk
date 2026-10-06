@@ -1,0 +1,25 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 1,
+      "path": "config.ini",
+      "patch_line": 2,
+      "expected": 1,
+      "found": 2,
+      "lines": [
+        3,
+        6
+      ],
+      "line_endings": [
+        "CRLF",
+        "LF"
+      ],
+      "near_miss": {
+        "cause": "mixed line endings",
+        "detail": "the file has mixed line endings, and --eol auto counted only the copies in its dominant one; add a line of context so old fits one place"
+      }
+    }
+  ]
+}

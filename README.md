@@ -152,6 +152,15 @@ device is refused with exit 2, for every directive, before anything is read
 from it: a named pipe is never waited on, never read, and never replaced by a
 regular file.
 
+An `@@ old` whose count cannot see every copy of its text is refused with exit
+2, never applied to the copies it did see. Copies that overlap share lines, as
+two copies of a two-line `old` do in a run of three identical lines, so no edit
+can take one without the other. And under `--eol auto`, which translates the
+payload to the file's dominant line ending before counting, an `old` that spans
+a line break is also looked for in a file's other ending. Either way the report
+lists every copy's line, for `@@ old x2` as for a bare `@@ old`, and the fix is a
+line of context that makes `old` fit one place.
+
 Three rules worth knowing before the first patch:
 
 1. **A payload never gains a trailing newline.** To match text that ends in a

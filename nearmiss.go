@@ -38,6 +38,16 @@ const (
 	DiagNoRoom
 	// DiagTooMany: old occurs, just not the claimed number of times.
 	DiagTooMany
+	// DiagOverlap: old occurs more often than the count can see, because
+	// copies share bytes. Counting and replacing both go left to right and skip
+	// what they have passed, so of two overlapping copies only the leftmost is
+	// seen by either, and editing it is a guess.
+	DiagOverlap
+	// DiagMixedEndings: under --eol auto, old occurs in the file's other line
+	// ending too. The payload is translated to the dominant ending before it is
+	// counted, so the count cannot see those copies, and editing the rest is a
+	// guess.
+	DiagMixedEndings
 )
 
 // A Diagnosis explains why a hunk did not apply. It renders to both the text
@@ -72,12 +82,17 @@ type Diagnosis struct {
 	Theirs   []byte
 	Column   int
 
-	// Lines are where each match starts (DiagTooMany only), capped.
+	// Lines are where each match starts (DiagTooMany, DiagOverlap and
+	// DiagMixedEndings), capped.
 	Lines []int
+	// Endings is each listed match's line endings, "CRLF", "LF" or "mixed",
+	// parallel to Lines (DiagMixedEndings only).
+	Endings []string
 	// MoreLines is how many matches were not listed.
 	MoreLines int
-	// Found is the total number of matches (DiagTooMany only), which the
-	// suggested "@@ old x N" needs.
+	// Found is the total number of matches: what the suggested "@@ old x N"
+	// needs (DiagTooMany), and the true count where the count missed some
+	// (DiagOverlap, DiagMixedEndings).
 	Found int
 
 	// Shifted is the number of hunks that changed this file earlier in the same
@@ -169,6 +184,120 @@ func DiagnoseTooMany(old, file []byte) *Diagnosis {
 		off = at + len(old)
 	}
 	return d
+}
+
+// DiagnoseOverlap reports every copy of old in file, the overlapping ones
+// included, for a count that saw fewer of them.
+func DiagnoseOverlap(old, file []byte) *Diagnosis {
+	n, starts := matchStarts(file, old, tooManyLimit)
+	return &Diagnosis{
+		Kind: DiagOverlap, Cause: "overlap",
+		Detail: "overlapping copies share bytes, so one cannot be replaced without the other; " +
+			"add a line of context so old fits one place",
+		Found: n, Lines: lineNumbers(file, starts), MoreLines: n - len(starts),
+	}
+}
+
+// DiagnoseMixedEndings reports every copy of old in file whatever its line
+// endings, each labelled with them, for a count under --eol auto that saw only
+// the copies in the file's dominant ending. old is the payload as the patch
+// wrote it, and both are compared with CRLF folded to LF. Folding keeps every
+// line break, so a line number in the folded file is the same line in the
+// file.
+func DiagnoseMixedEndings(old, file []byte) *Diagnosis {
+	fold, folded := toEOL(old, "\n"), toEOL(file, "\n")
+	n, starts := matchStarts(folded, fold, tooManyLimit)
+	d := &Diagnosis{
+		Kind: DiagMixedEndings, Cause: "mixed line endings",
+		Detail: "the file has mixed line endings, and --eol auto counted only the copies in its " +
+			"dominant one; add a line of context so old fits one place",
+		Found: n, Lines: lineNumbers(folded, starts), MoreLines: n - len(starts),
+	}
+	// i walks file and j walks folded in step, so each copy's own bytes can be
+	// read for what its line breaks are. A "\r\n" in file is one "\n" in
+	// folded; every other byte is itself.
+	i, j := 0, 0
+	for _, p := range starts {
+		for ; j < p; j++ {
+			if file[i] == '\r' && i+1 < len(file) && file[i+1] == '\n' {
+				i++
+			}
+			i++
+		}
+		sawCRLF, sawLF := false, false
+		for k, at := j, i; k < p+len(fold); k++ {
+			if folded[k] == '\n' {
+				if file[at] == '\r' {
+					sawCRLF = true
+					at++
+				} else {
+					sawLF = true
+				}
+			}
+			at++
+		}
+		switch {
+		case sawCRLF && sawLF:
+			d.Endings = append(d.Endings, "mixed")
+		case sawCRLF:
+			d.Endings = append(d.Endings, "CRLF")
+		default:
+			d.Endings = append(d.Endings, "LF")
+		}
+	}
+	return d
+}
+
+// matchStarts counts every occurrence of pat in text, overlapping ones
+// included, and returns the offsets of the first keep. It is Knuth-Morris-Pratt
+// and linear in both: restarting bytes.Index one byte past each match is
+// quadratic on a run of one repeated byte, which is the overlapping case
+// exactly, and this runs on the shapes that are.
+func matchStarts(text, pat []byte, keep int) (int, []int) {
+	if len(pat) == 0 {
+		return 0, nil
+	}
+	// fail[i] is the length of the longest proper prefix of pat[:i+1] that is
+	// also its suffix: where to resume after a mismatch at i+1.
+	fail := make([]int, len(pat))
+	for i, k := 1, 0; i < len(pat); i++ {
+		for k > 0 && pat[i] != pat[k] {
+			k = fail[k-1]
+		}
+		if pat[i] == pat[k] {
+			k++
+		}
+		fail[i] = k
+	}
+	n := 0
+	var starts []int
+	for i, k := 0, 0; i < len(text); i++ {
+		for k > 0 && text[i] != pat[k] {
+			k = fail[k-1]
+		}
+		if text[i] == pat[k] {
+			k++
+		}
+		if k == len(pat) {
+			n++
+			if len(starts) < keep {
+				starts = append(starts, i-len(pat)+1)
+			}
+			k = fail[k-1]
+		}
+	}
+	return n, starts
+}
+
+// lineNumbers is the 1-based line each offset in b starts on. The offsets are
+// capped at tooManyLimit by every caller, so counting from the top for each is
+// linear in b.
+func lineNumbers(b []byte, offsets []int) []int {
+	lines := make([]int, len(offsets))
+	for i, at := range offsets {
+		lines[i] = bytes.Count(b[:at], lf) + 1
+	}
+	return lines
 }
 
 // candidateSpans implements §7.1 steps 1 and 2. It returns the file line
@@ -906,6 +1035,25 @@ func (d *Diagnosis) Render(indent string) string {
 		// suggestion is the actionable half.
 		fmt.Fprintf(&b, "\n%sadd surrounding context to old, or say \"@@ old x%d\"\n",
 			indent, d.Found)
+		return b.String()
+
+	case DiagOverlap, DiagMixedEndings:
+		// No "or say @@ old xN" here. Some of the copies are ones this hunk
+		// cannot edit at all, so every N either guesses or cannot apply, and
+		// until 2026-10-06 the suggestion is what made the guess look
+		// sanctioned.
+		at := make([]string, len(d.Lines))
+		for i, l := range d.Lines {
+			at[i] = fmt.Sprint(l)
+			if i < len(d.Endings) {
+				at[i] += " (" + d.Endings[i] + ")"
+			}
+		}
+		fmt.Fprintf(&b, "%sat lines %s", indent, strings.Join(at, ", "))
+		if d.MoreLines > 0 {
+			fmt.Fprintf(&b, ", and %d more", d.MoreLines)
+		}
+		fmt.Fprintf(&b, "\n\n%s%s\n", indent, d.Detail)
 		return b.String()
 
 	case DiagNoRoom:

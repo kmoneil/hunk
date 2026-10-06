@@ -1,0 +1,21 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 1,
+      "path": "main.go",
+      "patch_line": 2,
+      "expected": 1,
+      "found": 2,
+      "lines": [
+        3,
+        4
+      ],
+      "near_miss": {
+        "cause": "overlap",
+        "detail": "overlapping copies share bytes, so one cannot be replaced without the other; add a line of context so old fits one place"
+      }
+    }
+  ]
+}
