@@ -167,6 +167,16 @@ Three rules worth knowing before the first patch:
    payload really does contain a line like `@@ old`, `--marker` picks a
    different prefix for the whole patch.
 
+The heredoc around a patch has one rule of its own, and it is the shell's, not
+`hunk`'s: **a payload line that is exactly the delimiter ends the heredoc.**
+With `<<'HUNK'`, a line reading `HUNK` in the text you paste stops the patch
+there. `hunk` gets the lines above it, which may still be a patch that applies,
+and the shell runs every line below it as a command. Check the payload for the
+delimiter before sending, and if it is there, choose another word for both
+ends. When the payload is text you have not read line by line, write the patch
+to a file and run `hunk -f FILE` instead: a file does not go through the shell,
+so no line in it can end anything.
+
 `hunk format` prints the full grammar and a worked example that applies.
 
 ## Verify, and rollback

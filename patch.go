@@ -405,6 +405,13 @@ a unified diff pasted into a payload, whose "@@ -1,3 +1,4 @@" fails the third
 test. If a payload really does contain a line like "@@ old", --marker picks
 another prefix.
 
+The heredoc around a patch has a rule of its own, which is the shell's: a
+payload line that is exactly the heredoc's delimiter (HUNK in the example
+below) ends the heredoc there. hunk gets the lines above it, which may still be
+a patch that applies, and the shell runs the rest as commands. Pick a delimiter
+no payload line equals, or write the patch to a file and pass -f FILE, which no
+line can end.
+
 PATHS
 
 "@@ file" stays in effect for every following "@@ old" until the next one, and

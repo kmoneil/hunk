@@ -765,6 +765,15 @@ func TestSkillExampleApplies(t *testing.T) {
 // Python loop the next, because the skill had filed a repeated literal edit
 // under "computed". Its heredocs are run by sh as the skill prints them; only
 // the pipe into hunk is replaced by an in-process run.
+//
+// Until 2026-10-06 the loop took its list from a glob and printed each name
+// with echo, so the repository's own file names were lines of the patch. A
+// directory named with a line break in it, or with a backslash that echo
+// decodes under sh, zsh and dash, came out as directives nobody wrote, and in
+// a clone that deleted a gitignored .env and appended to .git/config at exit
+// 0. The loop now runs over a list the agent typed, printed with printf, and
+// the last two subtests are that clone: they run the loop under every shell on
+// the PATH and require the patch to name only the files the list does.
 func TestSkillLoopExampleApplies(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(".agents", "skills", "hunk", "SKILL.md"))
 	if err != nil {
@@ -782,31 +791,40 @@ func TestSkillLoopExampleApplies(t *testing.T) {
 	}
 	script := rest[:j] + "\n}\n"
 
-	generate := func(t *testing.T, root string) string {
+	generateWith := func(t *testing.T, shell, root string) string {
 		t.Helper()
-		cmd := exec.Command("sh", "-c", script)
+		cmd := exec.Command(shell, "-c", script)
 		cmd.Dir = root
 		var out, errOut bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &errOut
 		if err := cmd.Run(); err != nil {
-			t.Fatalf("the skill's loop does not run: %v\n%s\n--- script ---\n%s", err, errOut.String(), script)
+			t.Fatalf("the skill's loop does not run under %s: %v\n%s\n--- script ---\n%s",
+				shell, err, errOut.String(), script)
 		}
 		return out.String()
 	}
+	generate := func(t *testing.T, root string) string {
+		t.Helper()
+		return generateWith(t, "sh", root)
+	}
 	const before, after = "package main\n\nconst Version = \"1.4.0\"\n", "package main\n\nconst Version = \"1.5.0\"\n"
 	changelog := "# Changelog\n\n## 1.5.0 (unreleased)\n\n- one thing\n"
+	// The files the skill's list names. A tree that lacks one of them is a
+	// tree the example does not describe, so the list is pinned here rather
+	// than read back out of the script.
+	listed := []string{"cmd/api/version.go", "cmd/worker/version.go"}
 
 	t.Run("every file has the text once, so all of them change", func(t *testing.T) {
 		root := cliTree(t, map[string]string{
-			"cmd/a/version.go": before,
-			"cmd/b/version.go": before,
-			"CHANGELOG.md":     changelog,
+			listed[0]:      before,
+			listed[1]:      before,
+			"CHANGELOG.md": changelog,
 		})
 		code, out, errOut := runCLI(t, root, nil, generate(t, root))
 		if code != exitOK {
 			t.Fatalf("exit %d\n%s%s", code, out, errOut)
 		}
-		for _, f := range []string{"cmd/a/version.go", "cmd/b/version.go"} {
+		for _, f := range listed {
 			if got := readFile(t, root, f); got != after {
 				t.Errorf("%s = %q, want %q", f, got, after)
 			}
@@ -821,16 +839,16 @@ func TestSkillLoopExampleApplies(t *testing.T) {
 
 	t.Run("one file is not as expected, so nothing is written", func(t *testing.T) {
 		files := map[string]string{
-			"cmd/a/version.go": before,
-			"cmd/b/version.go": "package main\n\nconst Version = \"1.3.9\"\n",
-			"CHANGELOG.md":     changelog,
+			listed[0]:      before,
+			listed[1]:      "package main\n\nconst Version = \"1.3.9\"\n",
+			"CHANGELOG.md": changelog,
 		}
 		root := cliTree(t, files)
 		code, _, errOut := runCLI(t, root, nil, generate(t, root))
 		if code != exitNoMatch {
 			t.Fatalf("exit %d, want %d\n%s", code, exitNoMatch, errOut)
 		}
-		if !strings.Contains(errOut, "cmd/b/version.go") || !strings.Contains(errOut, "nothing was written") {
+		if !strings.Contains(errOut, listed[1]) || !strings.Contains(errOut, "nothing was written") {
 			t.Errorf("the refusal does not name the file that missed, or does not say nothing was written:\n%s", errOut)
 		}
 		for name, body := range files {
@@ -839,6 +857,237 @@ func TestSkillLoopExampleApplies(t *testing.T) {
 			}
 		}
 	})
+
+	// The clone the old loop was run against. Each hostile directory sits
+	// where a glob over cmd/*/version.go would find it, and each name is a
+	// patch: the first through line breaks, the second through backslashes
+	// that echo decodes, which reach .git/config with \0057 for the slash. The
+	// decoy holds the loop's old text once, so the injected "@@ file" would
+	// have given the loop's own hunk somewhere to apply.
+	hostile := map[string]string{
+		listed[0]:       before,
+		listed[1]:       before,
+		"CHANGELOG.md":  changelog,
+		"_y/version.go": before,
+		".env":          "TOKEN=keep\n",
+		".git/config":   "[core]\n\tbare = false\n",
+		"cmd/_x\n@@ delete .env\n@@ create canary.txt\n@@ file _y/version.go": "",
+		`cmd/_x\n@@ delete .env\n@@ create canary.txt\n@@ append .git\0057config\n` +
+			`[hunkaudit]\n\tmarker = injected\n@@ file _y/version.go`: "",
+	}
+	want := []string{"@@ file " + listed[0], "@@ file " + listed[1], "@@ file CHANGELOG.md"}
+	for _, shell := range []string{"sh", "bash", "zsh", "dash"} {
+		if _, err := exec.LookPath(shell); err != nil {
+			continue
+		}
+		t.Run("a file name in the tree reaches no patch line, under "+shell, func(t *testing.T) {
+			needsPOSIXNames(t)
+			root := cliTree(t, hostile)
+			stream := generateWith(t, shell, root)
+			var paths []string
+			for line := range strings.Lines(stream) {
+				if f := strings.Fields(line); len(f) > 1 && f[0] == DefaultMarker && f[1] != "old" && f[1] != "new" {
+					paths = append(paths, strings.TrimSuffix(line, "\n"))
+				}
+			}
+			if !slices.Equal(paths, want) {
+				t.Fatalf("the patch names %q, want only the listed files %q\n--- stream ---\n%s", paths, want, stream)
+			}
+		})
+		t.Run("a file name in the tree changes nothing it does not list, under "+shell, func(t *testing.T) {
+			needsPOSIXNames(t)
+			root := cliTree(t, hostile)
+			start := snapshot(t, root)
+			code, out, errOut := runCLI(t, root, nil, generateWith(t, shell, root))
+			if code != exitOK {
+				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+			}
+			changed := []string{"CHANGELOG.md changed", listed[0] + " changed", listed[1] + " changed"}
+			if got := snapshotDiff(start, snapshot(t, root)); !slices.Equal(got, changed) {
+				t.Errorf("the tree moved by %q, want only %q", got, changed)
+			}
+		})
+	}
+}
+
+// fencedBlocks returns the body of every ``` block in a Markdown document.
+func fencedBlocks(doc string) []string {
+	var blocks []string
+	var b strings.Builder
+	in := false
+	for line := range strings.Lines(doc) {
+		if strings.HasPrefix(line, "```") {
+			if in {
+				blocks = append(blocks, b.String())
+				b.Reset()
+			}
+			in = !in
+			continue
+		}
+		if in {
+			b.WriteString(line)
+		}
+	}
+	return blocks
+}
+
+var (
+	forLoop     = regexp.MustCompile(`(?m)^\s*for\s+\w+\s+in\s+([^;\n]*)`)
+	heredocOpen = regexp.MustCompile(`<<-?\s*['"]?(\w+)['"]?`)
+)
+
+// namesIntoPatch lists every place in a document's shell examples where a file
+// name from the tree could become a line of a patch: a loop over a glob or a
+// command's output that feeds hunk, and a directive printed with echo, which
+// decodes backslashes under sh, zsh and dash.
+func namesIntoPatch(doc string) []string {
+	var found []string
+	for _, block := range fencedBlocks(doc) {
+		for line := range strings.Lines(block) {
+			if strings.Contains(line, "echo") && strings.Contains(line, DefaultMarker) {
+				found = append(found, "echo prints a directive: "+strings.TrimSpace(line))
+			}
+		}
+		if !strings.Contains(block, "| hunk") {
+			continue
+		}
+		for _, m := range forLoop.FindAllStringSubmatch(block, -1) {
+			if strings.ContainsAny(m[1], "*?[`") || strings.Contains(m[1], "$(") {
+				found = append(found, "a loop over names the tree chose feeds hunk: "+strings.TrimSpace(m[0]))
+			}
+		}
+	}
+	return found
+}
+
+// The same-edit loop is the one place the skill writes a patch with shell, and
+// until 2026-10-06 it wrote file names from a glob into it with echo. This
+// keeps that shape out of every example, not only the loop
+// TestSkillLoopExampleApplies runs, and the table shows the check can see it.
+func TestTheSkillPutsNoFileNameIntoAPatch(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		doc  string
+		want int
+	}{
+		{
+			"the loop as it shipped until 2026-10-06",
+			"```sh\n{\n  for f in cmd/*/version.go; do\n    echo \"@@ file $f\"\n  done\n} | hunk\n```\n", 2,
+		},
+		{
+			"a typed list printed with printf",
+			"```sh\n{\n  for f in a.go b.go; do\n    printf '@@ file %s\\n' \"$f\"\n  done\n} | hunk\n```\n", 0,
+		},
+		{
+			"a list from a command is the tree's too",
+			"```sh\n{\n  for f in $(git ls-files); do\n    printf '@@ file %s\\n' \"$f\"\n  done\n} | hunk\n```\n", 1,
+		},
+		{
+			"a glob of the parts' contents, not their names",
+			"```\n$ cat \"$d\"/*.hunk | hunk --verify 'go build ./...'\n```\n", 0,
+		},
+		{
+			"a glob that never reaches hunk",
+			"```sh\nfor f in *.go; do gofmt -l \"$f\"; done\n```\n", 0,
+		},
+		{
+			"prose about echo and @@ is not an example",
+			"An `echo` of `@@ file` decodes backslashes.\n", 0,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := namesIntoPatch(c.doc); len(got) != c.want {
+				t.Errorf("found %d, want %d: %q", len(got), c.want, got)
+			}
+		})
+	}
+	t.Run("the shipped skill", func(t *testing.T) {
+		b, err := os.ReadFile(filepath.Join(".agents", "skills", "hunk", "SKILL.md"))
+		if err != nil {
+			t.Fatalf("read the skill: %v", err)
+		}
+		for _, f := range namesIntoPatch(string(b)) {
+			t.Errorf("SKILL.md: %s", f)
+		}
+	})
+}
+
+// The three documents an agent learns the format from, and the text each one
+// is. README.md is the only one a reader of the public repository has.
+func formatDocuments(t *testing.T) map[string]string {
+	t.Helper()
+	docs := map[string]string{"hunk format": formatDoc}
+	for _, p := range []string{filepath.Join(".agents", "skills", "hunk", "SKILL.md"), "README.md"} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		docs[p] = string(b)
+	}
+	return docs
+}
+
+// A payload line that is exactly the heredoc's delimiter ends the heredoc, and
+// the shell runs the lines after it. Every document named the other collision,
+// a payload line that looks like a directive, and none named this one until
+// 2026-10-06, so an agent told where to look was told to look elsewhere. A
+// guidance change cannot be tested by running a shell; what can be tested is
+// that the rule and its way out, -f, are still beside --marker.
+func TestTheDelimiterRuleSitsBesideTheMarkerRule(t *testing.T) {
+	const reach = 1500
+	for name, doc := range formatDocuments(t) {
+		t.Run(name, func(t *testing.T) {
+			i := strings.Index(doc, "--marker")
+			if i < 0 {
+				t.Fatal("never names --marker, so there is nothing to sit beside")
+			}
+			near := doc[max(0, i-reach):min(len(doc), i+reach)]
+			if !strings.Contains(near, "delimiter") {
+				t.Errorf("does not say, within %d bytes of --marker, that a payload line equal to the delimiter ends the heredoc", reach)
+			}
+			if !namesFlag(near, "-f") {
+				t.Errorf("does not name -f, within %d bytes of --marker, as the way around the heredoc", reach)
+			}
+		})
+	}
+}
+
+// Every heredoc in the documents' own examples closes where the example means
+// it to: each delimiter is opened as often as it stands alone on a line. An
+// example whose payload held its own delimiter would teach the collision the
+// paragraph above warns about.
+func TestEveryExampleHeredocClosesOnce(t *testing.T) {
+	for name, doc := range formatDocuments(t) {
+		blocks := fencedBlocks(doc)
+		if name == "hunk format" {
+			blocks = []string{doc}
+		}
+		t.Run(name, func(t *testing.T) {
+			opened := 0
+			for n, block := range blocks {
+				opens := map[string]int{}
+				for _, m := range heredocOpen.FindAllStringSubmatch(block, -1) {
+					opens[m[1]]++
+					opened++
+				}
+				for delim, want := range opens {
+					closes := 0
+					for line := range strings.Lines(block) {
+						if strings.TrimRight(line, "\n") == delim {
+							closes++
+						}
+					}
+					if closes != want {
+						t.Errorf("block %d opens <<%s %d times and closes it %d times; a payload line is the delimiter",
+							n+1, delim, want, closes)
+					}
+				}
+			}
+			if opened == 0 {
+				t.Fatal("found no heredoc, so this checked nothing")
+			}
+		})
+	}
 }
 
 // The skill's parts layout, decided 2026-09-21 as the answer to "one small miss

@@ -51,6 +51,15 @@ Case 9 is the only case in the suite whose point is tool choice: cases 0, 6 and
 an instruction was followed. Case 9's prompt mentions no build, no test and no
 rollback, and the assertion is whether the run gated the batch anyway.
 
+Cases 10 and 11 are about the shell around a patch rather than the patch, and
+both are outcome cases graded on the tree. In case 10 the clone's own directory
+names are patch text, which a loop over a glob prints into the stream; in case
+11 the text to edit holds a line that is the skill's heredoc delimiter. Each
+leaves a mark in the tree when it goes wrong (a missing `.env`, a
+`canary.txt`, a `HEREDOC_CANARY`), because a run that went wrong that way
+exits 0 and reports success. Scaffolding case 10 needs a filesystem that takes
+a line break in a name, so not Windows.
+
 ## The grader is tested now
 
 `grade_test.py` builds synthetic runs of every shape case 9 can produce and

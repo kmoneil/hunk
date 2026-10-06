@@ -68,11 +68,25 @@ Every byte between two `@@` lines is payload. **No escaping, ever**: no JSON
 strings, no shell quoting of the text, no backslash-n. Paste the source as it
 is.
 
-The one exception is a payload line that itself begins with `@@`, which is read
-as a directive and will fail the patch. That happens when you edit a file which
-quotes a hunk patch: a test fixture, a doc, this file. `--marker '%%'` changes
-the directive prefix for the whole patch and the `@@` lines become ordinary
-text.
+Two kinds of line are the exception, and both are in text you can see before
+you send it:
+
+- **A payload line that begins with `@@`** is read as a directive. Inside an
+  `@@ old` that fails the patch. Inside an `@@ new` or an `@@ create` it can
+  parse, and then a different patch applies from the one you meant. That
+  happens when you edit a file which quotes a hunk patch: a test fixture, a
+  doc, this file. `--marker '%%'` changes the directive prefix for the whole
+  patch and the `@@` lines become ordinary text.
+- **A payload line that is exactly `HUNK`** ends the heredoc. That is the
+  shell's rule, not `hunk`'s: `hunk` gets the lines above it, which may still
+  be a patch that applies, and the shell runs every line below it as a
+  command. Before you send, check that no payload line is the delimiter, and if
+  one is, pick another word for both ends (`<<'HUNK2'` and `HUNK2`). This file
+  has such lines, and so does any document about `hunk`.
+
+When a payload is text you have not read line by line, write the patch to a
+file with your file-writing tool, outside the tree, and run `hunk -f FILE`. A
+file does not pass through the shell, so no line in it can end anything.
 
 ## The five directives
 
@@ -196,31 +210,42 @@ is still a patch. Let a loop write it and pipe it in, and the batch keeps the
 count guard and the transaction: if any file does not have the text exactly
 once, nothing is written.
 
+List the files first (`ls cmd/*/version.go`, `rg -l`), read the names, and
+write them into the loop yourself:
+
 ```sh
 {
-  for f in cmd/*/version.go; do
-    echo "@@ file $f"
-    cat <<'P'
+  for f in cmd/api/version.go cmd/worker/version.go; do
+    printf '@@ file %s\n' "$f"
+    cat <<'HUNK'
 @@ old
 const Version = "1.4.0"
 @@ new
 const Version = "1.5.0"
-P
+HUNK
   done
-  cat <<'P'
+  cat <<'HUNK'
 @@ file CHANGELOG.md
 @@ old
 ## 1.5.0 (unreleased)
 @@ new
 ## 1.5.0 (2026-09-21)
-P
+HUNK
 } | hunk --verify 'go build ./...'
 ```
 
-The loop computes only the list of files. Each payload is a quoted heredoc, so
-nothing in it is escaped. A Python loop that asserts and writes one file at a
-time rebuilds the guard and loses the transaction: an assert that fails on the
-fourth file leaves the first three changed.
+**The list is yours, not a glob's.** Every path the loop prints becomes a line
+of the patch, so a glob would put the repository's own file names into it. A
+file name can hold a line break, or a backslash that `echo` turns into one
+under `sh`, `zsh` and `dash`, and either way the name arrives as directive
+lines you never wrote, which `hunk` then carries out. A name you typed holds
+nothing you did not put there, and `printf '%s'` prints it as it is. If a
+listing shows a name you would not have typed, leave it out and say so.
+
+Each payload is a quoted heredoc, so nothing in it is escaped. A Python loop
+that asserts and writes one file at a time rebuilds the guard and loses the
+transaction: an assert that fails on the fourth file leaves the first three
+changed.
 
 ## When to reach for it, and when not
 

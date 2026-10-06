@@ -92,6 +92,18 @@ func needsMake(t *testing.T) {
 	}
 }
 
+// needsPOSIXNames skips a test whose subject is a file name Windows cannot
+// hold. The skill's loop is tested against directory names carrying a line
+// break and a literal backslash, because those are the two ways a name reached
+// a patch through a glob; Windows refuses the first and reads the second as a
+// separator, so the tree cannot be built there and there is nothing to inject.
+func needsPOSIXNames(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows file names cannot hold a line break, and a backslash is a separator")
+	}
+}
+
 // brokenShell returns a directory to use as PATH in which exec.LookPath finds
 // an sh that cannot run: garbage, marked executable where there is such a
 // mark. It is how a verify command that is found and still cannot start is
