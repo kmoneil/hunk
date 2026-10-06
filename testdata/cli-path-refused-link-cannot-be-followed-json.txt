@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "exit": 2,
+  "error": "self.link: the symlink self.link -> self.link/../c.txt cannot be followed (too many levels of symbolic links), and a .. after a symlink has no answer without following it; name the file itself; the root is /the/root"
+}
