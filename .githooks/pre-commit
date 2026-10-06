@@ -10,6 +10,15 @@
 # `go get` writes go.mod without anyone deciding to.
 set -e
 
+# make hooks used to set core.hooksPath, which runs every hook a checked-out
+# branch carries. It installs this one and commit-msg as shims now, and a clone
+# still on the old setting is told here, because this is the hook it runs.
+if hooks_path=$(git config --get core.hooksPath); then
+	echo "pre-commit: core.hooksPath is $hooks_path, so git runs any hook a checked-out branch carries"
+	echo "run: make hooks"
+	exit 1
+fi
+
 echo "pre-commit: gofumpt"
 unformatted=$(gofumpt -l . 2>/dev/null | grep -v '^\.agents/skills/[^/]*-workspace/' || true)
 if [ -n "$unformatted" ]; then

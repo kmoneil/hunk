@@ -174,9 +174,30 @@ install:
 
 # Once per clone. Enables both hooks: commit-msg refuses tool attribution, and
 # pre-commit runs the gate cheapest-first.
+#
+# Each is a shim in .git/hooks that runs the tracked script from the checkout it
+# fires in, and nothing else is enabled. Until 2026-10-06 this pointed
+# core.hooksPath at .githooks, which made every hook a branch carries live: a
+# post-checkout on a branch ran on checking it out, before anything on it had
+# been read. These two run at commit, where the branch's own make check would
+# run its code anyway. A clone still on the old setting has it removed here,
+# and .githooks/pre-commit refuses to run until it has been.
+HOOKS := commit-msg pre-commit
 hooks:
-	git config core.hooksPath .githooks
-	@echo "hooks enabled from .githooks: commit-msg, pre-commit"
+	@if git config --local --get core.hooksPath >/dev/null; then \
+		git config --local --unset core.hooksPath && \
+		echo "hooks: removed core.hooksPath"; \
+	fi
+	@if p=$$(git config --get core.hooksPath); then \
+		echo "hooks: core.hooksPath is $$p in another scope, so git would run that and not these"; \
+		exit 1; \
+	fi
+	@dir=$$(git rev-parse --path-format=absolute --git-path hooks) && mkdir -p "$$dir" && \
+	for h in $(HOOKS); do \
+		printf '#!/bin/sh\n# Installed by make hooks. Runs the tracked hook from this checkout.\nexec "$$(git rev-parse --show-toplevel)/.githooks/%s" "$$@"\n' "$$h" > "$$dir/$$h" && \
+		chmod 755 "$$dir/$$h" || exit 1; \
+	done && \
+	echo "hooks: $(HOOKS) installed in $$dir"
 
 # The pinned developer tools. Not dependencies: `go install` puts binaries in
 # GOPATH/bin and never touches go.mod, which `make gates` re-proves afterwards.
