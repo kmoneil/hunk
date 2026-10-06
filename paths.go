@@ -82,6 +82,11 @@ type Target struct {
 	name string // relative to the tree root when confined, absolute when not
 	orig string // as written in the patch, for messages
 	link bool   // a symlink on the path the patch wrote led here
+	// named means the entry the patch named is itself a symlink, as against
+	// one in a directory above it. A write goes through either (§6.5), and a
+	// delete can go through only the second: through the first it would
+	// remove the file the link leads to and leave the link.
+	named bool
 }
 
 // Orig is the path as the patch wrote it. Reports say that, not the resolved
@@ -160,11 +165,12 @@ func (t *Tree) Resolve(p string) (Target, error) {
 	if err != nil {
 		return Target{}, err
 	}
-	final, viaLink, err := t.resolveLinks(p, name)
+	var named bool
+	final, viaLink, err := t.resolveLinks(p, name, &named)
 	if err != nil {
 		return Target{}, err
 	}
-	return Target{name: final, orig: p, link: viaLink}, nil
+	return Target{name: final, orig: p, link: viaLink, named: named}, nil
 }
 
 // toName brings a patch path into the form this tree's methods take: relative
@@ -229,7 +235,11 @@ func (t *Tree) toName(p string) (string, error) {
 // can follow and os.Root will not, such as a ".." past a chain of nine
 // directory links, and buys not having a second walker that can be wrong in a
 // different way.
-func (t *Tree) resolveLinks(orig, name string) (string, bool, error) {
+//
+// named is set when a link is followed standing last on the path, which is
+// the entry the patch named, however many directory links were followed to
+// reach it.
+func (t *Tree) resolveLinks(orig, name string, named *bool) (string, bool, error) {
 	base, parts := t.splitName(name)
 	via := false
 	links := 0
@@ -321,6 +331,7 @@ func (t *Tree) resolveLinks(orig, name string) (string, bool, error) {
 		}
 		via, link, dest = true, here, held
 		if i == len(parts)-1 {
+			*named = true
 			climbed = t.climbsAsText(here, dest)
 		}
 		absolute, destBase, destParts, err := t.linkDestination(orig, dest)
@@ -813,7 +824,7 @@ func (s *Spellings) Respell(tg Target) Target {
 		}
 		spelled = append(spelled, s.firstSpelling(existing, dir, c))
 	}
-	return Target{name: s.tree.joinName(base, spelled, true), orig: tg.orig, link: tg.link}
+	return Target{name: s.tree.joinName(base, spelled, true), orig: tg.orig, link: tg.link, named: tg.named}
 }
 
 // stored is the spelling dir keeps for c, which exists there as fi.

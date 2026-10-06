@@ -1,0 +1,4 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  CLAUDE.md  (patch line 1)
+  it is a symlink to AGENTS.md, and hunk deletes files, not links; name AGENTS.md to delete that file, or remove the link outside hunk; the root is /the/root
