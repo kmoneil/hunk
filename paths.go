@@ -170,7 +170,63 @@ func (t *Tree) Resolve(p string) (Target, error) {
 	if err != nil {
 		return Target{}, err
 	}
+	// hunk edits the working tree, and .git is not part of it: its config and
+	// hooks are things git later runs. Until 2026-10-06 a patch could append to
+	// .git/config or rewrite .git/HEAD, by name, through a link, or with the
+	// root inside .git. Checked on the resolved name, so no spelling and no
+	// link reaches it, and on the absolute form, so neither does a root.
+	full := final
+	if t.r != nil {
+		full = filepath.Join(t.root, final)
+	}
+	if insideDotGit(full) {
+		return Target{}, &PathRefusal{
+			Path: p, Root: t.root, Resolved: final,
+			Reason: "it is .git or inside it, which is git's own and not the working tree; hunk never edits there",
+		}
+	}
 	return Target{name: final, orig: p, link: viaLink, named: named}, nil
+}
+
+// insideDotGit reports whether any component of name is .git, or a spelling of
+// it that some filesystem takes for it.
+func insideDotGit(name string) bool {
+	sep := func(r rune) bool { return r < 0x80 && os.IsPathSeparator(byte(r)) }
+	return slices.ContainsFunc(strings.FieldsFunc(name, sep), isDotGit)
+}
+
+// isDotGit is git's own test for a path component that names .git, applied on
+// every platform as git applies it, because a tree is not always on the
+// filesystem it was made on. Case folds, which covers macOS and Windows. NTFS
+// drops trailing dots and spaces, takes a colon as the start of a stream name,
+// and gives .git the short name GIT~1. HFS+ ignores a handful of invisible code
+// points altogether, so ".g\u200cit" is .git there. None of these is a name
+// anybody means as anything else.
+func isDotGit(c string) bool {
+	for _, prefix := range []string{".git", "git~1"} {
+		if len(c) < len(prefix) || !strings.EqualFold(c[:len(prefix)], prefix) {
+			continue
+		}
+		rest := c[len(prefix):]
+		if i := strings.IndexByte(rest, ':'); i >= 0 {
+			rest = rest[:i]
+		}
+		if strings.Trim(rest, ". ") == "" {
+			return true
+		}
+	}
+	return strings.EqualFold(strings.Map(dropHFSIgnorable, c), ".git")
+}
+
+// dropHFSIgnorable is a strings.Map function that removes the code points HFS+
+// leaves out of a name when it compares two, the list git's utf8.c keeps.
+func dropHFSIgnorable(r rune) rune {
+	switch {
+	case r >= 0x200c && r <= 0x200f, r >= 0x202a && r <= 0x202e,
+		r >= 0x206a && r <= 0x206f, r == 0xfeff:
+		return -1
+	}
+	return r
 }
 
 // toName brings a patch path into the form this tree's methods take: relative

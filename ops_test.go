@@ -955,6 +955,197 @@ func TestADeleteThroughALinkIsGolden(t *testing.T) {
 	golden(t, "cli-delete-through-a-link-json", strings.ReplaceAll(js, strings.Trim(string(quoted), `"`), "/the/root"))
 }
 
+// hunk edits the working tree, and .git is not part of it. Until 2026-10-06
+// every one of these applied under exit 0 except the three spellings this
+// filesystem does not take for .git, and those are refused anyway, because a
+// tree is checked out on more than one kind. Each row was probed before the
+// refusal existed; the neighbours at the end must stay editable.
+func TestNothingInsideDotGitIsEdited(t *testing.T) {
+	zwnj := string(rune(0x200c))
+	const says = "it is .git or inside it, which is git's own and not the working tree; hunk never edits there"
+	for _, c := range []struct {
+		name        string
+		patch       string
+		root        string // relative to the fixture, "" for the fixture itself
+		unconfined  bool
+		dryRun      bool
+		refused     string // the path the refusal names; "" means it applies
+		resolves    string // the "(it resolves to ...)" clause, when there is one
+		otherConfig bool   // a second tree, whose .git/config the patch names absolutely
+	}{
+		{name: "an append to .git/config", patch: "@@ append .git/config\n[core]\n\tfsmonitor = x\n", refused: ".git/config"},
+		{name: "a replace in .git/HEAD", patch: "@@ file .git/HEAD\n@@ old\nmain\n@@ new\nother\n", refused: ".git/HEAD"},
+		{name: "a new hook", patch: "@@ create .git/hooks/post-checkout\n#!/bin/sh\n", refused: ".git/hooks/post-checkout"},
+		{name: "a delete of .git/index", patch: "@@ delete .git/index\n", refused: ".git/index"},
+		{name: "another case", patch: "@@ append .GIT/config\n# x\n", refused: ".GIT/config"},
+		{name: "a link to .git/config", patch: "@@ append x\n# x\n", refused: "x", resolves: ".git/config"},
+		{name: "a delete through a link to .git/HEAD", patch: "@@ delete old.cfg\n", refused: "old.cfg", resolves: ".git/HEAD"},
+		{name: "a directory link to the root", patch: "@@ append here/.git/config\n# x\n", refused: "here/.git/config", resolves: ".git/config"},
+		{name: "a .git file in a subdirectory", patch: "@@ file sub/.git\n@@ old\n../.git\n@@ new\n/elsewhere\n", refused: "sub/.git"},
+		{name: "a new .git file", patch: "@@ create new/.git\ngitdir: /elsewhere\n", refused: "new/.git"},
+		{name: "a trailing dot, which NTFS drops", patch: "@@ create .git./config\nx\n", refused: ".git./config"},
+		{name: "the NTFS short name", patch: "@@ create GIT~1/config\nx\n", refused: "GIT~1/config"},
+		{name: "a code point HFS+ ignores", patch: "@@ create .g" + zwnj + "it/config\nx\n", refused: ".g" + zwnj + "it/config"},
+		{name: "a dry run refuses it too", patch: "@@ append .git/config\n# x\n", dryRun: true, refused: ".git/config"},
+		{name: "unconfined", patch: "@@ append .git/config\n# x\n", unconfined: true, refused: ".git/config"},
+		{name: "a root inside .git", patch: "@@ append config\n# x\n", root: ".git", refused: "config"},
+		{name: "unconfined, another tree's .git by absolute path", unconfined: true, otherConfig: true},
+
+		{name: "a .gitignore", patch: "@@ create .gitignore\nbin/\n"},
+		{name: "a .github workflow", patch: "@@ create .github/workflows/ci.yml\non: push\n"},
+		{name: "a .gitmodules", patch: "@@ create .gitmodules\n"},
+		{name: "a bare repository's name", patch: "@@ create repo.git/config\nx\n"},
+		{name: "a path whose text passes through .git", patch: "@@ append .git/../a.txt\nmore\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			mk := func() string {
+				root := t.TempDir()
+				if r, err := filepath.EvalSymlinks(root); err == nil {
+					root = r
+				}
+				for name, body := range map[string]string{
+					".git/config": "[core]\n", ".git/HEAD": "ref: refs/heads/main\n", ".git/index": "DIRC",
+					"sub/.git": "gitdir: ../.git\n", "a.txt": "a\n",
+				} {
+					must(t, os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755))
+					must(t, os.WriteFile(filepath.Join(root, name), []byte(body), 0o644))
+				}
+				must(t, os.MkdirAll(filepath.Join(root, ".git", "hooks"), 0o755))
+				must(t, os.Symlink(filepath.Join(".git", "config"), filepath.Join(root, "x")))
+				must(t, os.Symlink(filepath.Join(".git", "HEAD"), filepath.Join(root, "old.cfg")))
+				must(t, os.Symlink(".", filepath.Join(root, "here")))
+				return root
+			}
+			root := mk()
+			patch := c.patch
+			var other string
+			if c.otherConfig {
+				other = mk()
+				patch = "@@ append " + filepath.Join(other, ".git", "config") + "\n# x\n"
+				c.refused = filepath.Join(other, ".git", "config")
+			}
+			tree, err := OpenTree(filepath.Join(root, c.root), c.unconfined)
+			must(t, err)
+			t.Cleanup(func() { tree.Close() })
+			p, err := Parse([]byte(patch), DefaultMarker)
+			must(t, err)
+
+			before, otherBefore := snapshot(t, root), map[string]string{}
+			if other != "" {
+				otherBefore = snapshot(t, other)
+			}
+			if c.dryRun {
+				_, err = NewTxn(tree, Options{}).Preview(p)
+			} else {
+				_, err = NewTxn(tree, Options{}).Run(p)
+			}
+			if c.refused == "" {
+				must(t, err)
+				after := snapshot(t, root)
+				if len(snapshotDiff(before, after)) == 0 {
+					t.Error("the batch applied and changed nothing")
+				}
+				for name, was := range before {
+					if strings.HasPrefix(name, ".git"+string(filepath.Separator)) && after[name] != was {
+						t.Errorf("%s changed", name)
+					}
+				}
+				return
+			}
+
+			if got := ExitCode(err); got != exitNoMatch {
+				t.Fatalf("exit %d, want %d: %v", got, exitNoMatch, err)
+			}
+			var pr *PathRefusal
+			if !errors.As(err, &pr) {
+				t.Fatalf("want *PathRefusal, got %T: %v", err, err)
+			}
+			if pr.Path != c.refused {
+				t.Errorf("the refusal names %q, want %q", pr.Path, c.refused)
+			}
+			msg := pr.Error()
+			for _, want := range []string{says, tree.Root()} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("%q does not say %q", msg, want)
+				}
+			}
+			// Unconfined, a relative path resolves to an absolute one, which
+			// is said even with no link on the way.
+			resolves := c.resolves
+			if c.unconfined && !filepath.IsAbs(c.refused) {
+				resolves = filepath.Join(tree.Root(), c.refused)
+			}
+			if clause := "(it resolves to " + native(resolves) + ")"; resolves != "" && !strings.Contains(msg, clause) {
+				t.Errorf("%q does not say %q", msg, clause)
+			} else if resolves == "" && strings.Contains(msg, "resolves to") {
+				t.Errorf("%q says where it resolves, which is where it was written", msg)
+			}
+			assertUnchanged(t, root, before)
+			if other != "" {
+				assertUnchanged(t, other, otherBefore)
+			}
+		})
+	}
+}
+
+// The one shape the .git refusal does not see: a name os.Root cannot walk at
+// all comes back from Resolve as it stands, links and all, for load to report.
+// Fuzzing found it on the day the refusal was written, as g/ and a component
+// too long for any filesystem, with g -> .git. Nothing can use such a name,
+// hunk included, so it is exit 5 with nothing written, and this pins that.
+func TestAnUnusableNameUnderALinkToDotGitWritesNothing(t *testing.T) {
+	for _, op := range []string{"create", "append", "delete"} {
+		t.Run(op, func(t *testing.T) {
+			root := cliTree(t, map[string]string{".git/config": "[core]\n"})
+			must(t, os.Symlink(".git", filepath.Join(root, "g")))
+			before := snapshot(t, root)
+			patch := "@@ " + op + " g/" + strings.Repeat("0", 256) + "\n"
+			if op != "delete" {
+				patch += "x\n"
+			}
+			code, out, _ := runCLI(t, root, nil, patch)
+			if code != exitIO || out != "" {
+				t.Errorf("exit %d, stdout %q; want %d and nothing reported applied", code, out, exitIO)
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
+}
+
+// The page an agent reads for a path into .git, through a link so the page
+// carries both halves of the message, in text and in JSON.
+func TestAPathInsideDotGitIsGolden(t *testing.T) {
+	tree := func() string {
+		root := cliTree(t, map[string]string{".git/config": "[core]\n"})
+		must(t, os.Symlink(filepath.Join(".git", "config"), filepath.Join(root, "x")))
+		return root
+	}
+	const patch = "@@ append x\n# x\n"
+
+	root := tree()
+	code, out, errOut := runCLI(t, root, nil, patch)
+	if code != exitNoMatch {
+		t.Fatalf("exit %d, want %d: %s", code, exitNoMatch, errOut)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
+	}
+	if got := readFile(t, root, filepath.Join(".git", "config")); got != "[core]\n" {
+		t.Errorf(".git/config = %q, want it untouched", got)
+	}
+	golden(t, "cli-path-inside-dot-git", slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
+
+	root = tree()
+	code, js, errOut := runCLI(t, root, []string{"--json"}, patch)
+	if code != exitNoMatch || errOut != "" {
+		t.Fatalf("exit %d, stderr %q; want %d and nothing on stderr", code, errOut, exitNoMatch)
+	}
+	quoted, err := json.Marshal(root)
+	must(t, err)
+	js = strings.ReplaceAll(js, strings.Trim(string(quoted), `"`), "/the/root")
+	golden(t, "cli-path-inside-dot-git-json", strings.ReplaceAll(js, `.git\\config`, ".git/config"))
+}
+
 // A file is read once and written once (§3.5), and that has to mean the file,
 // not the spelling. Until 2026-09-17 a directory link made one file two: with
 // d -> sub, a batch naming sub/b.go and d/b.go loaded it twice and wrote it

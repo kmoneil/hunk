@@ -258,6 +258,9 @@ read it if you meet one.
 `--json` gives the same information as one object, including the near-miss span,
 so a program never has to parse the text.
 
+It never edits `.git`: a path that is `.git` or inside it, in any spelling or
+through any symlink, is exit 2. Change git's own files with `git`.
+
 ## `--verify` owns the outcome
 
 `--verify CMD` runs after a successful apply, in `--root`, via `sh -c`. If it

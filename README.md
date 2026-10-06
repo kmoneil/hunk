@@ -137,6 +137,16 @@ the link behind; the refusal names the file it leads to. Name that file to
 delete it, or remove the link with `rm`. A symlink in a directory above the
 file is fine: `@@ delete` removes the file the path names.
 
+hunk never edits `.git`, which is git's own and not part of the working tree.
+A path that is `.git` or inside it is refused with exit 2, whether `.git` is a
+directory or the `gitdir:` file of a worktree or submodule, whichever symlink
+leads there, and in any spelling git itself treats as `.git` on some
+filesystem: another case, trailing dots or spaces, the Windows short name
+`GIT~1`. With `--root` inside a `.git`, every path is refused. `.gitignore`,
+`.github/` and the rest of the tree are edited as usual. The rule is about the
+name, so a repository kept elsewhere, a bare `repo.git` or one named by
+`GIT_DIR`, is not recognised.
+
 Three rules worth knowing before the first patch:
 
 1. **A payload never gains a trailing newline.** To match text that ends in a
