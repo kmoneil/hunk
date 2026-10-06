@@ -1,0 +1,7 @@
+hunk: applied 2 hunks, verify failed, rolled back 1 file
+
+$ zig build test
+Build Summary: 3/5 steps succeeded
+test: waiting
+(last 2 of 2 lines)
+(stopped reading 5s after the command exited: something it started still holds its output open)

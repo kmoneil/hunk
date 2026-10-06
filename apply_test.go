@@ -650,7 +650,11 @@ func TestRunChecksBetweenValidatingAndCommitting(t *testing.T) {
 		}
 		return true
 	})
-	if want := []string{"Load", "Validate", "Check", "Commit", "result"}; !slices.Equal(calls, want) {
+	// beforeCommit sits after the check and before the first write, which is
+	// where the CLI's signal handler has to go in: after it, a signal ends the
+	// verify and puts the batch back; before it, a signal still kills a load
+	// that writes nothing.
+	if want := []string{"Load", "Validate", "Check", "beforeCommit", "Commit", "result"}; !slices.Equal(calls, want) {
 		t.Errorf("Run calls %v on the transaction, want %v: §6.1's phases, in order, each once", calls, want)
 	}
 

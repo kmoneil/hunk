@@ -30,6 +30,11 @@ FLAGS
                         back whatever it says, and exit with its status. For a
                         print statement or a measurement you do not mean to
                         keep. 4 if a file could not be put back.
+  --timeout DURATION    End the --verify or --try command after DURATION, such
+                        as 90s or 5m, and everything it started with it: exit
+                        3 under --verify, rolled back, and 124 under --try, put
+                        back. No default. Set it below any limit your harness
+                        puts on this call.
   --dry-run             Validate and print the diffstat. Write nothing.
   --root DIR            Resolve relative paths and run --verify or --try here.
                         (cwd)
@@ -58,6 +63,11 @@ EXIT CODES
 Exit 2 is the one to expect routinely and act on without alarm: fix the patch
 and resend. The report prints the bytes that are actually in the file, so the
 fix is usually a paste rather than a re-read.
+
+SIGINT, SIGTERM or SIGHUP while the --verify or --try command runs ends the
+command and everything it started, puts the batch back, and then ends hunk by
+the same signal, which a shell reports as 130, 143 or 129; 4 if a file could not
+be put back. SIGKILL cannot be caught and leaves the batch applied.
 
 WHAT THIS DOES NOT PROMISE
 

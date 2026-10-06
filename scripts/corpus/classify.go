@@ -127,7 +127,7 @@ var (
 	// Exits 3 and 4 differ by one clause, and that pair is what §11's open
 	// question about --verify-may-format turns on, so they are separate rules
 	// rather than one rule and a substring test.
-	reExitRollbackIncomplete = regexp.MustCompile(`(?m)^hunk: applied .*verify failed.*left alone`)
+	reExitRollbackIncomplete = regexp.MustCompile(`(?m)^hunk: applied .*(?:verify failed|verify timed out|interrupted by SIG[A-Z]+ during the verify).*left alone`)
 	// --try's report, from 2026-09-22. Its exit is the command's status, which
 	// is not hunk's verdict, so it is classified by what hunk did: the tree put
 	// back is 0, and a file left alone is 4, as it is after a verify. The JSON
@@ -141,8 +141,16 @@ var (
 	// was refused before writing (no sh) or rolled back after (an sh that
 	// would not run). Since 2026-09-22 both leave the tree as it was.
 	reExitCannotStart  = regexp.MustCompile(`(?m)^hunk: (?:could not run the (?:verify|--try) command|--(?:verify|try) runs its command with sh, which was not found)`)
-	reExitVerifyFailed = regexp.MustCompile(`(?m)^hunk: applied .*verify failed`)
-	reExitChanged      = regexp.MustCompile(`changed on disk between being read and being written`)
+	reExitVerifyFailed = regexp.MustCompile(`(?m)^hunk: applied .*verify (?:failed|timed out)`)
+	// A signal to hunk while its command ran, from 2026-10-06: the batch went
+	// back and hunk died of the signal, which a shell reports as 128 plus it.
+	// The text names the signal, so the code is read from it, and a file that
+	// could not be put back is 4 as it is after a verify. The --try form says
+	// it before "tried" can claim it, and the JSON form carries interrupted_by.
+	reExitInterrupted        = regexp.MustCompile(`(?m)^hunk: (?:applied \d+ hunks?, |tried \d+ hunks? and put back .*; )?interrupted by (SIG[A-Z]+)`)
+	reExitInterruptedNotBack = regexp.MustCompile(`(?m)^hunk: interrupted by SIG[A-Z]+ before .* could not be put back`)
+	reTryJSONInterrupted     = regexp.MustCompile(`"interrupted_by"`)
+	reExitChanged            = regexp.MustCompile(`changed on disk between being read and being written`)
 	// Exit 1 is enumerable: a parse error carries its patch line, and the usage
 	// errors are fixed strings in main.go. Exit 5 is not enumerable, because
 	// its text is whatever the OS said, so it is never guessed at.
@@ -324,6 +332,11 @@ func HunkExit(cmd, result string) int {
 		if reTryJSONNotRestored.MatchString(result) {
 			return 4
 		}
+		if m := reExitJSON.FindStringSubmatch(result); m != nil && reTryJSONInterrupted.MatchString(result) {
+			if code, err := strconv.Atoi(m[1]); err == nil {
+				return code
+			}
+		}
 		if m := reExitJSON.FindStringSubmatch(result); m != nil && m[1] == "5" && strings.Contains(result, `"error"`) {
 			return 5 // the command could not start
 		}
@@ -336,6 +349,13 @@ func HunkExit(cmd, result string) int {
 		if code, err := strconv.Atoi(m[1]); err == nil {
 			return code
 		}
+	}
+	if m := reExitInterrupted.FindStringSubmatch(result); m != nil {
+		if reExitTriedAlone.MatchString(result) || reExitRollbackIncomplete.MatchString(result) ||
+			reExitInterruptedNotBack.MatchString(result) {
+			return 4
+		}
+		return signalExit(m[1])
 	}
 	switch {
 	case reExitTriedAlone.MatchString(result):
@@ -356,6 +376,20 @@ func HunkExit(cmd, result string) int {
 		return 1
 	case reExitApplied.MatchString(result):
 		return ExitOK
+	}
+	return ExitUnclassified
+}
+
+// signalExit is the status a shell reports for a process the named signal
+// killed, for the signals hunk catches, and ExitUnclassified for any other.
+func signalExit(name string) int {
+	switch name {
+	case "SIGHUP":
+		return 129
+	case "SIGINT":
+		return 130
+	case "SIGTERM":
+		return 143
 	}
 	return ExitUnclassified
 }

@@ -1,0 +1,6 @@
+hunk: tried 2 hunks and put back 1 file; the command timed out after 1m30s, exit 124
+
+$ zig build test
+Build Summary: 3/5 steps succeeded
+test: waiting
+(last 2 of 2 lines)

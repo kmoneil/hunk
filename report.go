@@ -18,7 +18,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // A Verify is the outcome of --verify (§5.1's JSON, §5.3's text).
@@ -56,6 +59,15 @@ type Verify struct {
 	// back whatever it does, and the exit is its Status (§4.1).
 	Try    bool
 	Status int
+
+	// TimedOut is the --timeout that ended the command, and Signal the signal
+	// to hunk that ended it, when either did. A signal can also arrive while the
+	// batch is being written, and then the command never runs: Ran is false and
+	// Signal is set. Cut means sh had exited and something it started still held
+	// its output open, so hunk stopped reading verifyWaitDelay later.
+	TimedOut time.Duration
+	Signal   os.Signal
+	Cut      bool
 }
 
 // A NotRestored is a file rollback left alone because something rewrote it
@@ -127,9 +139,21 @@ func NewReport(res *Result, err error, v *Verify, dryRun bool, hunks int) *Repor
 		r.Failures = ve.Failures
 	}
 	switch {
+	case v != nil && v.Signal != nil:
+		// A signal to hunk while the batch was on disk: the command ended, the
+		// batch went back, and hunk dies of the same signal once the report is
+		// written, which a shell reads as 128 plus it (§4.1). The code says that
+		// for a caller of invoke, and for --json. 4 when the tree is not back, since
+		// an inconsistent tree is the thing to say.
+		r.Exit = signalExit(v.Signal)
+		if len(v.NotRestored) > 0 {
+			r.Exit = exitRollbackFailed
+		}
 	case v != nil && v.Try:
 		// §4.1: under --try the exit is the command's own status once the tree
-		// is back, and 4 when it is not, whatever the command returned.
+		// is back, and 4 when it is not, whatever the command returned. A
+		// command --timeout ended has 124 for its status, as timeout(1) exits,
+		// so that a caller can tell it from anything the command said.
 		if v.Ran {
 			r.Exit = v.Status
 		}
@@ -247,9 +271,13 @@ func (r *Report) writeSuccess(w io.Writer) {
 	case r.Verify != nil && r.Verify.Ran:
 		fmt.Fprintf(w, ", verify ok (%.1fs)", r.Verify.Seconds)
 	}
-	// Nothing follows the total. A note on a trivial batch used to, and §5.1
-	// says why it went.
+	// Nothing follows the total on the same line. A note on a trivial batch
+	// used to, and §5.1 says why it went. A verify whose output was cut gets a
+	// line of its own, because a process left running is worth a line.
 	fmt.Fprintln(w)
+	if v := r.Verify; v != nil && v.Ran && v.Cut {
+		fmt.Fprintln(w, cutNote())
+	}
 }
 
 func (r *Report) writeValidationFailure(w io.Writer) {
@@ -309,7 +337,7 @@ func (r *Report) writeValidationFailure(w io.Writer) {
 
 func (r *Report) writeVerifyFailure(w io.Writer) {
 	v := r.Verify
-	fmt.Fprintf(w, "hunk: applied %s, verify failed", count(v.Applied, "hunk"))
+	fmt.Fprintf(w, "hunk: applied %s, %s", count(v.Applied, "hunk"), verifyEnded(v))
 	switch {
 	case v.Kept:
 		fmt.Fprint(w, ", changes left in place for inspection (--keep-on-fail)\n")
@@ -330,8 +358,68 @@ func (r *Report) writeTry(w io.Writer, prefix string) {
 	if len(v.NotRestored) > 0 {
 		fmt.Fprintf(w, ", %s left alone", count(len(v.NotRestored), "file"))
 	}
-	fmt.Fprintf(w, "; the command exited %d (%.1fs)\n", v.Status, v.Seconds)
+	switch {
+	case v.Signal != nil:
+		fmt.Fprintf(w, "; interrupted by %s, the command was ended (%.1fs)\n", signalName(v.Signal), v.Seconds)
+	case v.TimedOut > 0:
+		fmt.Fprintf(w, "; the command timed out after %s, exit %d\n", shortDuration(v.TimedOut), v.Status)
+	default:
+		fmt.Fprintf(w, "; the command exited %d (%.1fs)\n", v.Status, v.Seconds)
+	}
 	writeTranscript(w, v)
+}
+
+// verifyEnded is how a failed verify ended, for the report's first line.
+func verifyEnded(v *Verify) string {
+	switch {
+	case v.Signal != nil:
+		return "interrupted by " + signalName(v.Signal) + " during the verify"
+	case v.TimedOut > 0:
+		return "verify timed out after " + shortDuration(v.TimedOut)
+	}
+	return "verify failed"
+}
+
+// cutNote is the line a report adds when hunk stopped reading a command's
+// output because something it started still held the pipe after sh exited.
+func cutNote() string {
+	return "stopped reading " + shortDuration(verifyWaitDelay) +
+		" after the command exited: something it started still holds its output open"
+}
+
+// signalName is the name a shell user knows a signal by: SIGINT, where Go's
+// own String says "interrupt".
+func signalName(sig os.Signal) string {
+	switch sig {
+	case syscall.SIGINT:
+		return "SIGINT"
+	case syscall.SIGTERM:
+		return "SIGTERM"
+	case syscall.SIGHUP:
+		return "SIGHUP"
+	}
+	return sig.String()
+}
+
+// signalExit is 128 plus the signal, the status a shell gives a process the
+// signal killed.
+func signalExit(sig os.Signal) int {
+	if s, ok := sig.(syscall.Signal); ok {
+		return 128 + int(s)
+	}
+	return 128 + int(syscall.SIGTERM)
+}
+
+// shortDuration prints a duration as somebody would type it: 2m, not 2m0s.
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }
 
 // writeTranscript is the command, its output's tail, and what rolling back
@@ -343,6 +431,9 @@ func writeTranscript(w io.Writer, v *Verify) {
 	}
 	if v.TotalLines > 0 {
 		fmt.Fprintf(w, "(last %d of %d lines)\n", len(v.Tail), v.TotalLines)
+	}
+	if v.Cut {
+		fmt.Fprintf(w, "(%s)\n", cutNote())
 	}
 	for _, p := range v.Gone {
 		fmt.Fprintf(w, "\n%s, which hunk created, was already gone: something else removed it.\n", p)
@@ -427,6 +518,24 @@ type jsonTry struct {
 	RolledBack  int           `json:"rolled_back"`
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
 	Gone        []string      `json:"already_gone,omitempty"`
+	jsonEnded
+}
+
+// jsonEnded is how a command was ended early, in either object: the --timeout
+// that did it in seconds, the signal to hunk that did it, and whether hunk
+// stopped reading output that something the command started still held.
+type jsonEnded struct {
+	TimedOut    float64 `json:"timed_out_after,omitempty"`
+	Interrupted string  `json:"interrupted_by,omitempty"`
+	OutputCut   bool    `json:"output_cut,omitempty"`
+}
+
+func endedJSON(v *Verify) jsonEnded {
+	e := jsonEnded{TimedOut: v.TimedOut.Seconds(), OutputCut: v.Cut}
+	if v.Signal != nil {
+		e.Interrupted = signalName(v.Signal)
+	}
+	return e
 }
 
 type jsonVerify struct {
@@ -439,6 +548,7 @@ type jsonVerify struct {
 	Kept        bool          `json:"kept,omitempty"`
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
 	Gone        []string      `json:"already_gone,omitempty"`
+	jsonEnded
 }
 
 type jsonRestore struct {
@@ -488,7 +598,7 @@ func (r *Report) JSON(w io.Writer) error {
 	if v := r.Verify; v != nil && v.Try {
 		jt := &jsonTry{
 			Ran: v.Ran, Status: v.Status, Seconds: v.Seconds, Command: v.Command,
-			Output: v.Tail, RolledBack: v.RolledBack, Gone: v.Gone,
+			Output: v.Tail, RolledBack: v.RolledBack, Gone: v.Gone, jsonEnded: endedJSON(v),
 		}
 		for _, n := range v.NotRestored {
 			jt.NotRestored = append(jt.NotRestored, jsonRestore{n.Path, n.Reason})
@@ -498,6 +608,7 @@ func (r *Report) JSON(w io.Writer) error {
 		jv := &jsonVerify{
 			Ran: v.Ran, OK: v.OK, Seconds: v.Seconds, Command: v.Command,
 			Output: v.Tail, RolledBack: v.RolledBack, Kept: v.Kept, Gone: v.Gone,
+			jsonEnded: endedJSON(v),
 		}
 		for _, n := range v.NotRestored {
 			jv.NotRestored = append(jv.NotRestored, jsonRestore{n.Path, n.Reason})

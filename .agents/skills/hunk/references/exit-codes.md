@@ -18,7 +18,14 @@ guarantee.
 
 **Under `--try CMD` the exit is `CMD`'s own status** once every file is back,
 and 4 if one could not be put back. The report starts `tried` when `CMD` ran;
-without that word, the exit is `hunk`'s own, and `CMD` never ran.
+without that word, the exit is `hunk`'s own, and `CMD` never ran. 124 means
+`--timeout` ended `CMD`, as `timeout(1)` exits; under `--verify` a timeout is 3,
+rolled back.
+
+**A signal to `hunk` while the command runs** (SIGINT, SIGTERM, SIGHUP) ends the
+command and everything it started, puts the batch back, and then ends `hunk` by
+the same signal: a shell sees 130, 143 or 129. 4 means a file could not be put
+back. SIGKILL cannot be caught, and leaves the batch applied.
 
 `--json` gives the same information as one object, including the near-miss span,
 so a program never has to parse the text.

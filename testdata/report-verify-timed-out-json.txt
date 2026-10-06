@@ -1,0 +1,25 @@
+{
+  "ok": false,
+  "exit": 3,
+  "files": [
+    {
+      "path": "src/faults.zig",
+      "op": "modify",
+      "added": 1,
+      "removed": 0
+    }
+  ],
+  "hunks": 2,
+  "verify": {
+    "ran": true,
+    "ok": false,
+    "seconds": 4.2,
+    "command": "zig build test",
+    "output": [
+      "Build Summary: 3/5 steps succeeded",
+      "test: waiting"
+    ],
+    "rolled_back": 1,
+    "timed_out_after": 120
+  }
+}
