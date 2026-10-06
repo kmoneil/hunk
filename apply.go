@@ -399,10 +399,14 @@ func (x *Txn) load(h Hunk) (*file, error) {
 	return f, nil
 }
 
-// createMode is the mode of a file @@ create makes. §6.6 does not say, and 0644
-// before umask is the only sane default. A created shell script wants 0755 and
-// the format has no way to ask; if that turns out to matter, the directive
-// grammar has room for a suffix.
+// createMode is the mode of a file @@ create makes, before the umask. §6.6 does
+// not say, and 0644 before umask is the only sane default. A created shell
+// script wants 0755 and the format has no way to ask; if that turns out to
+// matter, the directive grammar has room for a suffix.
+//
+// The umask is applied by the kernel, at the open in CreateAtomic. Until
+// 2026-10-06 this was set with a chmod after it, which the umask does not
+// filter, so "before umask" was true of the comment and not of the file.
 const createMode fs.FileMode = 0o644
 
 // Validate walks the hunks in order, applying each in memory against the file
@@ -746,8 +750,13 @@ func (x *Txn) commit(f *file) error {
 		if err != nil {
 			return err
 		}
-		fallthrough
+		if err := x.tree.CreateAtomic(f.target, f.cur, createMode); err != nil {
+			return err
+		}
+		f.wrote = sha256.Sum256(f.cur)
 	case "modify":
+		// An overwrite, a delete then a create of one path, is a modify too,
+		// and keeps the mode the file had (§6.6).
 		if err := x.tree.WriteAtomic(f.target, f.cur, f.mode, f.info); err != nil {
 			return err
 		}

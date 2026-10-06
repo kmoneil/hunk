@@ -659,12 +659,34 @@ func (t *Tree) RemoveDir(name string) error {
 // The directory is not fsynced, so a rename is not durable across power loss.
 // That is consistent with §6.2, which designs against "the tests failed" rather
 // than "the machine lost power" and says so out loud.
-func (t *Tree) WriteAtomic(tg Target, data []byte, mode fs.FileMode, like fs.FileInfo) (err error) {
+//
+// The file ends up at exactly mode, whatever the umask: a modify, an overwrite
+// and both rollbacks put back the mode load read, on purpose. A new file goes
+// through CreateAtomic instead.
+func (t *Tree) WriteAtomic(tg Target, data []byte, mode fs.FileMode, like fs.FileInfo) error {
+	return t.writeAtomic(tg, data, 0o600, &mode, like)
+}
+
+// CreateAtomic writes a file that was not there, the same way, at perm less the
+// umask. The temp file is opened at perm and the kernel applies the umask there,
+// as it does for a shell redirect or an editor's new file, so a created file is
+// no more readable than the user's other new files. Until 2026-10-06 a create
+// went through WriteAtomic, whose fchmod the umask does not filter, and was
+// 0644 under every umask.
+func (t *Tree) CreateAtomic(tg Target, data []byte, perm fs.FileMode) error {
+	return t.writeAtomic(tg, data, perm, nil, nil)
+}
+
+// writeAtomic opens the temp file at open, which the umask filters, and then,
+// when mode is not nil, gives it like's owner and group as far as keepOwner
+// can and sets mode exactly, which the umask does not filter. A create has no
+// like and no mode, and keeps what the open gave it.
+func (t *Tree) writeAtomic(tg Target, data []byte, open fs.FileMode, mode *fs.FileMode, like fs.FileInfo) (err error) {
 	if tg.name == "" {
 		return errors.New("write to an unresolved target; every path goes through Tree.Resolve")
 	}
 	dir := filepath.Dir(tg.name)
-	tmp, f, err := t.createTemp(dir)
+	tmp, f, err := t.createTemp(dir, open)
 	if err != nil {
 		return err
 	}
@@ -683,8 +705,10 @@ func (t *Tree) WriteAtomic(tg Target, data []byte, mode fs.FileMode, like fs.Fil
 	if err = f.Sync(); err != nil {
 		return err
 	}
-	if err = f.Chmod(keepOwner(f, like, mode)); err != nil {
-		return err
+	if mode != nil {
+		if err = f.Chmod(keepOwner(f, like, *mode)); err != nil {
+			return err
+		}
 	}
 	if err = f.Close(); err != nil {
 		return err
@@ -700,10 +724,10 @@ func (t *Tree) WriteAtomic(tg Target, data []byte, mode fs.FileMode, like fs.Fil
 // that sets it compiles on every platform.
 var fchown = (*os.File).Chown
 
-func (t *Tree) createTemp(dir string) (string, *os.File, error) {
+func (t *Tree) createTemp(dir string, perm fs.FileMode) (string, *os.File, error) {
 	for i := 0; i < 10000; i++ {
 		name := filepath.Join(dir, ".hunk-"+strconv.FormatUint(rand.Uint64(), 36)+".tmp")
-		f, err := t.openExcl(name)
+		f, err := t.openExcl(name, perm)
 		if err == nil {
 			return name, f, nil
 		}
@@ -714,12 +738,12 @@ func (t *Tree) createTemp(dir string) (string, *os.File, error) {
 	return "", nil, fmt.Errorf("could not create a temp file in %s", dir)
 }
 
-func (t *Tree) openExcl(name string) (*os.File, error) {
+func (t *Tree) openExcl(name string, perm fs.FileMode) (*os.File, error) {
 	const flag = os.O_RDWR | os.O_CREATE | os.O_EXCL
 	if t.r == nil {
-		return os.OpenFile(name, flag, 0o600)
+		return os.OpenFile(name, flag, perm)
 	}
-	return t.r.OpenFile(name, flag, 0o600)
+	return t.r.OpenFile(name, flag, perm)
 }
 
 func (t *Tree) rename(from, to string) error {
