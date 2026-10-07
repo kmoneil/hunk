@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "exit": 2,
+  "error": "../x.txt: the path climbs out of the root; the root is /the/given, which is /the/root"
+}

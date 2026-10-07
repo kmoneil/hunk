@@ -1008,6 +1008,13 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 	os.Symlink(filepath.Join(root, ".git"), filepath.Join(root, "absg"))
 	os.Symlink(filepath.Dir(filepath.Dir(root)), filepath.Join(root, "absout"))
 	os.Symlink("..", filepath.Join(root, "up"))
+	// A link to the root beside it, as /tmp is to /private/tmp, so an absolute
+	// path through it names the root by another spelling (#62).
+	alias := filepath.Join(filepath.Dir(root), "alias")
+	os.Symlink(root, alias)
+	for _, s := range []string{"sub/in.txt", ".git/config", "../x", "", "absd/in.txt", "up/x", "d/../../x"} {
+		f.Add(alias + "/" + s)
+	}
 	gitDir, err := os.Stat(filepath.Join(root, ".git"))
 	if err != nil {
 		f.Fatal(err)

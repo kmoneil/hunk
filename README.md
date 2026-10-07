@@ -138,10 +138,12 @@ delete it, or remove the link with `rm`. A symlink in a directory above the
 file is fine: `@@ delete` removes the file the path names.
 
 Every path is resolved against `--root`, the current directory unless one is
-given. A symlink that stays inside it is followed wherever it stands on the
-path, whether it holds an absolute path or a relative one. A path that leads
-outside, through `..` or a symlink, is refused with exit 2, and the refusal
-names the symlink when there is one.
+given. An absolute path is under the root when it names the root's directory by
+any spelling, so on macOS `/tmp/x/f.txt` and `/private/tmp/x/f.txt` are the same
+file. A symlink that stays inside the root is followed wherever it stands on
+the path, whether it holds an absolute path or a relative one. A path that
+leads outside, through `..` or a symlink, is refused with exit 2, and the
+refusal names the symlink when there is one, and the root as you gave it.
 `--allow-outside-root` lifts that for every path in the batch, not only the one
 that needed it, and those paths are then opened by name rather than through the
 handle `hunk` otherwise holds on the root: a symlink on any of them is followed
