@@ -293,7 +293,9 @@ func slashPaths(s string) string { return strings.ReplaceAll(s, `\`, "/") }
 // not exist", and load is left to report it. Symlinks otherwise work there, the
 // directory links in the same test included, so it is this destination and not
 // links. The expectation is what the runner showed rather than a skip, so the
-// fallback stays tested on the one platform that takes it.
+// fallback stays tested on the one platform that takes it. Reading a ".." as
+// text on Windows (2026-10-07) did not change it: run 37636843960 came back the
+// same, since the kernel stops before hunk's walk starts.
 func climbingPastTheTopResolves() bool { return runtime.GOOS != "windows" }
 
 // dotDotIsWalked reports whether the operating system resolves a ".." in a path
@@ -315,21 +317,24 @@ func climbingPastTheTopResolves() bool { return runtime.GOOS != "windows" }
 // walks the confined links the rows pin as refused too. A ".." after a file
 // came back as text cleans it, nine directory links were followed, and a link
 // to itself was stopped by resolveLinks' own hop limit with its own words. So
-// on Windows the fallback those rows exercise is never reached, and nothing
-// pins there whether resolveLinks' answer through a ".." in a link is the file
-// Windows itself opens. That question is older than these rows.
+// on Windows the fallback those rows exercise is never reached.
+//
+// Which file Windows itself opens was asked on 2026-10-07, by a probe on
+// windows-latest: it cleans a ".." in a link's destination as text, and hunk
+// has done the same there since (Tree.dotsAsText).
+// TestADotDotInALinkReadsAsTheKernelReadsIt pins both rules on every platform,
+// and on Windows against the kernel. This still says what the kernel does, for
+// the rows that compare with it.
 func dotDotIsWalked() bool { return runtime.GOOS != "windows" }
 
-// rootedLinksResolveUnconfined reports whether an unconfined walk reads a link
-// destination that starts at a separator and names no volume as the platform
-// does. POSIX has no such destination, since one that starts at a separator is
-// absolute. Windows reads it on the link's volume; confined, so does hunk since
-// 2026-10-07, and the first windows-latest run of that change passed those
-// rows. Unconfined the walk still reads it as relative and names a file under
-// the link's directory, which is issue #43's open Windows item ("a final link
-// to a rooted path with no volume is treated as relative"), so the unconfined
-// rows wait for it rather than pin the wrong answer.
-func rootedLinksResolveUnconfined() bool { return runtime.GOOS != "windows" }
+// dotDotAnswer is a row's answer through a ".." in a link's destination: walked
+// where the kernel walks it, and as text where it reads it as text.
+func dotDotAnswer(walked, text string) string {
+	if dotDotIsWalked() {
+		return walked
+	}
+	return text
+}
 
 // unreadableLink makes a symlink at name that Lstat finds and Readlink cannot
 // read, where the platform can, and reports whether it did.

@@ -83,9 +83,6 @@ func TestAnAbsoluteLinkInAParentIsTranslated(t *testing.T) {
 			{"a final link that names no volume", "absdir/rooted.link", "sub/in.txt"},
 		} {
 			t.Run(mode.name+", "+c.name, func(t *testing.T) {
-				if mode.unconfin && strings.Contains(c.in, "rooted") && !rootedLinksResolveUnconfined() {
-					t.Skip("unconfined, a destination with no volume is still read as relative; see rootedLinksResolveUnconfined")
-				}
 				tg, err := tree.Resolve(c.in)
 				if err != nil {
 					t.Fatalf("Resolve(%q): %v", c.in, err)
@@ -244,11 +241,13 @@ func TestAPathThatLeavesTheRootNamesTheLink(t *testing.T) {
 		},
 		{
 			// With the refusal held, a link with a ".." after it is not
-			// followed, so the refusal names x, whose ".." os.Root on Windows
-			// would clean as text before following anything. Unconfined,
-			// Windows cleans it too, and the answer is the grandparent's.
+			// followed, so on POSIX the refusal names x, whose ".." os.Root on
+			// Windows would clean as text before following anything. Windows
+			// reads it as text, as hunk there does since 2026-10-07: x and the
+			// ".." cancel, and dd is the link that leaves. Unconfined, Windows
+			// cleans it too, and the answer is the grandparent's.
 			"a link with a .. after it, while os.Root refuses the path", "dd/f",
-			"x", cannot, filepath.Join(parent, "f"), false,
+			dotDotAnswer("x", "dd"), dotDotAnswer(cannot, leads), filepath.Join(parent, "f"), false,
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {

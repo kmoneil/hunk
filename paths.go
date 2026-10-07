@@ -109,6 +109,10 @@ type Tree struct {
 	given string      // absolute, as the caller gave it, which is where it thinks it is
 	r     *os.Root    // nil when unconfined
 	top   fs.FileInfo // the root directory r holds, for telling it by identity
+	// dotsAsText is the platform's reading of a ".." in a link's destination:
+	// as text on Windows, walked on POSIX (see cleanDots). A field rather than
+	// a constant so a test on either can ask for the other's rule.
+	dotsAsText bool
 }
 
 // OpenTree opens root for confined access. The root is resolved once, because
@@ -119,7 +123,7 @@ func OpenTree(root string, allowOutside bool) (*Tree, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &Tree{root: abs, given: abs}
+	t := &Tree{root: abs, given: abs, dotsAsText: runtime.GOOS == "windows"}
 	// Deliberately named apart from the err above: a failure to resolve is not
 	// an error here, it means the root is not a symlink and abs already stands.
 	// Shadowing err said the same thing less clearly and govet flagged it.
@@ -447,7 +451,7 @@ func (t *Tree) resolveLinks(orig, name string, named *bool) (string, bool, error
 			*named = true
 			climbed = t.climbsAsText(here, dest)
 		}
-		absolute, destBase, destParts, inside := t.linkDestination(dest)
+		absolute, destBase, destParts, inside := t.linkDestination(base, dest)
 		switch {
 		case !inside && i == len(parts)-1:
 			return "", false, &PathRefusal{
@@ -466,8 +470,35 @@ func (t *Tree) resolveLinks(orig, name string, named *bool) (string, bool, error
 		} else {
 			parts = slices.Concat(parts[:i], destParts, parts[i+1:])
 		}
+		if t.dotsAsText {
+			// Windows reads the path with the destination in it as text, so a
+			// ".." cancels the component before it, link or not, and the walk
+			// starts again on what is left.
+			parts, i = cleanDots(parts), 0
+		}
 		walked = false
 	}
+}
+
+// cleanDots cancels each ".." against the component before it, as text, and
+// drops each ".", keeping a ".." with nothing before it to cancel. It is how
+// Windows reads a path a link's destination has been spliced into, which the
+// windows-latest probe showed for every link it made: with x -> sub\deep, a
+// link to x\..\c.txt opens c.txt there, where POSIX opens sub\c.txt, and until
+// 2026-10-07 hunk walked it as POSIX does on both, so on Windows it edited a
+// file other than the one Windows opens.
+func cleanDots(parts []string) []string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		switch {
+		case p == ".":
+		case p == ".." && len(out) > 0 && out[len(out)-1] != "..":
+			out = out[:len(out)-1]
+		default:
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // linkDestination turns a symlink's destination into components to put where
@@ -478,13 +509,15 @@ func (t *Tree) resolveLinks(orig, name string, named *bool) (string, bool, error
 // since os.Root refuses every one: one inside the root is translated, wherever
 // the link stands on the path, and one that leaves the root is reported, for
 // the walk to refuse. Windows has two more destinations that start from a top
-// and are not absolute, and read as relative either names a file inside the
-// root that the link does not lead to, as a final link's did until 2026-10-07.
-// One that starts at a separator and names no volume is on the link's volume,
-// as os.Symlink's own comment says, which is the root's, so it gets the root's
-// volume. One that names a volume and does not start at its top is relative to
-// a directory on that volume that nothing here knows, and below does not find
-// it under the root. On POSIX neither can be written: a name that starts at a
+// and are not absolute, and read as relative either names a file under the
+// link's directory that the link does not lead to, as a final link's did until
+// 2026-10-07. One that starts at a separator and names no volume is on the
+// link's volume, never the working directory's, which the windows-latest probe
+// showed from both of the runner's volumes: confined that is the root's, and
+// unconfined the volume the walk is on, base's. One that names a volume and does
+// not start at its top is relative to a directory on that volume that nothing
+// here knows: confined, below does not find it under the root, and unconfined it
+// is spliced as it was. On POSIX neither can be written: a name that starts at a
 // separator is absolute, and there is no volume to add.
 //
 // The translation compares the root's components with the destination's as
@@ -493,7 +526,15 @@ func (t *Tree) resolveLinks(orig, name string, named *bool) (string, bool, error
 // which cleans as text, so with x -> sub/deep a link to <root>/x/../c.txt was
 // c.txt, where the kernel reads sub/c.txt. A rest that climbs back out of the
 // root is refused by os.Root in the Lstat that follows.
-func (t *Tree) linkDestination(dest string) (absolute bool, base string, parts []string, inside bool) {
+func (t *Tree) linkDestination(walkBase, dest string) (absolute bool, base string, parts []string, inside bool) {
+	top := filepath.IsAbs(dest) || filepath.VolumeName(dest) != "" || dest != "" && os.IsPathSeparator(dest[0])
+	if top && filepath.VolumeName(dest) == "" {
+		vol := filepath.VolumeName(t.root)
+		if t.r == nil {
+			vol = filepath.VolumeName(walkBase)
+		}
+		dest = vol + dest
+	}
 	if t.r == nil {
 		if filepath.IsAbs(dest) {
 			vol := filepath.VolumeName(dest)
@@ -501,10 +542,7 @@ func (t *Tree) linkDestination(dest string) (absolute bool, base string, parts [
 		}
 		return false, "", splitPath(dest), true
 	}
-	if filepath.IsAbs(dest) || filepath.VolumeName(dest) != "" || dest != "" && os.IsPathSeparator(dest[0]) {
-		if filepath.VolumeName(dest) == "" {
-			dest = filepath.VolumeName(t.root) + dest
-		}
+	if top {
 		rest, ok := below(t.root, dest)
 		if !ok {
 			rest, ok = t.within(dest)
@@ -851,14 +889,10 @@ type MadeDir struct {
 // by then: the verify's file, or its symlink, in place of hunk's directory.
 func (t *Tree) MkdirAll(tg Target) ([]MadeDir, error) {
 	var made []MadeDir
-	dir := filepath.Dir(tg.name)
-	var missing []string
-	for d := dir; d != "." && d != "/" && d != ""; d = filepath.Dir(d) {
-		if _, err := t.lstat(d); err == nil {
-			break
-		}
-		missing = append(missing, d)
-	}
+	missing := missingAbove(filepath.Dir(tg.name), func(d string) bool {
+		_, err := t.lstat(d)
+		return err == nil
+	})
 	// missing is deepest first; create shallowest first.
 	for i := len(missing) - 1; i >= 0; i-- {
 		err := t.mkdir(missing[i])
@@ -881,6 +915,25 @@ func (t *Tree) MkdirAll(tg Target) ([]MadeDir, error) {
 	// Report deepest first, which is removal order.
 	slices.Reverse(made)
 	return made, nil
+}
+
+// missingAbove lists dir and the directories above it that do not exist,
+// deepest first, stopping at the first that does, at the top of the tree, and
+// at the top of the volume. The last is the stop that matters on Windows: there
+// filepath.Dir("E:\\") is "E:\\" itself, so until 2026-10-07 an unconfined
+// create on a volume that is not there never reached a stop, and the list grew
+// without end, which the windows-latest probe saw as a hang that a dry run of
+// the same patch called exit 0. Confined names end at ".", and POSIX at "/",
+// which always exists.
+func missingAbove(dir string, exists func(string) bool) []string {
+	var missing []string
+	for d := dir; d != "." && d != "" && filepath.Dir(d) != d; d = filepath.Dir(d) {
+		if exists(d) {
+			break
+		}
+		missing = append(missing, d)
+	}
+	return missing
 }
 
 // A seenDir is a directory on a file's path as commit found it, by name and
@@ -1114,9 +1167,18 @@ func (s *Spellings) Respell(tg Target) Target {
 }
 
 // stored is the spelling dir keeps for c, which exists there as fi.
+//
+// A name holding a "~" may be an 8.3 alias, which Windows makes by default on
+// its system volume: ALONGD~1 for "a long directory name". The directory
+// answers to it and does not list it, so it is matched by identity, after case
+// and normalization have had their turn so a hard link's own name still wins.
+// Until 2026-10-07 it stayed as written, and the windows-latest probe saw a
+// batch edit one file through both names, report two files at exit 0, and keep
+// only the second edit.
 func (s *Spellings) stored(dir, c string, fi fs.FileInfo) string {
 	ascii := isASCII([]byte(c))
-	if ascii && (flipCase(c) == c || !s.foldsFor(dir, c, fi)) {
+	alias := strings.Contains(c, "~")
+	if ascii && !alias && (flipCase(c) == c || !s.foldsFor(dir, c, fi)) {
 		// No letter to fold, or a directory that does not fold: the name that
 		// was found is the name stored. One that is not ASCII can still be
 		// stored in another normalization where case does not fold.
@@ -1129,6 +1191,13 @@ func (s *Spellings) stored(dir, c string, fi fs.FileInfo) string {
 	for _, n := range names {
 		if (strings.EqualFold(n, c) || (!ascii && !isASCII([]byte(n)))) && s.isFile(filepath.Join(dir, n), fi) {
 			return n
+		}
+	}
+	if alias {
+		for _, n := range names {
+			if s.isFile(filepath.Join(dir, n), fi) {
+				return n
+			}
 		}
 	}
 	return c

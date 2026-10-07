@@ -240,7 +240,7 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 			{"a chain of directory links", "e/in.txt", "sub/in.txt", true},
 			{"a final link under a directory link", "d/alias.link", "sub/in.txt", true},
 			{"a link whose destination climbs with ..", "sub/inner/f.txt", "other/f.txt", true},
-			{"a .. after a link inside a destination, resolved physically", "phys.link", "sub/in.txt", true},
+			{"a .. after a link inside a destination, as the platform reads it", "phys.link", dotDotAnswer("sub/in.txt", "in.txt"), true},
 			{"a new file under a directory link", "d/new/x.go", "sub/new/x.go", true},
 			{"a dangling directory link, written through", "l/new.go", "internal/new.go", true},
 			{"a path below a dangling directory link", "l/a/b.go", "internal/a/b.go", true},
@@ -268,9 +268,16 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 		// A .. inside a link's destination, after a directory that does not
 		// exist, has no physical answer: the kernel stops at the missing
 		// directory. Written through, it would make a path that no spelling of
-		// it reaches, so it is refused.
+		// it reaches, so it is refused. Windows reads the .. as text and never
+		// looks for the missing directory, so there it is top.txt.
 		t.Run(mode.name+", a .. after a directory that does not exist", func(t *testing.T) {
-			_, err := tree.Resolve("nowhere.link")
+			tg, err := tree.Resolve("nowhere.link")
+			if !dotDotIsWalked() {
+				if want := mode.want("top.txt"); err != nil || tg.name != want {
+					t.Errorf("Resolve = %q, %v; want %q", tg.name, err, want)
+				}
+				return
+			}
 			var pr *PathRefusal
 			if !errors.As(err, &pr) {
 				t.Fatalf("Resolve = %v, want a *PathRefusal", err)
@@ -1661,7 +1668,7 @@ func TestALinkLeadsWhereTheKernelWalksIt(t *testing.T) {
 			"a .. after eight directory links", "el8.link",
 			want{name: "sub/c.txt"},
 			want{name: "{root}/sub/c.txt"},
-			anywhere,
+			onPOSIX,
 		},
 		{
 			"a .. after a file", "nd.link",
@@ -1709,7 +1716,7 @@ func TestALinkLeadsWhereTheKernelWalksIt(t *testing.T) {
 			"a relative link that climbs out through a directory link", "out.link",
 			want{reason: outOfIt},
 			want{name: "{root}2/c.txt"},
-			anywhere,
+			onPOSIX,
 		},
 		{
 			"an absolute link to a directory above the root", "above.link",
