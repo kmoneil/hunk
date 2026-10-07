@@ -282,6 +282,22 @@ func notExistPhrase() string {
 // the same bytes. Nothing else in these reports contains a backslash.
 func slashPaths(s string) string { return strings.ReplaceAll(s, `\`, "/") }
 
+// climbingPastTheTopResolves reports whether the platform walks a symlink whose
+// relative destination climbs above the top of the filesystem by staying at the
+// top, as POSIX does with "/..".
+//
+// Windows does not walk it. On the windows-latest runner (run 35231243591),
+// Resolve returned such a path unresolved, as written and with no error, and the
+// only way it does that is the fallback for a path the operating system will not
+// traverse: the Lstat made before the walk failed with something other than "does
+// not exist", and load is left to report it. Symlinks otherwise work there, the
+// directory links in the same test included, so it is this destination and not
+// links. The expectation is what the runner showed rather than a skip, so the
+// fallback stays tested on the one platform that takes it. Reading a ".." as
+// text on Windows (2026-10-07) did not change it: run 37636843960 came back the
+// same, since the kernel stops before hunk's walk starts.
+func climbingPastTheTopResolves() bool { return runtime.GOOS != "windows" }
+
 // dotDotIsWalked reports whether the operating system resolves a ".." in a path
 // or a link's destination by walking it, as POSIX does, rather than possibly
 // cleaning the text before anything walks it, as Windows does.

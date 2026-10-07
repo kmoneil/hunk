@@ -319,16 +319,19 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 	}
 
 	// Unconfined, a ".." above the top of the path stays at the top, as it does
-	// for the kernel. Confined, os.Root refuses the same link as an escape. On
-	// Windows this came back as written until 2026-10-07, since the walk could
-	// not get past the climb; read as text, as Windows reads it, it climbs to
-	// the top and stays there like anywhere else.
+	// for the kernel. Confined, os.Root refuses the same link as an escape. Where
+	// the platform will not walk such a link at all, the path comes back as
+	// written, for load to report (see climbingPastTheTopResolves).
 	vol := filepath.VolumeName(root)
 	climb := filepath.Join(strings.Repeat(".."+string(filepath.Separator), 64), root[len(vol):], "sub")
 	must(t, os.Symlink(climb, filepath.Join(root, "climb.link")))
 	tg, err = loose.Resolve("climb.link/in.txt")
 	must(t, err)
-	if want := filepath.Join(root, "sub", "in.txt"); tg.name != want {
+	want := filepath.Join(root, "sub", "in.txt")
+	if !climbingPastTheTopResolves() {
+		want = filepath.Join(root, "climb.link", "in.txt")
+	}
+	if tg.name != want {
 		t.Errorf("unconfined climb.link/in.txt = %q, want %q", tg.name, want)
 	}
 }
@@ -1713,7 +1716,7 @@ func TestALinkLeadsWhereTheKernelWalksIt(t *testing.T) {
 			"a relative link that climbs out through a directory link", "out.link",
 			want{reason: outOfIt},
 			want{name: "{root}2/c.txt"},
-			anywhere,
+			onPOSIX,
 		},
 		{
 			"an absolute link to a directory above the root", "above.link",
