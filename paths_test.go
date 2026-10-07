@@ -844,8 +844,15 @@ func TestMkdirAllAndRemove(t *testing.T) {
 		t.Fatalf("made %v, want %v", made, want)
 	}
 	for i := range want {
-		if made[i] != native(want[i]) {
-			t.Errorf("made[%d] = %q, want %q", i, made[i], native(want[i]))
+		if made[i].Name != native(want[i]) {
+			t.Errorf("made[%d] = %q, want %q", i, made[i].Name, native(want[i]))
+		}
+		// Each is described as the directory it made, which rollback compares
+		// with what stands at the name later.
+		fi, err := os.Lstat(filepath.Join(root, want[i]))
+		must(t, err)
+		if made[i].Info == nil || !made[i].Info.IsDir() || !os.SameFile(made[i].Info, fi) {
+			t.Errorf("made[%d].Info does not describe %s", i, want[i])
 		}
 	}
 
@@ -855,7 +862,7 @@ func TestMkdirAllAndRemove(t *testing.T) {
 	must(t, err)
 	made2, err := tree.MkdirAll(tg2)
 	must(t, err)
-	if len(made2) != 1 || made2[0] != native("sub/deeper") {
+	if len(made2) != 1 || made2[0].Name != native("sub/deeper") {
 		t.Errorf("made %v, want just sub/deeper", made2)
 	}
 
@@ -865,7 +872,7 @@ func TestMkdirAllAndRemove(t *testing.T) {
 		t.Error("Remove did not remove")
 	}
 	for _, d := range made {
-		must(t, tree.RemoveDir(d))
+		must(t, tree.RemoveDir(d.Name))
 	}
 	if _, err := os.Stat(filepath.Join(root, "a")); !errors.Is(err, fs.ErrNotExist) {
 		t.Error("RemoveDir did not unwind")
@@ -1183,7 +1190,7 @@ func TestUnconfinedWriteCycle(t *testing.T) {
 
 	must(t, tree.Remove(tg))
 	for _, d := range made {
-		must(t, tree.RemoveDir(d))
+		must(t, tree.RemoveDir(d.Name))
 	}
 	if _, err := os.Stat(filepath.Join(root, "x")); !errors.Is(err, fs.ErrNotExist) {
 		t.Error("RemoveDir did not unwind unconfined")

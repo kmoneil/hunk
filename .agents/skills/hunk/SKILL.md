@@ -354,5 +354,7 @@ One flag to know: if your verify command **rewrites files** (`gofmt -w`,
 `prettier --write`, `make fmt`), pass `--verify-may-format`. Without it, a file
 the formatter touched is left alone rather than reverted, and the exit is 4,
 because `hunk` cannot tell a formatter from another agent writing the same tree
-and will not silently discard somebody's work.
+and will not silently discard somebody's work. Nor will it remove or overwrite a
+symbolic link it did not make, or a directory it made once that holds anything
+or has been replaced: it leaves them, and the report names each.
 

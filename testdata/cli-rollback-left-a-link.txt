@@ -1,0 +1,10 @@
+hunk: applied 1 hunk, verify failed, rolled back 0 files, 1 file left alone
+
+$ ln -s nowhere d.txt; printf 'FAIL\n'; false
+FAIL
+(last 1 of 1 lines)
+
+d.txt was not restored.
+  hunk deleted it and something has since put a symbolic link there,
+  so restoring would replace that link with a file.
+  hunk did not write its original bytes back; they are in version control.

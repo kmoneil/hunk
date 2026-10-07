@@ -51,6 +51,12 @@ type Verify struct {
 	// touched the tree during the verify, and the report says so (§6.3).
 	Gone []string
 
+	// Left are directories commit made that rollback left where they are,
+	// because they are not empty or are no longer the directories hunk made.
+	// The batch's own changes are undone, so the exit is still 3; the report
+	// names them, since something else made them so.
+	Left []LeftDir
+
 	// Kept means --keep-on-fail left the changes in place. The exit is still 3
 	// (§4): the code reports what the verify said, not what was done about it.
 	Kept bool
@@ -438,6 +444,9 @@ func writeTranscript(w io.Writer, v *Verify) {
 	for _, p := range v.Gone {
 		fmt.Fprintf(w, "\n%s, which hunk created, was already gone: something else removed it.\n", p)
 	}
+	for _, d := range v.Left {
+		fmt.Fprintf(w, "\n%s, which hunk made as a directory, %s, so hunk left it.\n", d.Path, d.State)
+	}
 	writeNotRestored(w, v.NotRestored)
 }
 
@@ -518,6 +527,7 @@ type jsonTry struct {
 	RolledBack  int           `json:"rolled_back"`
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
 	Gone        []string      `json:"already_gone,omitempty"`
+	Left        []jsonLeft    `json:"dirs_left,omitempty"`
 	jsonEnded
 }
 
@@ -528,6 +538,14 @@ type jsonEnded struct {
 	TimedOut    float64 `json:"timed_out_after,omitempty"`
 	Interrupted string  `json:"interrupted_by,omitempty"`
 	OutputCut   bool    `json:"output_cut,omitempty"`
+}
+
+func jsonLefts(left []LeftDir) []jsonLeft {
+	var out []jsonLeft
+	for _, d := range left {
+		out = append(out, jsonLeft{d.Path, d.State})
+	}
+	return out
 }
 
 func endedJSON(v *Verify) jsonEnded {
@@ -548,7 +566,15 @@ type jsonVerify struct {
 	Kept        bool          `json:"kept,omitempty"`
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
 	Gone        []string      `json:"already_gone,omitempty"`
+	Left        []jsonLeft    `json:"dirs_left,omitempty"`
 	jsonEnded
+}
+
+// jsonLeft is a directory rollback left: its path, and what it is now, the
+// same words the text report uses.
+type jsonLeft struct {
+	Path  string `json:"path"`
+	State string `json:"state"`
 }
 
 type jsonRestore struct {
@@ -603,6 +629,7 @@ func (r *Report) JSON(w io.Writer) error {
 		for _, n := range v.NotRestored {
 			jt.NotRestored = append(jt.NotRestored, jsonRestore{n.Path, n.Reason})
 		}
+		jt.Left = jsonLefts(v.Left)
 		out.Try = jt
 	} else if v != nil {
 		jv := &jsonVerify{
@@ -613,6 +640,7 @@ func (r *Report) JSON(w io.Writer) error {
 		for _, n := range v.NotRestored {
 			jv.NotRestored = append(jv.NotRestored, jsonRestore{n.Path, n.Reason})
 		}
+		jv.Left = jsonLefts(v.Left)
 		out.Verify = jv
 	}
 	for _, f := range r.Failures {

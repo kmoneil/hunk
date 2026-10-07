@@ -1,0 +1,25 @@
+{
+  "ok": false,
+  "exit": 4,
+  "files": [
+    {
+      "path": "d.txt",
+      "op": "delete",
+      "added": 0,
+      "removed": 1
+    }
+  ],
+  "hunks": 1,
+  "verify": {
+    "ran": true,
+    "ok": false,
+    "seconds": 0,
+    "command": "ln -s nowhere d.txt; false",
+    "not_restored": [
+      {
+        "path": "d.txt",
+        "reason": "hunk deleted it and something has since put a symbolic link there,\nso restoring would replace that link with a file."
+      }
+    ]
+  }
+}

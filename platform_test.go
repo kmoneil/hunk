@@ -150,6 +150,18 @@ func needsPOSIXNames(t *testing.T) {
 	}
 }
 
+// needsShellSymlinks skips a test whose verify command makes a symbolic link
+// with ln -s. That is the realistic shape of a build rewiring a tree, and the
+// rollback tests use it on purpose; but Git for Windows' ln -s copies the file
+// or directory instead of linking it unless MSYS is set to ask for native
+// links, so on Windows the verify would not make what the test is about.
+func needsShellSymlinks(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Git for Windows' ln -s copies rather than links by default")
+	}
+}
+
 // brokenShell returns a directory to use as PATH in which exec.LookPath finds
 // an sh that cannot run: garbage, marked executable where there is such a
 // mark. It is how a verify command that is found and still cannot start is

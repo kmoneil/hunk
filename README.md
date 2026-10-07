@@ -241,6 +241,15 @@ and silently discarding somebody else's work is worse than stopping. A file
 create back leaves, so it counts as rolled back and the exit stays 3, with one
 line naming the file as removed by something else.
 
+Rollback acts only on what `hunk` left there, and asks without following
+symbolic links. A link standing where `hunk` created, deleted or rewrote a file
+is not `hunk`'s, under either flag: rollback leaves it, names the file, and the
+exit is 4, since restoring would replace the link with a regular file. A
+directory `hunk` made for a new file is removed only while it is still that
+directory and empty. One the verify wrote into, or replaced with something
+else, is left where it is and named in one line, and the exit stays 3, because
+the batch's own changes are undone.
+
 `--try CMD` is for an edit you do not mean to keep: a print statement, a
 measurement, a deliberate hang to see what the logs say (with `--timeout`). It
 applies the batch, runs `CMD` the way `--verify` would, puts every file back

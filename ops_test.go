@@ -2257,7 +2257,8 @@ func TestACreatedFileTheVerifyDeletedIsRolledBack(t *testing.T) {
 			[]string{"--verify", "rm new/x.go; mkdir new/x.go; false"},
 			create,
 			exitRollbackFailed, "1 hunk, verify failed, rolled back 0 files, 1 file left alone",
-			"it is now something else",
+			// Named for what it is since 2026-10-07: rollback asks with Lstat.
+			"it is now a directory, which hunk did not make",
 			map[string]string{"new": "directory", "new/x.go": "directory"},
 		},
 		{

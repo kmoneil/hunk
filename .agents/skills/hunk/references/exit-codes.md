@@ -22,6 +22,12 @@ without that word, the exit is `hunk`'s own, and `CMD` never ran. 124 means
 `--timeout` ended `CMD`, as `timeout(1)` exits; under `--verify` a timeout is 3,
 rolled back.
 
+**What rollback leaves.** A symbolic link standing where `hunk` expected its own
+file is never removed or overwritten: the file is named and the exit is 4. A
+directory `hunk` made that holds something, or is no longer the one it made, is
+left and named in one line, and the exit stays 3: the batch's own changes are
+undone.
+
 **A signal to `hunk` while the command runs** (SIGINT, SIGTERM, SIGHUP) ends the
 command and everything it started, puts the batch back, and then ends `hunk` by
 the same signal: a shell sees 130, 143 or 129. 4 means a file could not be put
