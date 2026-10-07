@@ -1,0 +1,1 @@
+hunk: absdir/outside.txt: the symlink absdir -> ../outside leads out of the root; --allow-outside-root lifts that for every path in the batch, so give a path that has to reach outside a batch of its own; the root is /the/root

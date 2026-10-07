@@ -283,8 +283,9 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 		})
 	}
 
-	// The absolute directory link: refused confined, by os.Root and in its words
-	// (TestAbsoluteSymlinkInAnIntermediateComponent), and resolved unconfined.
+	// The absolute directory link: resolved in both modes. Confined it was
+	// refused until 2026-10-07, by os.Root and in its words; it is translated
+	// now, as a final one is (TestAnAbsoluteLinkInAParentIsTranslated).
 	loose, err := OpenTree(root, true)
 	must(t, err)
 	t.Cleanup(func() { loose.Close() })
@@ -293,16 +294,21 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 	if want := filepath.Join(root, "sub", "in.txt"); tg.name != want {
 		t.Errorf("unconfined absd/in.txt = %q, want %q", tg.name, want)
 	}
-
-	// Confined, a link in a parent that climbs out of the root is refused by
-	// os.Root, in its words, before the walk could clamp it at the top.
 	confined, err := OpenTree(root, false)
 	must(t, err)
 	t.Cleanup(func() { confined.Close() })
+	tg, err = confined.Resolve("absd/in.txt")
+	must(t, err)
+	if want := native("sub/in.txt"); tg.name != want {
+		t.Errorf("confined absd/in.txt = %q, want %q", tg.name, want)
+	}
+
+	// Confined, a link in a parent that climbs out of the root is refused,
+	// naming it, before the walk could clamp it at the top.
 	_, err = confined.Resolve("up/x")
 	var pr *PathRefusal
-	if !errors.As(err, &pr) || !strings.Contains(pr.Reason, "it leaves the root") {
-		t.Errorf("confined up/x = %v, want os.Root's refusal of an escape", err)
+	if !errors.As(err, &pr) || !strings.HasPrefix(pr.Reason, "the symlink up -> .. leads out of the root") {
+		t.Errorf("confined up/x = %v, want the refusal of a link that leads out", err)
 	}
 
 	// Unconfined, a ".." above the top of the path stays at the top, as it does
@@ -977,6 +983,7 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 		"SUB/IN.TXT", "Sub/New/X.go", "D/in.txt", "\u00e9.txt", "e\u0301.txt",
 		".git/config", ".GIT/config", "g/config", "cfg.link", "sub/../.git/HEAD", ".git", "sub/.git",
 		"g/" + strings.Repeat("0", 256),
+		"absd/in.txt", "absd/new/x.go", "absd/abs.link", "absg/config", "absout/passwd", "up/x",
 	} {
 		f.Add(s)
 	}
@@ -994,6 +1001,13 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 	os.WriteFile(filepath.Join(root, ".git", "config"), []byte("[core]\n"), 0o644)
 	os.Symlink(".git", filepath.Join(root, "g"))
 	os.Symlink(filepath.Join(".git", "config"), filepath.Join(root, "cfg.link"))
+	// Absolute directory links, which os.Root refuses in a parent wherever
+	// they lead: inside, to .git, and out of the root.
+	os.Symlink(filepath.Join(root, "sub"), filepath.Join(root, "absd"))
+	os.Symlink(filepath.Join(root, "sub", "in.txt"), filepath.Join(root, "sub", "abs.link"))
+	os.Symlink(filepath.Join(root, ".git"), filepath.Join(root, "absg"))
+	os.Symlink(filepath.Dir(filepath.Dir(root)), filepath.Join(root, "absout"))
+	os.Symlink("..", filepath.Join(root, "up"))
 	gitDir, err := os.Stat(filepath.Join(root, ".git"))
 	if err != nil {
 		f.Fatal(err)
@@ -1080,41 +1094,33 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 	})
 }
 
-// An absolute symlink in an *intermediate* component is refused, by os.Root in
-// the Lstat resolveLinks makes before it walks, and not translated as a final
-// one is. That is a deliberate scope line (§6.5 says "a target that is itself a
-// symlink"), so the refusal has to carry a message an agent can act on rather
-// than os.Root's "path escapes from parent", which names neither the root nor
-// what happened.
-func TestAbsoluteSymlinkInAnIntermediateComponent(t *testing.T) {
+// os.Root refuses an absolute symlink in an *intermediate* component too, even
+// when it points inside the root, and resolveLinks holds that refusal while it
+// walks to the link and translates it. Until 2026-10-07 the refusal was
+// returned as it stood, with advice to set --allow-outside-root. Pinned as
+// TestAbsoluteInRootSymlinkIsTheStdlibGap pins the final case, because the
+// day the stdlib relaxes it, this test says so.
+func TestAnAbsoluteLinkInAParentIsTheStdlibGap(t *testing.T) {
 	root := mktree(t)
 	must(t, os.Symlink(filepath.Join(root, "sub"), filepath.Join(root, "absdir")))
+
+	r, err := os.OpenRoot(root)
+	must(t, err)
+	defer r.Close()
+	if _, err := r.Lstat(filepath.Join("absdir", "in.txt")); !escapes(err) {
+		t.Errorf("os.Root's answer is %v; if it now allows an absolute in-root link in a parent, "+
+			"the refusal resolveLinks holds may be able to go", err)
+	}
 
 	tree, err := OpenTree(root, false)
 	must(t, err)
 	defer tree.Close()
-
-	_, err = tree.Resolve("absdir/in.txt")
-	if err == nil {
-		t.Fatal("allowed; if os.Root has relaxed, linkDestination can translate this case too")
+	tg, err := tree.Resolve("absdir/in.txt")
+	if err != nil {
+		t.Fatalf("hunk must allow it, confined (§6.5): %v", err)
 	}
-	var pr *PathRefusal
-	if !errors.As(err, &pr) {
-		t.Fatalf("want *PathRefusal, got %T: %v", err, err)
-	}
-	if !strings.Contains(pr.Reason, "--allow-outside-root") {
-		t.Errorf("the refusal does not point at the way out: %s", pr.Reason)
-	}
-	if !strings.Contains(err.Error(), tree.Root()) {
-		t.Errorf("the refusal does not name the root: %s", err)
-	}
-
-	// And --allow-outside-root does lift it, as the message promises.
-	loose, err := OpenTree(root, true)
-	must(t, err)
-	defer loose.Close()
-	if _, err := loose.Resolve("absdir/in.txt"); err != nil {
-		t.Errorf("--allow-outside-root did not lift it: %v", err)
+	if tg.name != native("sub/in.txt") {
+		t.Errorf("resolved to %q, want sub/in.txt", tg.name)
 	}
 }
 
@@ -1942,6 +1948,10 @@ func FuzzALinkLeadsWhereTheKernelWalks(f *testing.F) {
 	for _, dest := range []string{
 		"fz.link", "fz.link/../c.txt", "x/..", "x/../..", "d/../top.txt", "c.txt/", "sub/./c.txt",
 		"alias/../c.txt", "missing/../c.txt", "../" + filepath.Base(root) + "/c.txt", "/", "",
+		// Directories, for the link in a parent: inside and absolute, which
+		// os.Root refuses and the walk translates, and out of the root.
+		"sub", "x", "../" + filepath.Base(root) + "/sub", root, root + "/sub", root + "/x/..",
+		root + "/sub/deep/../", root + "/../" + filepath.Base(root) + "/sub", filepath.Dir(root),
 	} {
 		f.Add(dest)
 	}
@@ -1961,41 +1971,48 @@ func FuzzALinkLeadsWhereTheKernelWalks(f *testing.F) {
 		if os.Symlink(dest, link) != nil {
 			return // a destination no filesystem stores, such as one with a NUL
 		}
-		for _, tree := range trees {
-			tg, err := tree.Resolve("fz.link")
-			if err != nil {
-				var pr *PathRefusal
-				if !errors.As(err, &pr) {
-					t.Fatalf("fz.link -> %q: a %T, not a refusal: %v", dest, err, err)
+		// The link standing last, and standing in a parent, which until
+		// 2026-10-07 os.Root's refusal of an absolute destination ended
+		// before the walk reached it.
+		for _, spelled := range []string{"fz.link", "fz.link/c.txt"} {
+			for _, tree := range trees {
+				tg, err := tree.Resolve(spelled)
+				if err != nil {
+					var pr *PathRefusal
+					if !errors.As(err, &pr) {
+						t.Fatalf("%s, fz.link -> %q: a %T, not a refusal: %v", spelled, dest, err, err)
+					}
+					continue
 				}
-				continue
-			}
-			if !dotDotIsWalked() {
-				continue
-			}
-			at := tg.name
-			if !filepath.IsAbs(at) {
-				at = filepath.Join(root, at)
-			}
-			kernel, kErr := os.Stat(link)
-			got, gErr := os.Stat(at)
-			// Two shapes this property found on its first run that hold no
-			// "..", and are left for their own card rather than given a new
-			// refusal here: a destination ending in a separator or a ".",
-			// which the kernel follows only to a directory, and an empty one,
-			// which macOS stores and nothing follows. Resolve names the file
-			// the text names, or the root. Skipped by shape, so the day they
-			// are refused this is the line to delete.
-			if kErr != nil && asksForADirectory(dest) {
-				continue
-			}
-			switch {
-			case kErr == nil && gErr != nil:
-				t.Fatalf("fz.link -> %q: the kernel reaches a file, and Resolve named %q, where there is none: %v", dest, tg.name, gErr)
-			case kErr == nil && !os.SameFile(kernel, got):
-				t.Fatalf("fz.link -> %q: Resolve named %q, which is not the file the kernel reaches", dest, tg.name)
-			case kErr != nil && gErr == nil:
-				t.Fatalf("fz.link -> %q: the kernel reaches nothing (%v), and Resolve named %q, which exists", dest, kErr, tg.name)
+				if !dotDotIsWalked() {
+					continue
+				}
+				at := tg.name
+				if !filepath.IsAbs(at) {
+					at = filepath.Join(root, at)
+				}
+				kernel, kErr := os.Stat(filepath.Join(root, native(spelled)))
+				got, gErr := os.Stat(at)
+				// Two shapes this property found on its first run that hold no
+				// "..", and are left for their own card rather than given a new
+				// refusal here: a destination ending in a separator or a ".",
+				// which the kernel follows only to a directory, and an empty one,
+				// which macOS stores and nothing follows. Resolve names the file
+				// the text names, or the root. Skipped by shape, so the day they
+				// are refused this is the line to delete.
+				if kErr != nil && asksForADirectory(dest) {
+					continue
+				}
+				switch {
+				case kErr == nil && gErr != nil:
+					t.Fatalf("%s, fz.link -> %q: the kernel reaches a file, and Resolve named %q, where there is none: %v",
+						spelled, dest, tg.name, gErr)
+				case kErr == nil && !os.SameFile(kernel, got):
+					t.Fatalf("%s, fz.link -> %q: Resolve named %q, which is not the file the kernel reaches", spelled, dest, tg.name)
+				case kErr != nil && gErr == nil:
+					t.Fatalf("%s, fz.link -> %q: the kernel reaches nothing (%v), and Resolve named %q, which exists",
+						spelled, dest, kErr, tg.name)
+				}
 			}
 		}
 	})
