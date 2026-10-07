@@ -451,7 +451,7 @@ func runVerify(txn *Txn, tree *Tree, command string, lines int, keep, mayFormat 
 		v.Kept = true
 		return v, nil
 	}
-	v.RolledBack, v.NotRestored, v.Gone = txn.Rollback(mayFormat)
+	v.RolledBack, v.NotRestored, v.Gone, v.Left = txn.Rollback(mayFormat)
 	return v, nil
 }
 
@@ -469,7 +469,7 @@ func runTry(txn *Txn, tree *Tree, command string, lines int, mayFormat bool, sto
 		v.Status = exitTimedOut
 	}
 	v.Applied = txn.Applied()
-	v.RolledBack, v.NotRestored, v.Gone = txn.Rollback(mayFormat)
+	v.RolledBack, v.NotRestored, v.Gone, v.Left = txn.Rollback(mayFormat)
 	return v, nil
 }
 
@@ -484,7 +484,7 @@ func cannotStart(what, done string, err error, v *Verify, txn *Txn, mayFormat bo
 // own, and says how it went, for the message: "the batch was" done, or how
 // many files could not be put back, rather than claiming it was.
 func putBack(txn *Txn, v *Verify, mayFormat bool, done string) string {
-	v.RolledBack, v.NotRestored, v.Gone = txn.Rollback(mayFormat)
+	v.RolledBack, v.NotRestored, v.Gone, v.Left = txn.Rollback(mayFormat)
 	if len(v.NotRestored) > 0 {
 		return fmt.Sprintf("%s could not be put back", count(len(v.NotRestored), "file"))
 	}

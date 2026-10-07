@@ -1,0 +1,30 @@
+{
+  "ok": false,
+  "exit": 3,
+  "files": [
+    {
+      "path": "new/f.txt",
+      "op": "create",
+      "added": 1,
+      "removed": 0,
+      "no_final_newline": true
+    }
+  ],
+  "hunks": 1,
+  "verify": {
+    "ran": true,
+    "ok": false,
+    "seconds": 0,
+    "command": "echo x > new/other.txt; printf 'FAIL\\n'; false",
+    "output": [
+      "FAIL"
+    ],
+    "rolled_back": 1,
+    "dirs_left": [
+      {
+        "path": "new",
+        "state": "is not empty"
+      }
+    ]
+  }
+}

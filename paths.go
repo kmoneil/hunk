@@ -704,11 +704,23 @@ func notAFile(fi fs.FileInfo) string {
 	return ""
 }
 
+// A MadeDir is a directory MkdirAll made: its name in this tree's terms, and
+// what Lstat said it was right after the mkdir, so rollback can tell that
+// directory from something put at its name since (§6.6).
+type MadeDir struct {
+	Name string
+	Info fs.FileInfo
+}
+
 // MkdirAll creates the target's parent directories, returning those it made so
 // rollback can unwind them (§6.6). Deepest first, which is the order to remove
 // them in.
-func (t *Tree) MkdirAll(tg Target) ([]string, error) {
-	var made []string
+//
+// Each is recorded with what Lstat said straight after the mkdir. Until
+// 2026-10-07 only the name was kept, and rollback removed whatever stood at it
+// by then: the verify's file, or its symlink, in place of hunk's directory.
+func (t *Tree) MkdirAll(tg Target) ([]MadeDir, error) {
+	var made []MadeDir
 	dir := filepath.Dir(tg.name)
 	var missing []string
 	for d := dir; d != "." && d != "/" && d != ""; d = filepath.Dir(d) {
@@ -719,19 +731,55 @@ func (t *Tree) MkdirAll(tg Target) ([]string, error) {
 	}
 	// missing is deepest first; create shallowest first.
 	for i := len(missing) - 1; i >= 0; i-- {
-		if err := t.mkdir(missing[i]); err != nil {
+		err := t.mkdir(missing[i])
+		var fi fs.FileInfo
+		if err == nil {
+			fi, err = t.lstat(missing[i])
+		}
+		if err != nil {
 			// Deepest first on this path too. It returned shallowest first
 			// until 2026-09-22, which nothing noticed while nothing unwound a
 			// failed MkdirAll: rollback stops at the first directory that will
-			// not go, and the shallowest will not while it holds the rest.
+			// not go, and the shallowest will not while it holds the rest. A
+			// directory made and then not described is not reported, since
+			// rollback could not tell it from whatever replaced it.
 			slices.Reverse(made)
 			return made, err
 		}
-		made = append(made, missing[i])
+		made = append(made, MadeDir{missing[i], fi})
 	}
 	// Report deepest first, which is removal order.
 	slices.Reverse(made)
 	return made, nil
+}
+
+// A seenDir is a directory on a file's path as commit found it, by name and
+// by what Lstat said, so rollback can tell it from whatever stands at that
+// name once the verify has run.
+type seenDir struct {
+	name string
+	info fs.FileInfo
+}
+
+// dirsOn describes every directory on tg's path, shallowest first, as Lstat
+// finds it now: those below the root when confined, and every one from the top
+// of the volume when not. It stops at the first it cannot describe, which for a
+// path commit has just written is none.
+func (t *Tree) dirsOn(tg Target) []seenDir {
+	base, parts := t.splitName(filepath.Dir(tg.name))
+	var out []seenDir
+	for i := range parts {
+		if parts[i] == "." {
+			continue // a file at the top of the root, which has no directory below it
+		}
+		name := t.joinName(base, parts[:i+1], true)
+		fi, err := t.lstat(name)
+		if err != nil {
+			break
+		}
+		out = append(out, seenDir{name, fi})
+	}
+	return out
 }
 
 func (t *Tree) mkdir(name string) error {

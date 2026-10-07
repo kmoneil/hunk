@@ -201,8 +201,13 @@ type file struct {
 	createdBy int
 
 	// madeDirs are directories create had to make, deepest first, so rollback
-	// can unwind exactly the ones this tool created (§6.6).
-	madeDirs []string
+	// can unwind exactly the ones this tool created (§6.6), and only while each
+	// is still the directory it made.
+	madeDirs []MadeDir
+	// pathDirs are the directories commit went through to write this file,
+	// shallowest first, as it found them. Rollback acts on the file only while
+	// every one is still the one commit used (§6.3).
+	pathDirs []seenDir
 
 	// inFile is the file on disk this path runs through, when a directory
 	// above it is a file: as the patch spelled it, for the refusal, and as
@@ -762,7 +767,14 @@ func (x *Txn) Check() error {
 			// is that it is still absent: a second writer creating it between
 			// load and commit is exactly the case exit 6 exists for, and
 			// create would otherwise overwrite it.
-			if _, err := x.tree.Stat(f.target); err == nil {
+			//
+			// Asked with Lstat, so a symlink is something there however its
+			// destination reads. Until 2026-10-07 Stat followed it, a dangling
+			// or looping link read as absent, and commit renamed a regular file
+			// over it, which §6.5 says hunk never does. An error that is not
+			// ENOENT, a directory above it hunk cannot read, is left for commit
+			// to meet at the same place and report.
+			if _, err := x.tree.lstat(f.target.name); err == nil {
 				return &ChangedError{Path: f.target.Orig()}
 			}
 			continue
@@ -793,7 +805,7 @@ func (x *Txn) Commit() error {
 			// changed since commit wrote it is somebody else's and is named
 			// rather than overwritten. A crash cannot be undone this way: the
 			// process has to be alive (§6.2).
-			restored, notRestored, _ := x.Rollback(false)
+			restored, notRestored, _, _ := x.Rollback(false)
 			return &CommitError{
 				Path: f.target.Orig(), Op: f.finalOp(), Err: cause(err),
 				Restored: restored, NotRestored: notRestored,
@@ -808,6 +820,7 @@ func (x *Txn) Commit() error {
 func (x *Txn) commit(f *file) error {
 	switch f.finalOp() {
 	case "delete":
+		f.pathDirs = x.tree.dirsOn(f.target)
 		if err := x.tree.Remove(f.target); err != nil {
 			return err
 		}
@@ -817,6 +830,7 @@ func (x *Txn) commit(f *file) error {
 		if err != nil {
 			return err
 		}
+		f.pathDirs = x.tree.dirsOn(f.target)
 		if err := x.tree.CreateAtomic(f.target, f.cur, createMode); err != nil {
 			return err
 		}
@@ -824,6 +838,7 @@ func (x *Txn) commit(f *file) error {
 	case "modify":
 		// An overwrite, a delete then a create of one path, is a modify too,
 		// and keeps the mode the file had (§6.6).
+		f.pathDirs = x.tree.dirsOn(f.target)
 		if err := x.tree.WriteAtomic(f.target, f.cur, f.mode, f.info); err != nil {
 			return err
 		}
@@ -1069,22 +1084,64 @@ func end(p *os.Process, sig os.Signal, exited <-chan error) error {
 // it was before, with a message calling a missing file "something else". gone
 // names those files: something other than hunk removed them, and the report
 // says so without calling the tree inconsistent.
-func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored, gone []string) {
+//
+// Every step asks what stands at the name before acting on it, with Lstat, and
+// leaves anything that is not what hunk left there. Until 2026-10-07 it asked
+// through symlinks: a create's removal read a link's destination and removed
+// the link, a delete's restore and a modify's restore renamed a regular file
+// over a link the verify had put there, and a link of any kind to nothing read
+// as a file already gone.
+func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored, gone []string, left []LeftDir) {
 	for _, f := range x.files {
 		op := f.finalOp()
 		if op == "" || !f.committed {
 			continue
 		}
+		// Every directory on the way first. A name is walked again here, after
+		// the verify, and through whatever the verify left: until 2026-10-07 a
+		// directory it had swapped for a link was followed, and the original
+		// written, created or removed wherever the link led, at exit 3.
+		if dir, state := x.pathChanged(f); dir != "" {
+			if op == "create" && state == "is gone" {
+				// Nothing can be at the name with a directory above it gone,
+				// which is what rolling a create back leaves.
+				gone = append(gone, f.target.Orig())
+				restored++
+				continue
+			}
+			did := map[string]string{"create": "created it in", "delete": "deleted it from", "modify": "wrote it in"}[op]
+			after := "so hunk wrote nothing there."
+			if op == "create" {
+				after = "so hunk did not look for it there."
+			}
+			notRestored = append(notRestored, NotRestored{
+				Path:   f.target.Orig(),
+				Reason: fmt.Sprintf("%s, the directory hunk %s, %s,\n%s", dir, did, state, after),
+			})
+			continue
+		}
+		// What stands at the name now. Only ENOENT says nothing does: any other
+		// error leaves the step below to meet it and say so.
+		fi, lerr := x.tree.lstat(f.target.name)
+		there := lerr == nil
 		if op == "create" {
 			// Rollback of a create removes the file. The directories its
 			// commit made go after every file is back, in removeMadeDirs.
+			if errors.Is(lerr, fs.ErrNotExist) {
+				gone = append(gone, f.target.Orig())
+				restored++
+				continue
+			}
+			if there && !fi.Mode().IsRegular() {
+				notRestored = append(notRestored, NotRestored{
+					Path: f.target.Orig(),
+					Reason: fmt.Sprintf("hunk created it as a file, and it is now %s, which hunk did not make,\n"+
+						"so hunk left it.", kindOf(fi)),
+				})
+				continue
+			}
 			if !mayFormat {
 				now, err := x.tree.ReadFile(f.target)
-				if errors.Is(err, fs.ErrNotExist) {
-					gone = append(gone, f.target.Orig())
-					restored++
-					continue
-				}
 				if err != nil || sha256.Sum256(now) != f.wrote {
 					notRestored = append(notRestored, NotRestored{
 						Path: f.target.Orig(),
@@ -1097,13 +1154,6 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 				}
 			}
 			if err := x.tree.Remove(f.target); err != nil {
-				// Under --verify-may-format nothing looked first, so a file
-				// already gone surfaces here, as ENOENT.
-				if errors.Is(err, fs.ErrNotExist) {
-					gone = append(gone, f.target.Orig())
-					restored++
-					continue
-				}
 				notRestored = append(notRestored, NotRestored{
 					Path: f.target.Orig(), Reason: "It could not be removed: " + err.Error(),
 				})
@@ -1114,17 +1164,26 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 		}
 		if op == "delete" {
 			// Rollback of a delete restores bytes and mode (§6.6). If something
-			// put a file back at that path, it is not hunk's to overwrite.
-			if !mayFormat {
-				if _, err := x.tree.Stat(f.target); err == nil {
-					notRestored = append(notRestored, NotRestored{
-						Path: f.target.Orig(),
-						Reason: "hunk deleted it and something has since created it there,\n" +
-							"so restoring would overwrite that.\n" +
-							"--verify-may-format says the verify command is expected to do that.",
-					})
-					continue
-				}
+			// put a file back at that path, it is not hunk's to overwrite, and
+			// a symbolic link is not overwritten under either flag: restoring
+			// would replace it with a regular file, which §6.5 says hunk never
+			// does, and no formatter makes one.
+			if there && fi.Mode()&fs.ModeSymlink != 0 {
+				notRestored = append(notRestored, NotRestored{
+					Path: f.target.Orig(),
+					Reason: "hunk deleted it and something has since put a symbolic link there,\n" +
+						"so restoring would replace that link with a file.",
+				})
+				continue
+			}
+			if !mayFormat && there {
+				notRestored = append(notRestored, NotRestored{
+					Path: f.target.Orig(),
+					Reason: "hunk deleted it and something has since created it there,\n" +
+						"so restoring would overwrite that.\n" +
+						"--verify-may-format says the verify command is expected to do that.",
+				})
+				continue
 			}
 			if err := x.tree.WriteAtomic(f.target, f.orig, f.mode, f.info); err != nil {
 				notRestored = append(notRestored, NotRestored{
@@ -1133,6 +1192,17 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 				continue
 			}
 			restored++
+			continue
+		}
+		// A modify. Whatever is at the name now that is not a regular file is
+		// not hunk's file, under either flag: writing the original back would
+		// replace it.
+		if there && !fi.Mode().IsRegular() {
+			notRestored = append(notRestored, NotRestored{
+				Path: f.target.Orig(),
+				Reason: fmt.Sprintf("hunk wrote %s there, and it is now %s, which hunk did not make,\n"+
+					"so restoring would replace it with a file.", shortHash(f.wrote), kindOf(fi)),
+			})
 			continue
 		}
 		if !mayFormat {
@@ -1167,12 +1237,61 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 		}
 		restored++
 	}
-	x.removeMadeDirs()
-	return restored, notRestored, gone
+	left = x.removeMadeDirs()
+	return restored, notRestored, gone, left
+}
+
+// pathChanged names the first directory on f's path that is not the one
+// commit went through, shallowest first, and what it is now; "" when every one
+// still is. Shallowest first is what keeps the walk honest: once a directory
+// is a link, every name below it is somewhere else, and Lstat would answer
+// about wherever that is.
+func (x *Txn) pathChanged(f *file) (dir, state string) {
+	for _, d := range f.pathDirs {
+		shown := filepath.ToSlash(d.name)
+		fi, err := x.tree.lstat(d.name)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return shown, "is gone"
+		case err != nil:
+			return shown, "could not be checked (" + cause(err).Error() + ")"
+		case fi.Mode()&fs.ModeSymlink != 0 || !fi.IsDir():
+			return shown, "is now " + kindOf(fi)
+		case !os.SameFile(fi, d.info):
+			return shown, "is now another directory"
+		}
+	}
+	return "", ""
+}
+
+// A LeftDir is a directory commit made that rollback left where it is, and
+// what it is now: not empty, or no longer the directory hunk made. The batch's
+// own changes are undone either way, so it is said, at exit 3, and is not a
+// file left alone.
+type LeftDir struct {
+	Path  string // in this tree's terms, with slashes
+	State string // "is not empty", "is now a symbolic link", ...
+}
+
+// kindOf names what fi is, for a message about something at a name that hunk
+// did not put there.
+func kindOf(fi fs.FileInfo) string {
+	m := fi.Mode()
+	switch {
+	case m&fs.ModeSymlink != 0:
+		return "a symbolic link"
+	case m.IsDir():
+		return "a directory"
+	case m.IsRegular():
+		return "a file"
+	case notAFile(fi) != "":
+		return notAFile(fi)
+	}
+	return "something else"
 }
 
 // removeMadeDirs removes every directory commit made that is empty now that
-// the files are back (§6.6).
+// the files are back (§6.6), and returns the ones it left.
 //
 // It runs once, after every file, rather than beside each create. Two creates
 // can share a directory the first of them made, and until 2026-09-21 that
@@ -1184,16 +1303,45 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 // MkdirAll makes only what is missing when it runs, and an earlier create has
 // already made every ancestor of its own directories, so a later create never
 // made an ancestor of an earlier one's.
-func (x *Txn) removeMadeDirs() {
+//
+// A directory is removed only while Lstat says it is the one MkdirAll made.
+// Until 2026-10-07 it was removed by name, and the remove that takes an empty
+// directory takes a file or a symbolic link as readily: the verify's file, or
+// its link, standing where hunk's directory had been, was deleted under exit
+// 3. One that will not go, for either reason, keeps every directory above it,
+// since each of those holds it, and is named. One already gone does not: the
+// directory above it may still be hunk's to remove, and until the same day it
+// was left behind, empty.
+func (x *Txn) removeMadeDirs() (left []LeftDir) {
 	for _, f := range slices.Backward(x.files) {
+	unwind:
 		for _, d := range f.madeDirs {
-			// One that will not go keeps every directory above it, since
-			// each of those holds it.
-			if err := x.tree.RemoveDir(d); err != nil {
-				break
+			shown := filepath.ToSlash(d.Name)
+			fi, err := x.tree.lstat(d.Name)
+			switch {
+			case errors.Is(err, fs.ErrNotExist):
+				continue
+			case err != nil:
+				left = append(left, LeftDir{shown, "could not be checked (" + cause(err).Error() + ")"})
+				break unwind
+			case !fi.IsDir() || fi.Mode()&fs.ModeSymlink != 0:
+				left = append(left, LeftDir{shown, "is now " + kindOf(fi)})
+				break unwind
+			case !os.SameFile(fi, d.Info):
+				left = append(left, LeftDir{shown, "is now another directory"})
+				break unwind
+			}
+			if err := x.tree.RemoveDir(d.Name); err != nil {
+				state := "could not be removed (" + cause(err).Error() + ")"
+				if names, rerr := x.tree.readDirNames(d.Name); rerr == nil && len(names) > 0 {
+					state = "is not empty"
+				}
+				left = append(left, LeftDir{shown, state})
+				break unwind
 			}
 		}
 	}
+	return left
 }
 
 // Applied is how many hunks actually changed something, for §5.3's first line:
