@@ -1,0 +1,23 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 1,
+      "path": "f.txt",
+      "patch_line": 2,
+      "expected": 1,
+      "found": 0,
+      "near_miss": {
+        "cause": "trailing whitespace",
+        "line": 2,
+        "span": "alpha\nbeta \ngamma",
+        "detail": "on line 2 your old has none; the file's ends in a space",
+        "also_at": [
+          6
+        ],
+        "also_same": 1
+      }
+    }
+  ]
+}

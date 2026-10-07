@@ -1,0 +1,11 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  f.txt  (patch line 2)
+  expected 1 occurrence, found 0
+
+  the text is there with different trailing whitespace, at line 1:
+      1 | a
+      2 | b·
+      3 | c
+      ... 3 more lines not shown (--context 3): old needs all 6, so rerun with --context 6 before pasting
+  on line 2 your old has none; the file's ends in a space

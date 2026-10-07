@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -863,6 +864,21 @@ func FuzzDiagnose(f *testing.F) {
 					t.Fatalf("span line %d is %q, but the file has %q", i, l, lines[d.Line-1+i])
 				}
 			}
+		}
+		// The spans as near are listed in file order, once each, never the one
+		// shown, and capped; those with the shown span's bytes are among them.
+		// A cut span says how long it was, and a whole one says nothing.
+		if !slices.IsSorted(d.Also) || len(slices.Compact(slices.Clone(d.Also))) != len(d.Also) {
+			t.Errorf("also %v is not in order, once each", d.Also)
+		}
+		if slices.Contains(d.Also, d.Line) || len(d.Also) > tooManyLimit || (d.AlsoMore > 0 && len(d.Also) < tooManyLimit) {
+			t.Errorf("also %v (and %d more) for the span at line %d", d.Also, d.AlsoMore, d.Line)
+		}
+		if d.AlsoSame > len(d.Also)+d.AlsoMore {
+			t.Errorf("%d the same of %d", d.AlsoSame, len(d.Also)+d.AlsoMore)
+		}
+		if d.SpanLines != 0 && d.SpanLines <= len(d.Span) {
+			t.Errorf("span_lines %d for a %d-line span that was not cut", d.SpanLines, len(d.Span))
 		}
 		tm := DiagnoseTooMany([]byte(old), []byte(file))
 		if len(tm.Lines) > tooManyLimit {

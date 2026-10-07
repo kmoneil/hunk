@@ -604,11 +604,21 @@ type jsonFailure struct {
 }
 
 type jsonNear struct {
-	Cause   string `json:"cause,omitempty"`
-	Line    int    `json:"line,omitempty"`
-	Span    string `json:"span,omitempty"`
-	Detail  string `json:"detail,omitempty"`
-	Shifted int    `json:"shifted_by_hunks,omitempty"`
+	Cause string `json:"cause,omitempty"`
+	Line  int    `json:"line,omitempty"`
+	Span  string `json:"span,omitempty"`
+	// SpanLines is the span's whole length when --context cut it, so a
+	// program can tell a cut span from the text (§7.2).
+	SpanLines int    `json:"span_lines,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+	// AlsoAt is where every other span as near starts, capped as lines is,
+	// and AlsoMore how many more there are.
+	AlsoAt   []int `json:"also_at,omitempty"`
+	AlsoMore int   `json:"also_more,omitempty"`
+	// AlsoSame is how many of them hold the span's own bytes, so that pasted
+	// alone it would match more than once.
+	AlsoSame int `json:"also_same,omitempty"`
+	Shifted  int `json:"shifted_by_hunks,omitempty"`
 }
 
 // JSON writes one object on stdout (§4). It wins over --quiet: a caller that
@@ -667,7 +677,8 @@ func (r *Report) JSON(w io.Writer) error {
 			default:
 				jf.NearMiss = &jsonNear{
 					Cause: d.causeName(), Line: d.Line,
-					Span: string(joinLines(d.Span)), Detail: d.Detail, Shifted: d.Shifted,
+					Span: string(joinLines(d.Span)), SpanLines: d.SpanLines, Detail: d.Detail,
+					AlsoAt: d.Also, AlsoMore: d.AlsoMore, AlsoSame: d.AlsoSame, Shifted: d.Shifted,
 				}
 			}
 		}

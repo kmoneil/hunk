@@ -26,6 +26,8 @@ success.
 | You see | Do not | Do |
 | --- | --- | --- |
 | `expected 1 occurrence, found 0` with a span printed | Re-read the file | The report printed the file's actual bytes. Paste that span into `old` and resend |
+| `... 3 more lines not shown (--context 3)` under the span | Paste what is shown | The span is cut. Rerun with the `--context` it names, then paste the whole span; a cut one replaces only part of the block |
+| `also nearly there at line 6` | Paste and hope it is the copy you meant | The span shown is one of several. Pasted, it edits that copy; if you meant another, or it says some have the same bytes, add a line of context that only your copy has |
 | `expected 1 occurrence, found 5` with line numbers | Pick one and hope | Add surrounding context to `old` until it is unique, or say `@@ old x5` if you mean all five |
 | `found 2 that overlap`, or `found 2 across both line endings` | Say `@@ old x2` | Add a line of context until `old` fits one place. Overlapping copies share lines, and a copy in a file's other line ending is one this hunk cannot edit, so no count applies |
 | `the text is there with different leading whitespace` | Retype it by hand | The gutter shows the real line. Copy it, tabs and all |

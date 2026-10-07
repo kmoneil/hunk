@@ -72,6 +72,24 @@ type Diagnosis struct {
 	// Span is the file's actual lines for that span. These are the bytes the
 	// agent pastes.
 	Span [][]byte
+	// SpanLines is the span's whole length when --context cut it short, and
+	// zero when it did not (§7.2: "beyond that it prints a count"). Until
+	// 2026-10-07 a cut span said nothing, the skill said to paste the span, and
+	// pasted it replaced the first lines of the block and left the rest, at
+	// exit 0.
+	SpanLines int
+	// Also is where every other span as near as this one starts, capped, and
+	// AlsoMore counts those not listed: every other span a normalization
+	// explains (DiagNamed), or every other with as few differing lines
+	// (DiagClosest). Until 2026-10-07 the report showed the first and said
+	// nothing of the rest, and pasting it edited that copy, at exit 0, whichever
+	// one the agent meant.
+	Also     []int
+	AlsoMore int
+	// AlsoSame is how many of those spans hold the same bytes as this one
+	// (DiagNamed). Pasted, the span then matches more than once and is refused
+	// as too many, so the report may not say it edits one copy.
+	AlsoSame int
 
 	// DiffLine, Yours, Theirs and Column describe the first line that differs
 	// (DiagClosest only). DiffLine is 1-based within old, and DiagNoRoom
@@ -123,40 +141,82 @@ func Diagnose(old, file []byte, maxContext int) *Diagnosis {
 		// The one line that did match is the whole report: it is where the
 		// agent has to look, and its number is what says how far old overhangs
 		// the top of the file.
-		return &Diagnosis{
-			Kind: DiagNoRoom, Line: high.file + 1, DiffLine: high.old + 1,
-			Span: capSpan(spanAt(fileLines, high.file, 1), maxContext),
-		}
+		d := &Diagnosis{Kind: DiagNoRoom, Line: high.file + 1, DiffLine: high.old + 1}
+		d.setSpan(spanAt(fileLines, high.file, 1), maxContext)
+		return d
 	}
 
 	// §7.1 step 3: the first normalization that makes a candidate span equal to
 	// old wins, and the candidates are ordered by anchor, most distinctive
-	// first.
+	// first. Every candidate is asked, so the report can say where else the
+	// text is as near.
 	form := newOldForm(oldLines)
+	var named *Diagnosis
+	var also []int
+	var shown []byte
 	for _, start := range starts {
 		span := spanAt(fileLines, start, len(oldLines))
-		if d := form.explain(span, file); d != nil {
+		switch d := form.explain(span, file); {
+		case d == nil:
+		case named == nil:
 			d.Line = start + 1
-			d.Span = capSpan(span, maxContext)
-			return d
+			d.setSpan(span, maxContext)
+			named, shown = d, bytes.Join(span, lf)
+		default:
+			also = append(also, start+1)
+			if bytes.Equal(bytes.Join(span, lf), shown) {
+				named.AlsoSame++
+			}
 		}
+	}
+	if named != nil {
+		named.setAlso(also)
+		return named
 	}
 
 	// §7.1 step 4, the floor. Fewest differing lines, earliest on a tie so a
 	// golden has one answer. The tie breaks on position in the file rather than
 	// on which line of old anchored the span, so the report does not depend on
-	// the search order.
-	best, bestStart, bestDiff := [][]byte(nil), 0, -1
-	for _, start := range starts {
-		span := spanAt(fileLines, start, len(oldLines))
-		n := differingLines(oldLines, span)
-		if bestDiff < 0 || n < bestDiff || (n == bestDiff && start < bestStart) {
-			best, bestStart, bestDiff = span, start, n
+	// the search order. The rest of the tie is listed.
+	diffs := make([]int, len(starts))
+	best := 0
+	for i, start := range starts {
+		diffs[i] = differingLines(oldLines, spanAt(fileLines, start, len(oldLines)))
+		if diffs[i] < diffs[best] || (diffs[i] == diffs[best] && start < starts[best]) {
+			best = i
 		}
 	}
-	d := &Diagnosis{Kind: DiagClosest, Line: bestStart + 1, Span: capSpan(best, maxContext)}
-	d.DiffLine, d.Yours, d.Theirs, d.Column = firstDifference(oldLines, best)
+	span := spanAt(fileLines, starts[best], len(oldLines))
+	d := &Diagnosis{Kind: DiagClosest, Line: starts[best] + 1}
+	d.setSpan(span, maxContext)
+	d.DiffLine, d.Yours, d.Theirs, d.Column = firstDifference(oldLines, span)
+	for i, start := range starts {
+		if i != best && diffs[i] == diffs[best] {
+			also = append(also, start+1)
+		}
+	}
+	d.setAlso(also)
 	return d
+}
+
+// setSpan keeps span as the one to show, cut to maxContext lines (§7.2), and
+// when it was cut, how long it was.
+func (d *Diagnosis) setSpan(span [][]byte, maxContext int) {
+	d.Span = span
+	if maxContext > 0 && len(span) > maxContext {
+		d.Span, d.SpanLines = span[:maxContext], len(span)
+	}
+}
+
+// setAlso keeps where the other spans as near start, in file order, listing
+// the first tooManyLimit and counting the rest, as too-many does.
+func (d *Diagnosis) setAlso(lines []int) {
+	sort.Ints(lines)
+	if len(lines) > tooManyLimit {
+		d.AlsoMore = len(lines) - tooManyLimit
+		lines = lines[:tooManyLimit]
+	}
+	d.Also = lines
 }
 
 // DiagnoseTooMany reports where each occurrence starts (§7.1, last paragraph).
@@ -417,13 +477,6 @@ func spanAt(fileLines [][]byte, start, n int) [][]byte {
 		n = len(fileLines) - start
 	}
 	return fileLines[start : start+n]
-}
-
-func capSpan(span [][]byte, maxContext int) [][]byte {
-	if maxContext > 0 && len(span) > maxContext {
-		return span[:maxContext]
-	}
-	return span
 }
 
 // a normalization from §7.1 step 3, in the order the table gives
@@ -932,6 +985,53 @@ func firstDifference(oldLines, span [][]byte) (line int, yours, theirs []byte, c
 
 // plural reads "a tab" rather than "1 tab" for one, which is §5.2's wording:
 // "your `old` used a tab; the file uses 4 spaces".
+// renderSpan prints the span in the gutter and, when --context cut it, says so
+// and what shows the rest: a cut span pasted as old is a different edit.
+func (d *Diagnosis) renderSpan(b *strings.Builder, indent string, gutter func(int, []byte)) {
+	for i, l := range d.Span {
+		gutter(d.Line+i, l)
+	}
+	if d.SpanLines > 0 {
+		hidden := d.SpanLines - len(d.Span)
+		s := "s"
+		if hidden == 1 {
+			s = ""
+		}
+		fmt.Fprintf(b, "%s    ... %d more line%s not shown (--context %d): old needs all %d, so rerun with --context %d before pasting\n",
+			indent, hidden, s, len(d.Span), d.SpanLines, d.SpanLines)
+	}
+}
+
+// sameBytes says how many of the other spans hold the span's own bytes.
+func sameBytes(same, of int) string {
+	switch {
+	case of == 1:
+		return "it has"
+	case same == of:
+		return "all of them have"
+	case same == 1:
+		return "one of them has"
+	}
+	return fmt.Sprintf("%d of them have", same)
+}
+
+// alsoAt names where the other spans as near start, as too-many lists its
+// matches.
+func (d *Diagnosis) alsoAt() string {
+	at := make([]string, len(d.Also))
+	for i, l := range d.Also {
+		at[i] = fmt.Sprint(l)
+	}
+	where := "line " + at[0]
+	if len(at) > 1 || d.AlsoMore > 0 {
+		where = "lines " + strings.Join(at, ", ")
+	}
+	if d.AlsoMore > 0 {
+		where += fmt.Sprintf(", and %d more", d.AlsoMore)
+	}
+	return where
+}
+
 func plural(n int, word string) string {
 	if n == 1 {
 		article := "a "
@@ -1072,11 +1172,17 @@ func (d *Diagnosis) Render(indent string) string {
 
 	case DiagNamed:
 		fmt.Fprintf(&b, "%s%s, at line %d:\n", indent, d.Headline, d.Line)
-		for i, l := range d.Span {
-			gutter(d.Line+i, l)
-		}
+		d.renderSpan(&b, indent, gutter)
 		if d.Detail != "" {
 			fmt.Fprintf(&b, "%s%s\n", indent, d.Detail)
+		}
+		switch {
+		case len(d.Also) > 0 && d.AlsoSame > 0:
+			fmt.Fprintf(&b, "%salso nearly there at %s; the span above is line %d's, and %s the same bytes, so pasted alone it matches more than once: add context\n",
+				indent, d.alsoAt(), d.Line, sameBytes(d.AlsoSame, len(d.Also)+d.AlsoMore))
+		case len(d.Also) > 0:
+			fmt.Fprintf(&b, "%salso nearly there at %s; the span above is line %d's, and pasted it edits that copy only\n",
+				indent, d.alsoAt(), d.Line)
 		}
 
 	case DiagClosest:
@@ -1084,8 +1190,9 @@ func (d *Diagnosis) Render(indent string) string {
 			indent, d.Line, d.DiffLine, d.Column)
 		fmt.Fprintf(&b, "%s  yours | %s\n", indent, show(d.Yours))
 		fmt.Fprintf(&b, "%s  file  | %s\n", indent, show(d.Theirs))
-		for i, l := range d.Span {
-			gutter(d.Line+i, l)
+		d.renderSpan(&b, indent, gutter)
+		if len(d.Also) > 0 {
+			fmt.Fprintf(&b, "%sas close at %s; the span above is line %d's\n", indent, d.alsoAt(), d.Line)
 		}
 	}
 
