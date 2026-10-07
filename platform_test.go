@@ -320,6 +320,17 @@ func climbingPastTheTopResolves() bool { return runtime.GOOS != "windows" }
 // Windows itself opens. That question is older than these rows.
 func dotDotIsWalked() bool { return runtime.GOOS != "windows" }
 
+// rootedLinksResolveUnconfined reports whether an unconfined walk reads a link
+// destination that starts at a separator and names no volume as the platform
+// does. POSIX has no such destination, since one that starts at a separator is
+// absolute. Windows reads it on the link's volume; confined, so does hunk since
+// 2026-10-07, and the first windows-latest run of that change passed those
+// rows. Unconfined the walk still reads it as relative and names a file under
+// the link's directory, which is issue #43's open Windows item ("a final link
+// to a rooted path with no volume is treated as relative"), so the unconfined
+// rows wait for it rather than pin the wrong answer.
+func rootedLinksResolveUnconfined() bool { return runtime.GOOS != "windows" }
+
 // unreadableLink makes a symlink at name that Lstat finds and Readlink cannot
 // read, where the platform can, and reports whether it did.
 //
