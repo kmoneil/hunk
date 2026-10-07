@@ -204,6 +204,10 @@ type file struct {
 	// can unwind exactly the ones this tool created (§6.6), and only while each
 	// is still the directory it made.
 	madeDirs []MadeDir
+	// pathDirs are the directories commit went through to write this file,
+	// shallowest first, as it found them. Rollback acts on the file only while
+	// every one is still the one commit used (§6.3).
+	pathDirs []seenDir
 
 	// inFile is the file on disk this path runs through, when a directory
 	// above it is a file: as the patch spelled it, for the refusal, and as
@@ -816,6 +820,7 @@ func (x *Txn) Commit() error {
 func (x *Txn) commit(f *file) error {
 	switch f.finalOp() {
 	case "delete":
+		f.pathDirs = x.tree.dirsOn(f.target)
 		if err := x.tree.Remove(f.target); err != nil {
 			return err
 		}
@@ -825,6 +830,7 @@ func (x *Txn) commit(f *file) error {
 		if err != nil {
 			return err
 		}
+		f.pathDirs = x.tree.dirsOn(f.target)
 		if err := x.tree.CreateAtomic(f.target, f.cur, createMode); err != nil {
 			return err
 		}
@@ -832,6 +838,7 @@ func (x *Txn) commit(f *file) error {
 	case "modify":
 		// An overwrite, a delete then a create of one path, is a modify too,
 		// and keeps the mode the file had (§6.6).
+		f.pathDirs = x.tree.dirsOn(f.target)
 		if err := x.tree.WriteAtomic(f.target, f.cur, f.mode, f.info); err != nil {
 			return err
 		}
@@ -1090,6 +1097,29 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 		if op == "" || !f.committed {
 			continue
 		}
+		// Every directory on the way first. A name is walked again here, after
+		// the verify, and through whatever the verify left: until 2026-10-07 a
+		// directory it had swapped for a link was followed, and the original
+		// written, created or removed wherever the link led, at exit 3.
+		if dir, state := x.pathChanged(f); dir != "" {
+			if op == "create" && state == "is gone" {
+				// Nothing can be at the name with a directory above it gone,
+				// which is what rolling a create back leaves.
+				gone = append(gone, f.target.Orig())
+				restored++
+				continue
+			}
+			did := map[string]string{"create": "created it in", "delete": "deleted it from", "modify": "wrote it in"}[op]
+			after := "so hunk wrote nothing there."
+			if op == "create" {
+				after = "so hunk did not look for it there."
+			}
+			notRestored = append(notRestored, NotRestored{
+				Path:   f.target.Orig(),
+				Reason: fmt.Sprintf("%s, the directory hunk %s, %s,\n%s", dir, did, state, after),
+			})
+			continue
+		}
 		// What stands at the name now. Only ENOENT says nothing does: any other
 		// error leaves the step below to meet it and say so.
 		fi, lerr := x.tree.lstat(f.target.name)
@@ -1209,6 +1239,29 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 	}
 	left = x.removeMadeDirs()
 	return restored, notRestored, gone, left
+}
+
+// pathChanged names the first directory on f's path that is not the one
+// commit went through, shallowest first, and what it is now; "" when every one
+// still is. Shallowest first is what keeps the walk honest: once a directory
+// is a link, every name below it is somewhere else, and Lstat would answer
+// about wherever that is.
+func (x *Txn) pathChanged(f *file) (dir, state string) {
+	for _, d := range f.pathDirs {
+		shown := filepath.ToSlash(d.name)
+		fi, err := x.tree.lstat(d.name)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return shown, "is gone"
+		case err != nil:
+			return shown, "could not be checked (" + cause(err).Error() + ")"
+		case fi.Mode()&fs.ModeSymlink != 0 || !fi.IsDir():
+			return shown, "is now " + kindOf(fi)
+		case !os.SameFile(fi, d.info):
+			return shown, "is now another directory"
+		}
+	}
+	return "", ""
 }
 
 // A LeftDir is a directory commit made that rollback left where it is, and

@@ -753,6 +753,35 @@ func (t *Tree) MkdirAll(tg Target) ([]MadeDir, error) {
 	return made, nil
 }
 
+// A seenDir is a directory on a file's path as commit found it, by name and
+// by what Lstat said, so rollback can tell it from whatever stands at that
+// name once the verify has run.
+type seenDir struct {
+	name string
+	info fs.FileInfo
+}
+
+// dirsOn describes every directory on tg's path, shallowest first, as Lstat
+// finds it now: those below the root when confined, and every one from the top
+// of the volume when not. It stops at the first it cannot describe, which for a
+// path commit has just written is none.
+func (t *Tree) dirsOn(tg Target) []seenDir {
+	base, parts := t.splitName(filepath.Dir(tg.name))
+	var out []seenDir
+	for i := range parts {
+		if parts[i] == "." {
+			continue // a file at the top of the root, which has no directory below it
+		}
+		name := t.joinName(base, parts[:i+1], true)
+		fi, err := t.lstat(name)
+		if err != nil {
+			break
+		}
+		out = append(out, seenDir{name, fi})
+	}
+	return out
+}
+
 func (t *Tree) mkdir(name string) error {
 	if t.r == nil {
 		return os.Mkdir(name, 0o755)

@@ -1,0 +1,28 @@
+{
+  "ok": false,
+  "exit": 4,
+  "files": [
+    {
+      "path": "sub/d.txt",
+      "op": "delete",
+      "added": 0,
+      "removed": 1
+    }
+  ],
+  "hunks": 1,
+  "verify": {
+    "ran": true,
+    "ok": false,
+    "seconds": 0,
+    "command": "mv sub sub.real && ln -s other sub; printf 'FAIL\\n'; false",
+    "output": [
+      "FAIL"
+    ],
+    "not_restored": [
+      {
+        "path": "sub/d.txt",
+        "reason": "sub, the directory hunk deleted it from, is now a symbolic link,\nso hunk wrote nothing there."
+      }
+    ]
+  }
+}

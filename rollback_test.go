@@ -134,7 +134,11 @@ func runRollbackCases(t *testing.T, cases []rollbackCase) {
 					t.Errorf("the report says %q, and should not:\n%s", s, errOut)
 				}
 			}
-			for _, d := range treeDiff(c.after, treeOf(t, root)) {
+			want := map[string]string{}
+			for name, v := range c.after {
+				want[name] = strings.ReplaceAll(v, "{outside}", filepath.ToSlash(outside))
+			}
+			for _, d := range treeDiff(want, treeOf(t, root)) {
 				t.Errorf("the tree: %s", d)
 			}
 			wantOutside := c.outsideAfter
@@ -313,19 +317,26 @@ func TestRollbackRemovesOnlyTheDirectoriesItMade(t *testing.T) {
 			// were hunk's directory, against the report's own words.
 			name:  "a made directory replaced by a file",
 			patch: createInNew, verify: "rm -rf new/dir && echo keep > new/dir; false",
-			exit:  exitRollbackFailed,
-			says:  []string{"new/dir, which hunk made as a directory, is now a file, so hunk left it."},
+			exit: exitRollbackFailed,
+			says: []string{
+				"new/dir/f.txt was not restored.\n  new/dir, the directory hunk created it in, is now a file,\n  so hunk did not look for it there.",
+				"new/dir, which hunk made as a directory, is now a file, so hunk left it.",
+			},
 			after: map[string]string{"new": "directory", "new/dir": "keep\n"},
 		},
 		{
 			name:  "a made directory replaced by a link to a directory in the tree",
 			files: map[string]string{"elsewhere/keep.txt": "keep\n"},
 			patch: createInNew, verify: "rm -rf new/dir && ln -s ../elsewhere new/dir; false", links: true,
-			exit: exitVerifyFailed,
+			// Through the link the name was absent, and read as already gone,
+			// until the path was checked on 2026-10-07: the directory hunk
+			// created the file in is not the one there now.
+			exit: exitRollbackFailed,
 			says: []string{
-				"new/dir/f.txt, which hunk created, was already gone",
+				"new/dir, the directory hunk created it in, is now a symbolic link,",
 				"new/dir, which hunk made as a directory, is now a symbolic link, so hunk left it.",
 			},
+			not: []string{"already gone"},
 			after: map[string]string{
 				"new": "directory", "new/dir": "-> ../elsewhere",
 				"elsewhere": "directory", "elsewhere/keep.txt": "keep\n",
@@ -336,11 +347,12 @@ func TestRollbackRemovesOnlyTheDirectoriesItMade(t *testing.T) {
 			// cannot share an inode number by reuse.
 			name:  "a made directory replaced by another, empty, directory",
 			patch: createInNew, verify: "mv new/dir new/old && mkdir new/dir && rm -rf new/old; false",
-			exit: exitVerifyFailed,
+			exit: exitRollbackFailed,
 			says: []string{
-				"new/dir/f.txt, which hunk created, was already gone",
+				"new/dir, the directory hunk created it in, is now another directory,",
 				"new/dir, which hunk made as a directory, is now another directory, so hunk left it.",
 			},
+			not:   []string{"already gone"},
 			after: map[string]string{"new": "directory", "new/dir": "directory"},
 		},
 		{
@@ -367,6 +379,7 @@ func TestRollbackRemovesOnlyTheDirectoriesItMade(t *testing.T) {
 			perms: true, chmodBack: []string{"new"},
 			exit: exitRollbackFailed,
 			says: []string{
+				"new/dir, the directory hunk created it in, could not be checked (permission denied),",
 				"new/dir, which hunk made as a directory, could not be checked (permission denied), so hunk left it.",
 			},
 			after: map[string]string{"new": "directory", "new/dir": "directory", "new/dir/f.txt": "hello"},
@@ -525,4 +538,266 @@ func TestKindOf(t *testing.T) {
 			t.Errorf("kindOf(fifo) = %q, want %q", got, "a named pipe")
 		}
 	})
+}
+
+// Every directory on a file's path is checked before rollback acts on it, and
+// a file is left, and named at exit 4, when one is not the directory commit
+// went through. Until 2026-10-07 rollback walked the name again through
+// whatever the verify left, and a directory swapped for a link sent the
+// original bytes, a restored file or a removal to wherever the link led: in
+// the tree under default flags, and outside it under --allow-outside-root.
+func TestRollbackChecksTheDirectoriesOnThePath(t *testing.T) {
+	const (
+		modifySub = "@@ file sub/a.txt\n@@ old\nbefore\n@@ new\nafter\n"
+		deleteSub = "@@ delete sub/d.txt\n"
+		wroteIn   = "sub, the directory hunk wrote it in, is now a symbolic link,\n  so hunk wrote nothing there."
+		deletedIn = "sub, the directory hunk deleted it from, is now a symbolic link,\n  so hunk wrote nothing there."
+		createdIn = "new/dir, the directory hunk created it in, is now a symbolic link,\n  so hunk did not look for it there."
+	)
+	swap := "mv sub sub.real && ln -s other sub"
+	runRollbackCases(t, []rollbackCase{
+		{
+			// The original went into the new sub/a.txt, and sub.real/a.txt,
+			// which is the file hunk wrote, kept the edit.
+			name:  "a parent replaced by another directory",
+			files: map[string]string{"sub/a.txt": "before\n"},
+			patch: modifySub, verify: "mv sub sub.real && mkdir sub && cp sub.real/a.txt sub/; false",
+			exit: exitRollbackFailed,
+			says: []string{"sub/a.txt was not restored", "sub, the directory hunk wrote it in, is now another directory"},
+			after: map[string]string{
+				"sub": "directory", "sub/a.txt": "after\n",
+				"sub.real": "directory", "sub.real/a.txt": "after\n",
+			},
+		},
+		{
+			// other/a.txt was overwritten with sub/a.txt's original.
+			name:  "a parent replaced by a link, to a file holding hunk's bytes",
+			files: map[string]string{"sub/a.txt": "before\n", "other/a.txt": "after\n"},
+			patch: modifySub, verify: swap + "; false", links: true,
+			exit: exitRollbackFailed,
+			says: []string{wroteIn},
+			after: map[string]string{
+				"sub": "-> other", "sub.real": "directory", "sub.real/a.txt": "after\n",
+				"other": "directory", "other/a.txt": "after\n",
+			},
+		},
+		{
+			name:  "the same under --verify-may-format, to a file of somebody else's",
+			files: map[string]string{"sub/a.txt": "before\n", "other/a.txt": "precious\n"},
+			patch: modifySub, flags: []string{"--verify-may-format"}, verify: swap + "; false", links: true,
+			exit: exitRollbackFailed,
+			says: []string{wroteIn},
+			after: map[string]string{
+				"sub": "-> other", "sub.real": "directory", "sub.real/a.txt": "after\n",
+				"other": "directory", "other/a.txt": "precious\n",
+			},
+		},
+		{
+			// d.txt was restored into other/, a directory no patch named.
+			name:  "a deleted file's parent replaced by a link",
+			files: map[string]string{"sub/d.txt": "orig\n", "other/keep.txt": "keep\n"},
+			patch: deleteSub, verify: swap + "; false", links: true,
+			exit: exitRollbackFailed,
+			says: []string{"sub/d.txt was not restored", deletedIn},
+			after: map[string]string{
+				"sub": "-> other", "sub.real": "directory",
+				"other": "directory", "other/keep.txt": "keep\n",
+			},
+		},
+		{
+			// It was written outside the tree.
+			name:  "a deleted file's parent replaced by a link out of the tree, unconfined",
+			files: map[string]string{"sub/d.txt": "orig\n"},
+			patch: deleteSub, flags: []string{"--allow-outside-root"},
+			verify: "mv sub sub.real && ln -s {outside} sub; false", links: true,
+			outside: map[string]string{"keep.txt": "keep\n"},
+			exit:    exitRollbackFailed,
+			says:    []string{deletedIn},
+			after:   map[string]string{"sub": "-> {outside}", "sub.real": "directory"},
+		},
+		{
+			// os.Root refused this one already; now the walk does, first.
+			name:  "the same, confined",
+			files: map[string]string{"sub/d.txt": "orig\n"},
+			patch: deleteSub, verify: "mv sub sub.real && ln -s {outside} sub; false", links: true,
+			outside: map[string]string{"keep.txt": "keep\n"},
+			exit:    exitRollbackFailed,
+			says:    []string{deletedIn},
+			not:     []string{"escapes"},
+			after:   map[string]string{"sub": "-> {outside}", "sub.real": "directory"},
+		},
+		{
+			// elsewhere/f.txt, which no patch named, was deleted at exit 3.
+			name:  "a created file's made directory replaced by a link in the tree, to hunk's bytes",
+			files: map[string]string{"elsewhere/f.txt": "hello"},
+			patch: createInNew, verify: "rm -rf new/dir && ln -s ../elsewhere new/dir; false", links: true,
+			exit: exitRollbackFailed,
+			says: []string{createdIn},
+			after: map[string]string{
+				"new": "directory", "new/dir": "-> ../elsewhere",
+				"elsewhere": "directory", "elsewhere/f.txt": "hello",
+			},
+		},
+		{
+			name:  "the same under --verify-may-format, to somebody else's file",
+			files: map[string]string{"elsewhere/f.txt": "precious"},
+			patch: createInNew, flags: []string{"--verify-may-format"},
+			verify: "rm -rf new/dir && ln -s ../elsewhere new/dir; false", links: true,
+			exit: exitRollbackFailed,
+			says: []string{createdIn},
+			after: map[string]string{
+				"new": "directory", "new/dir": "-> ../elsewhere",
+				"elsewhere": "directory", "elsewhere/f.txt": "precious",
+			},
+		},
+		{
+			// outside/f.txt was deleted, outside the tree.
+			name:  "a created file's made directory replaced by a link out of the tree, unconfined",
+			patch: createInNew, flags: []string{"--allow-outside-root"},
+			verify: "rm -rf new/dir && ln -s {outside} new/dir; false", links: true,
+			outside: map[string]string{"f.txt": "hello"},
+			exit:    exitRollbackFailed,
+			says:    []string{createdIn},
+			after:   map[string]string{"new": "directory", "new/dir": "-> {outside}"},
+		},
+		{
+			name:  "the same under --verify-may-format",
+			patch: createInNew, flags: []string{"--allow-outside-root", "--verify-may-format"},
+			verify: "rm -rf new/dir && ln -s {outside} new/dir; false", links: true,
+			outside: map[string]string{"f.txt": "precious"},
+			exit:    exitRollbackFailed,
+			says:    []string{createdIn},
+			after:   map[string]string{"new": "directory", "new/dir": "-> {outside}"},
+		},
+		{
+			// a/b is the very directory commit wrote in, moved: only the walk
+			// from the top sees that a, above it, is now a link. A check of the
+			// immediate parent alone restores the file through the link.
+			name:   "a directory two levels up replaced by a link to where its child went",
+			files:  map[string]string{"a/b/c.txt": "before\n"},
+			patch:  "@@ file a/b/c.txt\n@@ old\nbefore\n@@ new\nafter\n",
+			verify: "mkdir elsewhere && mv a/b elsewhere/b && rmdir a && ln -s elsewhere a; false", links: true,
+			exit: exitRollbackFailed,
+			says: []string{"a/b/c.txt was not restored", "a, the directory hunk wrote it in, is now a symbolic link"},
+			after: map[string]string{
+				"a": "-> elsewhere", "elsewhere": "directory", "elsewhere/b": "directory",
+				"elsewhere/b/c.txt": "after\n",
+			},
+		},
+		{
+			name:  "a parent the verify removed",
+			files: map[string]string{"sub/a.txt": "before\n"},
+			patch: modifySub, verify: "rm -rf sub; false",
+			exit:  exitRollbackFailed,
+			says:  []string{"sub, the directory hunk wrote it in, is gone,\n  so hunk wrote nothing there."},
+			after: map[string]string{},
+		},
+		{
+			name:  "a parent untouched, under a parent untouched",
+			files: map[string]string{"a/b/c.txt": "before\n"},
+			patch: "@@ file a/b/c.txt\n@@ old\nbefore\n@@ new\nafter\n", verify: "false",
+			exit:  exitVerifyFailed,
+			after: map[string]string{"a": "directory", "a/b": "directory", "a/b/c.txt": "before\n"},
+		},
+	})
+}
+
+// --try goes through the same rollback, and its exit is 4 when a file could
+// not be put back, whatever its command said.
+func TestTryChecksTheDirectoriesOnThePath(t *testing.T) {
+	needsShellSymlinks(t)
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		patch string
+		flags []string
+	}{
+		{
+			"a modify",
+			map[string]string{"sub/a.txt": "before\n", "other/a.txt": "after\n"},
+			"@@ file sub/a.txt\n@@ old\nbefore\n@@ new\nafter\n", nil,
+		},
+		{
+			"a modify under --verify-may-format",
+			map[string]string{"sub/a.txt": "before\n", "other/a.txt": "precious\n"},
+			"@@ file sub/a.txt\n@@ old\nbefore\n@@ new\nafter\n",
+			[]string{"--verify-may-format"},
+		},
+		{
+			"a delete",
+			map[string]string{"sub/d.txt": "orig\n", "other/keep.txt": "keep\n"},
+			"@@ delete sub/d.txt\n", nil,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, c.files)
+			otherBefore := treeOf(t, filepath.Join(root, "other"))
+			args := append(append([]string{}, c.flags...), "--try", "mv sub sub.real && ln -s other sub")
+			code, _, errOut := runCLI(t, root, args, c.patch)
+			if code != exitRollbackFailed {
+				t.Errorf("exit %d, want %d:\n%s", code, exitRollbackFailed, errOut)
+			}
+			if !strings.Contains(errOut, ", the directory hunk ") || !strings.Contains(errOut, "is now a symbolic link") {
+				t.Errorf("the report does not name the swapped directory:\n%s", errOut)
+			}
+			for _, d := range treeDiff(otherBefore, treeOf(t, filepath.Join(root, "other"))) {
+				t.Errorf("other/, which no patch named: %s", d)
+			}
+		})
+	}
+}
+
+// dirsOn describes the directories on a path as they are, and stops at the
+// first it cannot: one that is not there.
+func TestDirsOn(t *testing.T) {
+	root := mktree(t)
+	for _, unconfined := range []bool{false, true} {
+		tree, err := OpenTree(root, unconfined)
+		must(t, err)
+		t.Cleanup(func() { tree.Close() })
+		tg, err := tree.Resolve("sub/in.txt")
+		must(t, err)
+		dirs := tree.dirsOn(tg)
+		if len(dirs) == 0 || filepath.Base(dirs[len(dirs)-1].name) != "sub" {
+			t.Fatalf("unconfined=%v: dirsOn(sub/in.txt) = %v, want it to end at sub", unconfined, dirs)
+		}
+		fi, err := os.Lstat(filepath.Join(root, "sub"))
+		must(t, err)
+		if !os.SameFile(dirs[len(dirs)-1].info, fi) {
+			t.Errorf("unconfined=%v: sub is described as something else", unconfined)
+		}
+		if !unconfined && len(dirs) != 1 {
+			t.Errorf("confined, dirsOn(sub/in.txt) = %v, want only sub, below the root", dirs)
+		}
+
+		top, err := tree.Resolve("top.txt")
+		must(t, err)
+		if d := tree.dirsOn(top); !unconfined && len(d) != 0 {
+			t.Errorf("confined, a file at the top of the root has directories %v", d)
+		}
+
+		missing, err := tree.Resolve("nope/deeper/x.txt")
+		must(t, err)
+		d := tree.dirsOn(missing)
+		for _, sd := range d {
+			if strings.Contains(sd.name, "nope") {
+				t.Errorf("unconfined=%v: dirsOn described %s, which is not there", unconfined, sd.name)
+			}
+		}
+	}
+}
+
+// The refusal for a swapped directory is new wording, so it is goldened in
+// both renderings.
+func TestTheSwappedDirectoryRefusalIsGolden(t *testing.T) {
+	needsShellSymlinks(t)
+	files := map[string]string{"sub/d.txt": "orig\n", "other/keep.txt": "keep\n"}
+	const swap = "mv sub sub.real && ln -s other sub; printf 'FAIL\\n'; false"
+	_, _, errOut := runCLI(t, cliTree(t, files), []string{"--verify", swap}, "@@ delete sub/d.txt\n")
+	golden(t, "cli-rollback-a-directory-was-replaced", errOut)
+	code, js, _ := runCLI(t, cliTree(t, files), []string{"--json", "--verify", swap}, "@@ delete sub/d.txt\n")
+	if code != exitRollbackFailed {
+		t.Errorf("exit %d, want %d", code, exitRollbackFailed)
+	}
+	golden(t, "cli-rollback-a-directory-was-replaced-json", fixedSeconds(js))
 }

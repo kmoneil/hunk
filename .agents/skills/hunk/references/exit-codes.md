@@ -26,7 +26,9 @@ rolled back.
 file is never removed or overwritten: the file is named and the exit is 4. A
 directory `hunk` made that holds something, or is no longer the one it made, is
 left and named in one line, and the exit stays 3: the batch's own changes are
-undone.
+undone. A file whose directory the verify replaced, with a link or another
+directory, is left and named, and the exit is 4: rollback never follows the
+new name somewhere else.
 
 **A signal to `hunk` while the command runs** (SIGINT, SIGTERM, SIGHUP) ends the
 command and everything it started, puts the batch back, and then ends `hunk` by

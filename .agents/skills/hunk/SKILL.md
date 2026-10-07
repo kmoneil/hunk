@@ -356,5 +356,6 @@ the formatter touched is left alone rather than reverted, and the exit is 4,
 because `hunk` cannot tell a formatter from another agent writing the same tree
 and will not silently discard somebody's work. Nor will it remove or overwrite a
 symbolic link it did not make, or a directory it made once that holds anything
-or has been replaced: it leaves them, and the report names each.
+or has been replaced, or act on a file whose directory the verify replaced: it
+leaves them, and the report names each.
 
