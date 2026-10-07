@@ -334,7 +334,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 
 	p, err := Parse(src, *marker)
 	if err != nil {
-		return fail(exitUsage, err, "")
+		return fail(exitUsage, err, heredocHint(err, *patchFile == ""))
 	}
 
 	dir := *root
@@ -569,6 +569,21 @@ func jsonRequested(args []string) bool {
 		return err == nil && b
 	}
 	return false
+}
+
+// heredocHint is the hint for a patch from stdin whose first line is not a
+// directive. The usual way to get one is two heredocs on one command line with
+// their bodies written in the other order, as in "hunk <<'HUNK' && python3 -
+// <<'PY'" with the Python first: the shell feeds each command the body whose
+// delimiter comes first, so hunk reads the Python (#63). From -f nothing is
+// chained, and a later line is not where a mix-up shows.
+func heredocHint(err error, fromStdin bool) string {
+	var nd notADirective
+	if !fromStdin || !errors.As(err, &nd) || nd.Line != 1 {
+		return ""
+	}
+	return "the patch came from stdin: if two heredocs share its command line, the shell feeds them " +
+		"in the order their delimiters appear, so check that the one hunk reads is the patch"
 }
 
 // readPatch reads the patch from -f or from stdin.

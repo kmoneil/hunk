@@ -95,6 +95,35 @@ func (e *ParseError) Error() string {
 	return fmt.Sprintf("patch line %d: %s", e.Line, e.Msg)
 }
 
+// notADirective is the ParseError for a line where a directive has to stand
+// and something else does. It is a type of its own so the caller can tell it
+// from the other failures at line 1, which no mix-up of heredocs explains.
+type notADirective struct{ *ParseError }
+
+func (e notADirective) Unwrap() error { return e.ParseError }
+
+// shownLine is a line of the patch as a message repeats it. Until 2026-10-07
+// the message said "found payload text" and showed none, so Python from the
+// wrong heredoc, a blank first line, a unified diff, "@@file" and an invisible
+// byte-order mark all read the same. Quoted, so a BOM, an escape or a leading
+// space can be seen, and cut, so a line of minified JSON does not become the
+// message. One trailing CR is the line's ending, as directive reads it.
+func shownLine(line []byte) string {
+	s := string(bytes.TrimSuffix(line, cr))
+	if s == "" {
+		return "a blank line"
+	}
+	const most = 60
+	n := 0
+	for i := range s {
+		if n == most {
+			return strconv.Quote(s[:i]) + "..."
+		}
+		n++
+	}
+	return strconv.Quote(s)
+}
+
 // directiveWords is §3.2's rule 3, and it is the rule doing the real work. It
 // is why a unified diff pasted into a payload ("@@ -1,3 +1,4 @@", whose first
 // word is "-1,3") stays payload, and why a Markdown file full of "@@" does
@@ -343,9 +372,9 @@ loop:
 		ln := i + 1
 		word, arg, ok := directive(lines[i], marker)
 		if !ok {
-			return nil, &ParseError{ln, fmt.Sprintf(
-				"expected a directive, found payload text; a directive is %q at column 0, then a space or tab, then one of file old new create delete append prepend end",
-				marker)}
+			return nil, notADirective{&ParseError{ln, fmt.Sprintf(
+				"expected a directive, found %s; a directive is %q at column 0, then a space or tab, then one of file old new create delete append prepend end",
+				shownLine(lines[i]), marker)}}
 		}
 		i++
 

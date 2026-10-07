@@ -1,0 +1,2 @@
+hunk: patch line 1: expected a directive, found "import json"; a directive is "@@" at column 0, then a space or tab, then one of file old new create delete append prepend end
+the patch came from stdin: if two heredocs share its command line, the shell feeds them in the order their delimiters appear, so check that the one hunk reads is the patch
