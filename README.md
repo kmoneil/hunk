@@ -138,12 +138,15 @@ delete it, or remove the link with `rm`. A symlink in a directory above the
 file is fine: `@@ delete` removes the file the path names.
 
 Every path is resolved against `--root`, the current directory unless one is
-given, and a path that leads outside it, through `..` or a symlink, is refused
-with exit 2. `--allow-outside-root` lifts that for every path in the batch, not
-only the one that needed it, and those paths are then opened by name rather than
-through the handle `hunk` otherwise holds on the root: a symlink on any of them
-is followed wherever it leads at the moment it is used. Give a batch that has to
-reach outside the flag on its own, apart from the rest of the edit.
+given. A symlink that stays inside it is followed wherever it stands on the
+path, whether it holds an absolute path or a relative one. A path that leads
+outside, through `..` or a symlink, is refused with exit 2, and the refusal
+names the symlink when there is one.
+`--allow-outside-root` lifts that for every path in the batch, not only the one
+that needed it, and those paths are then opened by name rather than through the
+handle `hunk` otherwise holds on the root: a symlink on any of them is followed
+wherever it leads at the moment it is used. Give a batch that has to reach
+outside the flag on its own, apart from the rest of the edit.
 
 hunk never edits `.git`, which is git's own and not part of the working tree.
 A path that is `.git` or inside it is refused with exit 2, whether `.git` is a

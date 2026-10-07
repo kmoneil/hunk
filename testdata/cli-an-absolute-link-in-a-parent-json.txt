@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "exit": 0,
+  "files": [
+    {
+      "path": "absdir/in.txt",
+      "op": "modify",
+      "added": 1,
+      "removed": 1
+    }
+  ],
+  "hunks": 1
+}

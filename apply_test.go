@@ -1480,6 +1480,10 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 // the same patch with each of them spelled through sub instead, have to do
 // exactly the same thing to the tree. Until 2026-09-17 they did not, and the
 // commonest difference was an edit lost under exit 0.
+//
+// d is relative and then absolute. Until 2026-10-07 an absolute d was refused
+// for every path through it, which made the two spellings differ in every
+// patch that used d; it is translated now, and has to be the same file too.
 func FuzzASpellingThroughALinkIsTheSameFile(f *testing.F) {
 	for _, s := range []string{
 		"@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file d/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
@@ -1503,13 +1507,17 @@ func FuzzASpellingThroughALinkIsTheSameFile(f *testing.F) {
 		if err != nil {
 			t.Fatalf("respelling made the patch unparseable: %v\n%q", err, respelled)
 		}
-		linkExit, linkTree := applyToLinkedTree(t, p)
-		subExit, subTree := applyToLinkedTree(t, q)
-		if linkExit != subExit {
-			t.Fatalf("exit %d through the link, %d through sub\n%q\n%q", linkExit, subExit, patch, respelled)
-		}
-		if !maps.Equal(linkTree, subTree) {
-			t.Fatalf("the trees differ\nthrough the link: %q\nthrough sub:      %q\npatch: %q", linkTree, subTree, patch)
+		for _, absolute := range []bool{false, true} {
+			linkExit, linkTree := applyToLinkedTree(t, p, absolute)
+			subExit, subTree := applyToLinkedTree(t, q, absolute)
+			if linkExit != subExit {
+				t.Fatalf("absolute=%v: exit %d through the link, %d through sub\n%q\n%q",
+					absolute, linkExit, subExit, patch, respelled)
+			}
+			if !maps.Equal(linkTree, subTree) {
+				t.Fatalf("absolute=%v: the trees differ\nthrough the link: %q\nthrough sub:      %q\npatch: %q",
+					absolute, linkTree, subTree, patch)
+			}
 		}
 	})
 }
@@ -1533,9 +1541,11 @@ func respellThroughSub(patch string) string {
 }
 
 // applyToLinkedTree applies p to a fresh tree of sub/b.go, a.go and the
-// directory link d -> sub, and returns the exit and the whole tree afterwards:
-// files with their contents and modes, links, and directories.
-func applyToLinkedTree(t *testing.T, p *Patch) (int, map[string]string) {
+// directory link d -> sub, absolute or relative, and returns the exit and the
+// whole tree afterwards: files with their contents and modes, links, and
+// directories. An absolute d's destination names this tree's root, so the
+// root is put back as {root} for two trees to compare.
+func applyToLinkedTree(t *testing.T, p *Patch, absolute bool) (int, map[string]string) {
 	t.Helper()
 	root := t.TempDir()
 	if r, err := filepath.EvalSymlinks(root); err == nil {
@@ -1544,13 +1554,21 @@ func applyToLinkedTree(t *testing.T, p *Patch) (int, map[string]string) {
 	must(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
 	must(t, os.WriteFile(filepath.Join(root, "sub", "b.go"), []byte("alpha\nbeta\n"), 0o644))
 	must(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("one\n"), 0o644))
-	must(t, os.Symlink("sub", filepath.Join(root, "d")))
+	dest := "sub"
+	if absolute {
+		dest = filepath.Join(root, "sub")
+	}
+	must(t, os.Symlink(dest, filepath.Join(root, "d")))
 	tree, err := OpenTree(root, false)
 	must(t, err)
 	defer tree.Close()
 
 	_, runErr := NewTxn(tree, Options{}).Run(p)
-	return ExitCode(runErr), snapshot(t, root)
+	after := snapshot(t, root)
+	if absolute {
+		after["d"] = strings.ReplaceAll(after["d"], root, "{root}")
+	}
+	return ExitCode(runErr), after
 }
 
 // An "@@ old x2" that rewrites two lines changed two lines. Counting per hunk
