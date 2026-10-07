@@ -14,6 +14,7 @@ package main
 // So §5.2's object is followed exactly rather than tidied.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -432,8 +433,11 @@ func shortDuration(d time.Duration) string {
 // could not do, shared by a failed verify and --try.
 func writeTranscript(w io.Writer, v *Verify) {
 	fmt.Fprintf(w, "\n$ %s\n", v.Command)
+	// The command's output is shown as a span line is, a control character by
+	// name: printed raw until 2026-10-07, a build log could clear the screen or
+	// set the title of the terminal reading the report.
 	for _, l := range v.Tail {
-		fmt.Fprintln(w, l)
+		fmt.Fprintln(w, shown([]byte(l), false))
 	}
 	if v.TotalLines > 0 {
 		fmt.Fprintf(w, "(last %d of %d lines)\n", len(v.Tail), v.TotalLines)
@@ -693,14 +697,40 @@ func (r *Report) JSON(w io.Writer) error {
 			}
 		}
 	}
-	enc := json.NewEncoder(w)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
 	// Go escapes &, < and > as \\u00xx by default, for embedding in HTML. This
 	// output is read by a program, and a --verify command of "go build && go
 	// test" coming back as "go build \\u0026\\u0026 go test" is noise an agent
 	// has to see through.
 	enc.SetEscapeHTML(false)
-	return enc.Encode(out)
+	// Into memory, of strings, numbers, booleans and slices of them, which
+	// always encode; the write to w is the one that can fail.
+	_ = enc.Encode(out)
+	_, err := w.Write(escapeC1(buf.Bytes()))
+	return err
+}
+
+// escapeC1 escapes the C1 control characters, U+0080 to U+009F, which
+// encoding/json leaves raw while it escapes C0. A terminal printing the report
+// can read U+009B as the start of a control sequence, and until 2026-10-07 a
+// span or a command's output holding one carried it out raw. Everything
+// outside a JSON string is ASCII, so each one found is inside a string.
+func escapeC1(b []byte) []byte {
+	if !bytes.Contains(b, []byte{0xc2}) {
+		return b
+	}
+	var out bytes.Buffer
+	for i := 0; i < len(b); i++ {
+		if b[i] == 0xc2 && i+1 < len(b) && b[i+1] >= 0x80 && b[i+1] <= 0x9f {
+			fmt.Fprintf(&out, `\u%04x`, b[i+1])
+			i++
+			continue
+		}
+		out.WriteByte(b[i])
+	}
+	return out.Bytes()
 }
 
 func joinLines(lines [][]byte) []byte {

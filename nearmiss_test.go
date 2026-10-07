@@ -841,8 +841,17 @@ func FuzzDiagnose(f *testing.F) {
 		if d == nil {
 			t.Fatal("nil diagnosis")
 		}
-		if s := d.Render("  "); s == "" {
+		s := d.Render("  ")
+		if s == "" {
 			t.Fatalf("empty render for kind %v", d.Kind)
+		}
+		// The report prints the file's lines, and nothing in them reaches the
+		// terminal as a control character: only a line's own ending, a CR
+		// before the newline, is printed as it is.
+		for _, line := range strings.Split(s, "\n") {
+			if name, ok := firstControl(strings.TrimSuffix(line, "\r")); ok {
+				t.Fatalf("the report prints %s raw in %q", name, line)
+			}
 		}
 		if len(d.Span) > 20 {
 			t.Errorf("span of %d lines exceeds the context cap", len(d.Span))
@@ -979,8 +988,8 @@ func TestRenderingHelpers(t *testing.T) {
 			"":       "",
 			"   ":    "···",
 		} {
-			if got := visible([]byte(in)); got != want {
-				t.Errorf("visible(%q) = %q, want %q", in, got, want)
+			if got := shown([]byte(in), true); got != want {
+				t.Errorf("shown(%q, true) = %q, want %q", in, got, want)
 			}
 		}
 	})

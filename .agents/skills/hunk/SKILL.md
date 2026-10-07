@@ -25,12 +25,12 @@ success.
 
 | You see | Do not | Do |
 | --- | --- | --- |
-| `expected 1 occurrence, found 0` with a span printed | Re-read the file | The report printed the file's actual bytes. Paste that span into `old` and resend |
+| `expected 1 occurrence, found 0` with a span printed | Re-read the file | The report printed the file's lines. Paste that span into `old` and resend. Where it marks whitespace, a `→` is a tab and a `·` at a line's end a space: put them back as you paste. A character it cannot print is shown as `<U+001B>`. `span` in `--json` is the bytes as they are |
 | `... 3 more lines not shown (--context 3)` under the span | Paste what is shown | The span is cut. Rerun with the `--context` it names, then paste the whole span; a cut one replaces only part of the block |
 | `also nearly there at line 6` | Paste and hope it is the copy you meant | The span shown is one of several. Pasted, it edits that copy; if you meant another, or it says some have the same bytes, add a line of context that only your copy has |
 | `expected 1 occurrence, found 5` with line numbers | Pick one and hope | Add surrounding context to `old` until it is unique, or say `@@ old x5` if you mean all five |
 | `found 2 that overlap`, or `found 2 across both line endings` | Say `@@ old x2` | Add a line of context until `old` fits one place. Overlapping copies share lines, and a copy in a file's other line ending is one this hunk cannot edit, so no count applies |
-| `the text is there with different leading whitespace` | Retype it by hand | The gutter shows the real line. Copy it, tabs and all |
+| `the text is there with different leading whitespace` | Retype it by hand | The gutter shows the real line with each tab as `→`. Copy it with every `→` a tab again, or take `span` from `--json` |
 | `no anchor found` | Try a shorter `old` | Every line of your `old` was compared with every line of the file, whitespace ignored, and not one of them is there. Check the path, or that an earlier hunk did not already change it |
 | `would fall above the top of the file` | Re-read the file | Your `old` overhangs the top. The line it did find is printed with its number; drop the lines above it from your `old` |
 | `skipped: same file as hunk N` | Fix this hunk | It was never evaluated. Fix hunk N; this one may then be fine |

@@ -1043,26 +1043,54 @@ func plural(n int, word string) string {
 	return fmt.Sprintf("%d %ss", n, word)
 }
 
-// visible renders a line with whitespace made legible, for the causes where the
-// difference is whitespace and the reader would otherwise see two identical
-// lines (§7.1 step 5).
-func visible(line []byte) string {
-	trimmed := bytes.TrimRight(line, " \t")
-	tail := line[len(trimmed):]
-	var b strings.Builder
-	for _, r := range string(trimmed) {
-		if r == '\t' {
-			b.WriteString("→")
-			continue
-		}
-		b.WriteRune(r)
+// shown is a line from the tree as the text report prints it. With mark, which
+// is for the causes where the difference is whitespace and the reader would
+// otherwise see two identical lines (§7.1 step 5), a tab is shown as → and a
+// trailing space as ·.
+//
+// Either way, a control character is shown by name, <U+001B>, as a path in a
+// refusal has been since 2026-10-06: the line came from a file, and printed raw
+// an escape clears the reader's screen and a carriage return overwrites what
+// came before it, so the report shows a line that is not there. With mark, a
+// literal → or · is named the same way, because until 2026-10-07 a line
+// holding one beside a tab or a trailing space read "a→b→c··", four characters
+// with two meanings each. The bytes themselves are the JSON span's.
+func shown(line []byte, mark bool) string {
+	// One trailing CR is a CRLF file's line ending, as it is in a patch, and
+	// is printed as it always was: it is harmless before the newline, and named
+	// it would be on every line of every report about a CRLF file.
+	s, ending := strings.CutSuffix(string(line), "\r")
+	end := len(s)
+	if mark {
+		end = len(strings.TrimRight(s, " \t"))
 	}
-	for _, r := range string(tail) {
-		if r == '\t' {
-			b.WriteString("→")
+	var b strings.Builder
+	for i := 0; i < end; {
+		if name, w, ok := controlAt(s, i); ok {
+			b.WriteString("<" + name + ">")
+			i += w
 			continue
 		}
-		b.WriteString("·")
+		r, w := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case mark && r == '\t':
+			b.WriteString("→")
+		case mark && (r == '→' || r == '·'):
+			b.WriteString("<" + codePoint(r) + ">")
+		default:
+			b.WriteString(s[i : i+w])
+		}
+		i += w
+	}
+	for _, c := range s[end:] {
+		if c == '\t' {
+			b.WriteString("→")
+		} else {
+			b.WriteString("·")
+		}
+	}
+	if ending {
+		b.WriteString("\r")
 	}
 	return b.String()
 }
@@ -1107,12 +1135,7 @@ func (d *Diagnosis) Render(indent string) string {
 	// typo. Both hold if visibility follows the difference rather than the kind.
 	makeVisible := whitespaceCause(d.Cause) ||
 		(d.Kind == DiagClosest && differsOnlyInWhitespace(d.Yours, d.Theirs))
-	show := func(line []byte) string {
-		if makeVisible {
-			return visible(line)
-		}
-		return string(line)
-	}
+	show := func(line []byte) string { return shown(line, makeVisible) }
 	gutter := func(n int, line []byte) {
 		fmt.Fprintf(&b, "%s%5d | %s\n", indent, n, show(line))
 	}
