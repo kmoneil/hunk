@@ -1,0 +1,19 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 1,
+      "path": "f.txt",
+      "patch_line": 2,
+      "expected": 1,
+      "found": 0,
+      "near_miss": {
+        "cause": "trailing whitespace",
+        "line": 1,
+        "span": "x\u001b[31mred \none\rTWO\na\u009bb",
+        "detail": "on line 1 your old has none; the file's ends in a space"
+      }
+    }
+  ]
+}

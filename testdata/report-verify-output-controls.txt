@@ -1,0 +1,5 @@
+hunk: applied 1 hunk, verify failed, rolled back 1 file
+
+$ printf '\033]0;title\007\033[2Jboom\n'; false
+<U+001B>]0;title<U+0007><U+001B>[2Jboom
+(last 1 of 1 lines)

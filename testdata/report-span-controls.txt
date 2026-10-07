@@ -1,0 +1,10 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  f.txt  (patch line 2)
+  expected 1 occurrence, found 0
+
+  the text is there with different trailing whitespace, at line 1:
+      1 | x<U+001B>[31mred·
+      2 | one<U+000D>TWO
+      3 | a<U+009B>b
+  on line 1 your old has none; the file's ends in a space

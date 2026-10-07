@@ -62,7 +62,15 @@ func (e *PathRefusal) Error() string { return showControls(e.Path) + ": " + e.De
 // own can show that. Error is defined in terms of it so the two renderings
 // cannot drift: reading Reason directly is how the missing-file refusal came to
 // be the only one that would not say where the tool had looked.
+//
+// A control character anywhere in it is shown by name, as one in Path is: the
+// reason can quote a link's destination, which is the tree's bytes, and until
+// 2026-10-07 one holding an escape coloured the terminal reading the refusal.
 func (e *PathRefusal) Detail() string {
+	return showControls(e.detail())
+}
+
+func (e *PathRefusal) detail() string {
 	var b strings.Builder
 	b.WriteString(e.Reason)
 	// Compared with the separators folded, because the clause exists to say
