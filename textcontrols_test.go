@@ -111,7 +111,7 @@ func TestARefusalNamesAControlInALinksDestination(t *testing.T) {
 	if code != exitNoMatch {
 		t.Fatalf("exit %d: %s%s", code, out, errOut)
 	}
-	if strings.Contains(errOut, "\x1b") || !strings.Contains(errOut, "lk -> ../out<U+001B>[31mside") {
+	if strings.Contains(errOut, "\x1b") || !strings.Contains(slashPaths(errOut), "lk -> ../out<U+001B>[31mside") {
 		t.Errorf("stderr = %q, want the escape named", errOut)
 	}
 	golden(t, "cli-path-refused-link-controls", slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
