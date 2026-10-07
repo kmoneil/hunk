@@ -1,0 +1,12 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  f.txt  (patch line 2)
+  expected 1 occurrence, found 0
+
+  closest span starts at line 2; line 2 of your old differs at column 4:
+    yours | beta
+    file  | betx
+      2 | alpha
+      3 | betx
+      4 | gamma
+  as close at line 6; the span above is line 2's

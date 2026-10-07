@@ -1,0 +1,11 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  f.txt  (patch line 2)
+  expected 1 occurrence, found 0
+
+  the text is there with different trailing whitespace, at line 2:
+      2 | alpha
+      3 | beta·
+      4 | gamma
+  on line 2 your old has none; the file's ends in a space
+  also nearly there at line 6; the span above is line 2's, and it has the same bytes, so pasted alone it matches more than once: add context

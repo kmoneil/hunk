@@ -537,7 +537,6 @@ func TestNamesFlagNeedsAWordOfItsOwn(t *testing.T) {
 var skillOmits = map[string]string{
 	"--verify-lines":       "the 40-line tail is enough to act on, and the whole output is a rerun away",
 	"--quiet":              "an agent reads the success report, and printing nothing saves one line and loses the confirmation",
-	"--context":            "the near-miss span is bounded by old, so the 20-line cap rarely binds (§11)",
 	"--allow-outside-root": "it is the way out of §6.5's path safety, and the skill should not be where an agent learns it",
 	"--version":            "it describes the binary and edits nothing",
 }
