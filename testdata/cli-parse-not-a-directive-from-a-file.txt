@@ -1,0 +1,1 @@
+hunk: patch line 1: expected a directive, found "import json"; a directive is "@@" at column 0, then a space or tab, then one of file old new create delete append prepend end
