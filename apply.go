@@ -402,7 +402,7 @@ func (x *Txn) load(h Hunk) (*file, error) {
 	switch {
 	case err == nil && fi.IsDir():
 		return nil, &PathRefusal{
-			Path: h.Path, Root: x.tree.Root(),
+			Path: h.Path, Root: x.tree.Shown(),
 			Reason: "it is a directory, not a file",
 		}
 	case err == nil && notAFile(fi) != "":
@@ -481,7 +481,7 @@ func (x *Txn) Validate(p *Patch) []Failure {
 				// The destination is in the reason rather than in Resolved,
 				// because it is half of the remedy and has to come before it.
 				Refusal: (&PathRefusal{
-					Path: h.Path, Root: x.tree.Root(),
+					Path: h.Path, Root: x.tree.Shown(),
 					Reason: "it is a symlink to " + tg.name + ", and hunk deletes files, not links; " +
 						"name " + tg.name + " to delete that file, or remove the link outside hunk",
 				}).Detail(),
@@ -491,7 +491,7 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			x.applyWhole(f, h)
 			continue
 		}
-		if err := requireState(f, h, x.tree.Root(), deletes[f.inFileName]); err != nil {
+		if err := requireState(f, h, x.tree.Shown(), deletes[f.inFileName]); err != nil {
 			// Load's classification is per hunk, because the same path can be
 			// legally absent for one hunk and present for the next.
 			f.failedAt = n
@@ -644,7 +644,7 @@ func (x *Txn) pathConflicts(p *Patch) []Failure {
 		if c.inside {
 			reason = fmt.Sprintf("it is inside %s, which hunk %d creates as a file", other.Path, c.with)
 		}
-		refusal := &PathRefusal{Path: h.Path, Root: x.tree.Root(), Reason: reason}
+		refusal := &PathRefusal{Path: h.Path, Root: x.tree.Shown(), Reason: reason}
 		failures = append(failures, Failure{
 			Hunk: n, Path: h.Path, PatchLine: h.Line,
 			Refusal: refusal.Detail(),

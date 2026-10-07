@@ -43,7 +43,7 @@ const maxLinkHops = 32
 // point is that some link in the chain pointed somewhere else.
 type PathRefusal struct {
 	Path     string // as written in the patch
-	Root     string
+	Root     string // as a message names it, which is Tree.Shown
 	Resolved string // where it led, when that is known and different
 	Reason   string
 }
@@ -105,8 +105,10 @@ func (t Target) ViaSymlink() bool { return t.link }
 // A Tree is the file tree a patch applies to, confined to the root unless
 // --allow-outside-root was given.
 type Tree struct {
-	root string   // absolute, with symlinks in the root path itself resolved
-	r    *os.Root // nil when unconfined
+	root  string      // absolute, with symlinks in the root path itself resolved
+	given string      // absolute, as the caller gave it, which is where it thinks it is
+	r     *os.Root    // nil when unconfined
+	top   fs.FileInfo // the root directory r holds, for telling it by identity
 }
 
 // OpenTree opens root for confined access. The root is resolved once, because
@@ -117,20 +119,23 @@ func OpenTree(root string, allowOutside bool) (*Tree, error) {
 	if err != nil {
 		return nil, err
 	}
+	t := &Tree{root: abs, given: abs}
 	// Deliberately named apart from the err above: a failure to resolve is not
 	// an error here, it means the root is not a symlink and abs already stands.
 	// Shadowing err said the same thing less clearly and govet flagged it.
 	if resolved, linkErr := filepath.EvalSymlinks(abs); linkErr == nil {
-		abs = resolved
+		t.root = resolved
 	}
-	t := &Tree{root: abs}
 	if allowOutside {
 		return t, nil
 	}
-	t.r, err = os.OpenRoot(abs)
-	if err != nil {
+	if t.r, err = os.OpenRoot(t.root); err != nil {
 		return nil, err
 	}
+	// A root that cannot be described has no identity to match, so a path is
+	// under it only as text, as every path was until 2026-10-07: os.SameFile
+	// is false for a nil FileInfo.
+	t.top, _ = t.r.Stat(".")
 	return t, nil
 }
 
@@ -144,6 +149,20 @@ func (t *Tree) Close() error {
 // Root is the resolved root directory.
 func (t *Tree) Root() string { return t.root }
 
+// Shown is the root as a refusal names it. A refusal names the root so a
+// caller can see where hunk looked, because the commonest way to one is a
+// process not in the directory it thinks it is in; until 2026-10-07 it named
+// the resolved root alone, so a caller in /tmp/x read "the root is
+// /private/tmp/x", which looks like exactly that mistake. So the root as the
+// caller gave it, from --root or its working directory, and the resolved form
+// after it when the two differ.
+func (t *Tree) Shown() string {
+	if t.given == t.root {
+		return t.root
+	}
+	return t.given + ", which is " + t.root
+}
+
 // Resolve maps a path as written in a patch to the target to operate on.
 //
 // When the path names a symlink, the target is what the link leads to, so a
@@ -152,7 +171,7 @@ func (t *Tree) Root() string { return t.root }
 // difference, not a flag on the write.
 func (t *Tree) Resolve(p string) (Target, error) {
 	if p == "" {
-		return Target{}, &PathRefusal{Path: p, Root: t.root, Reason: "the path is empty"}
+		return Target{}, &PathRefusal{Path: p, Root: t.Shown(), Reason: "the path is empty"}
 	}
 	// No file name can hold a NUL byte, since a path reaches the operating
 	// system as a string that ends at one. Left to the system call, it was
@@ -162,7 +181,7 @@ func (t *Tree) Resolve(p string) (Target, error) {
 	// it. Fuzzing found that on 2026-09-17.
 	if strings.Contains(p, "\x00") {
 		return Target{}, &PathRefusal{
-			Path: p, Root: t.root,
+			Path: p, Root: t.Shown(),
 			Reason: "the path contains a NUL byte, which no filesystem accepts",
 		}
 	}
@@ -174,7 +193,7 @@ func (t *Tree) Resolve(p string) (Target, error) {
 	// refusal for every op, before anything is read.
 	if name, ok := firstControl(p); ok {
 		return Target{}, &PathRefusal{
-			Path: p, Root: t.root,
+			Path: p, Root: t.Shown(),
 			Reason: "the path contains " + name +
 				", a control character, which hunk does not allow in a file name; remove it from the patch",
 		}
@@ -199,7 +218,7 @@ func (t *Tree) Resolve(p string) (Target, error) {
 	}
 	if insideDotGit(full) {
 		return Target{}, &PathRefusal{
-			Path: p, Root: t.root, Resolved: final,
+			Path: p, Root: t.Shown(), Resolved: final,
 			Reason: "it is .git or inside it, which is git's own and not the working tree; hunk never edits there",
 		}
 	}
@@ -257,20 +276,24 @@ func (t *Tree) toName(p string) (string, error) {
 		return filepath.Join(t.root, p), nil
 	}
 	if filepath.IsAbs(p) {
-		// §6.5: absolute paths are allowed only under the root.
+		// §6.5: absolute paths are allowed only under the root. Under it as
+		// text, or under the directory it is by another spelling (see within).
 		rel, err := filepath.Rel(t.root, filepath.Clean(p))
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "", &PathRefusal{
-				Path: p, Root: t.root,
-				Reason: "an absolute path is allowed only under the root",
-			}
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return rel, nil
 		}
-		return rel, nil
+		if rest, ok := t.within(filepath.Clean(p)); ok {
+			return t.joinName("", rest, true), nil
+		}
+		return "", &PathRefusal{
+			Path: p, Root: t.Shown(),
+			Reason: "an absolute path is allowed only under the root",
+		}
 	}
 	clean := filepath.Clean(p)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", &PathRefusal{
-			Path: p, Root: t.root, Resolved: clean,
+			Path: p, Root: t.Shown(), Resolved: clean,
 			Reason: "the path climbs out of the root",
 		}
 	}
@@ -395,7 +418,7 @@ func (t *Tree) resolveLinks(orig, name string, named *bool) (string, bool, error
 			// no answer: the kernel stops at the missing directory too.
 			if slices.Contains(parts[i+1:], "..") {
 				return "", false, &PathRefusal{
-					Path: orig, Root: t.root, Resolved: t.joinName(base, parts, false),
+					Path: orig, Root: t.Shown(), Resolved: t.joinName(base, parts, false),
 					Reason: "a symlink on it climbs out of a directory that does not exist",
 				}
 			}
@@ -407,7 +430,7 @@ func (t *Tree) resolveLinks(orig, name string, named *bool) (string, bool, error
 		}
 		if links >= maxLinkHops {
 			return "", false, &PathRefusal{
-				Path: orig, Root: t.root, Resolved: here,
+				Path: orig, Root: t.Shown(), Resolved: here,
 				Reason: "too many symlinks; the chain loops or is absurd",
 			}
 		}
@@ -415,7 +438,7 @@ func (t *Tree) resolveLinks(orig, name string, named *bool) (string, bool, error
 		target, err := t.readlink(here)
 		if err != nil {
 			return "", false, &PathRefusal{
-				Path: orig, Root: t.root, Resolved: here,
+				Path: orig, Root: t.Shown(), Resolved: here,
 				Reason: "the symlink could not be read: " + err.Error(),
 			}
 		}
@@ -428,7 +451,7 @@ func (t *Tree) resolveLinks(orig, name string, named *bool) (string, bool, error
 		switch {
 		case !inside && i == len(parts)-1:
 			return "", false, &PathRefusal{
-				Path: orig, Root: t.root, Resolved: dest,
+				Path: orig, Root: t.Shown(), Resolved: dest,
 				Reason: "it is a symlink out of the root",
 			}
 		case !inside:
@@ -483,9 +506,41 @@ func (t *Tree) linkDestination(dest string) (absolute bool, base string, parts [
 			dest = filepath.VolumeName(t.root) + dest
 		}
 		rest, ok := below(t.root, dest)
+		if !ok {
+			rest, ok = t.within(dest)
+		}
 		return true, "", rest, ok
 	}
 	return false, "", splitPath(dest), true
+}
+
+// within finds the root in an absolute path by identity, where the text does
+// not: the first prefix of p, from the top, that is the root directory, and the
+// components after it as written. Until 2026-10-07 a path was under the root
+// only as text, against the root resolved, so one written through another
+// spelling of the same directory was refused as outside it (#62): through /tmp
+// on macOS, which is /private/tmp, in any mktemp -d directory there, which is
+// under /var and so /private/var, in another case where the filesystem folds
+// it, or through the caller's own link to the root.
+//
+// Only directories above the root are looked up by name, and only to tell
+// which of them is the root: nothing is opened there, and what follows it is a
+// name under the root like any other, walked by resolveLinks and confined by
+// os.Root at every use. A prefix that is not there ends the search, since
+// nothing under it can be the root.
+func (t *Tree) within(p string) ([]string, bool) {
+	vol := filepath.VolumeName(p)
+	parts := splitPath(p[len(vol):])
+	for i := range parts {
+		fi, err := os.Stat(t.joinName(vol+string(filepath.Separator), parts[:i+1], false))
+		if err != nil {
+			return nil, false
+		}
+		if os.SameFile(fi, t.top) {
+			return parts[i+1:], true
+		}
+	}
+	return nil, false
 }
 
 // climbsAsText reports where a confined final link's destination leads when
@@ -596,7 +651,7 @@ func (t *Tree) stop(orig, name string, via bool, held error, climbed, link, dest
 func (t *Tree) leaves(orig, climbed, link, dest string) *PathRefusal {
 	if climbed != "" {
 		return &PathRefusal{
-			Path: orig, Root: t.root, Resolved: climbed,
+			Path: orig, Root: t.Shown(), Resolved: climbed,
 			Reason: "it is a symlink out of the root",
 		}
 	}
@@ -605,7 +660,7 @@ func (t *Tree) leaves(orig, climbed, link, dest string) *PathRefusal {
 		reason = fmt.Sprintf("the symlink %s -> %s leads out of the root", link, dest)
 	}
 	return &PathRefusal{
-		Path: orig, Root: t.root,
+		Path: orig, Root: t.Shown(),
 		Reason: reason + "; --allow-outside-root lifts that for every path in the batch, " +
 			"so give a path that has to reach outside a batch of its own",
 	}
@@ -619,7 +674,7 @@ func (t *Tree) cannotFollow(orig, link, dest string, err error) *PathRefusal {
 		err = pe.Err // the path it names is the spliced one, which can run to pages
 	}
 	return &PathRefusal{
-		Path: orig, Root: t.root,
+		Path: orig, Root: t.Shown(),
 		Reason: fmt.Sprintf("the symlink %s -> %s cannot be followed (%v), "+
 			"and a .. after a symlink has no answer without following it; name the file itself",
 			link, dest, err),
