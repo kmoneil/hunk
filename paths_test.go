@@ -240,7 +240,7 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 			{"a chain of directory links", "e/in.txt", "sub/in.txt", true},
 			{"a final link under a directory link", "d/alias.link", "sub/in.txt", true},
 			{"a link whose destination climbs with ..", "sub/inner/f.txt", "other/f.txt", true},
-			{"a .. after a link inside a destination, resolved physically", "phys.link", "sub/in.txt", true},
+			{"a .. after a link inside a destination, as the platform reads it", "phys.link", dotDotAnswer("sub/in.txt", "in.txt"), true},
 			{"a new file under a directory link", "d/new/x.go", "sub/new/x.go", true},
 			{"a dangling directory link, written through", "l/new.go", "internal/new.go", true},
 			{"a path below a dangling directory link", "l/a/b.go", "internal/a/b.go", true},
@@ -268,9 +268,16 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 		// A .. inside a link's destination, after a directory that does not
 		// exist, has no physical answer: the kernel stops at the missing
 		// directory. Written through, it would make a path that no spelling of
-		// it reaches, so it is refused.
+		// it reaches, so it is refused. Windows reads the .. as text and never
+		// looks for the missing directory, so there it is top.txt.
 		t.Run(mode.name+", a .. after a directory that does not exist", func(t *testing.T) {
-			_, err := tree.Resolve("nowhere.link")
+			tg, err := tree.Resolve("nowhere.link")
+			if !dotDotIsWalked() {
+				if want := mode.want("top.txt"); err != nil || tg.name != want {
+					t.Errorf("Resolve = %q, %v; want %q", tg.name, err, want)
+				}
+				return
+			}
 			var pr *PathRefusal
 			if !errors.As(err, &pr) {
 				t.Fatalf("Resolve = %v, want a *PathRefusal", err)
@@ -312,19 +319,16 @@ func TestResolveGivesAFileOneName(t *testing.T) {
 	}
 
 	// Unconfined, a ".." above the top of the path stays at the top, as it does
-	// for the kernel. Confined, os.Root refuses the same link as an escape. Where
-	// the platform will not walk such a link at all, the path comes back as
-	// written, for load to report (see climbingPastTheTopResolves).
+	// for the kernel. Confined, os.Root refuses the same link as an escape. On
+	// Windows this came back as written until 2026-10-07, since the walk could
+	// not get past the climb; read as text, as Windows reads it, it climbs to
+	// the top and stays there like anywhere else.
 	vol := filepath.VolumeName(root)
 	climb := filepath.Join(strings.Repeat(".."+string(filepath.Separator), 64), root[len(vol):], "sub")
 	must(t, os.Symlink(climb, filepath.Join(root, "climb.link")))
 	tg, err = loose.Resolve("climb.link/in.txt")
 	must(t, err)
-	want := filepath.Join(root, "sub", "in.txt")
-	if !climbingPastTheTopResolves() {
-		want = filepath.Join(root, "climb.link", "in.txt")
-	}
-	if tg.name != want {
+	if want := filepath.Join(root, "sub", "in.txt"); tg.name != want {
 		t.Errorf("unconfined climb.link/in.txt = %q, want %q", tg.name, want)
 	}
 }
@@ -1661,7 +1665,7 @@ func TestALinkLeadsWhereTheKernelWalksIt(t *testing.T) {
 			"a .. after eight directory links", "el8.link",
 			want{name: "sub/c.txt"},
 			want{name: "{root}/sub/c.txt"},
-			anywhere,
+			onPOSIX,
 		},
 		{
 			"a .. after a file", "nd.link",

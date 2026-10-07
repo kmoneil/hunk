@@ -83,9 +83,6 @@ func TestAnAbsoluteLinkInAParentIsTranslated(t *testing.T) {
 			{"a final link that names no volume", "absdir/rooted.link", "sub/in.txt"},
 		} {
 			t.Run(mode.name+", "+c.name, func(t *testing.T) {
-				if mode.unconfin && strings.Contains(c.in, "rooted") && !rootedLinksResolveUnconfined() {
-					t.Skip("unconfined, a destination with no volume is still read as relative; see rootedLinksResolveUnconfined")
-				}
 				tg, err := tree.Resolve(c.in)
 				if err != nil {
 					t.Fatalf("Resolve(%q): %v", c.in, err)
