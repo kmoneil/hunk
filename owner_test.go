@@ -1,8 +1,13 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -105,6 +110,154 @@ func TestAGroupThatCannotBeKeptGetsWhatOthersHad(t *testing.T) {
 			fi, err := os.Stat(p)
 			must(t, err)
 			assertMode(t, fi.Mode(), c.after)
+		})
+	}
+}
+
+// Every rewrite keeps setuid, setgid and sticky as it keeps the permission
+// bits, decided 2026-10-07: §6.1's "chmod to the original mode". Until then
+// load recorded Perm(), which in Go is the nine permission bits alone, so
+// every row here lost all three, including the four that promise the file back
+// with the same bytes and mode. The invoker owns a.txt and is in its group, so
+// each bit kept is one it could set with chmod anyway.
+func TestEveryRewriteKeepsTheSpecialBits(t *testing.T) {
+	needsPOSIXPerms(t)
+	const modify = "@@ file a.txt\n@@ old\none\n@@ new\nONE\n"
+	const overwrite = "@@ delete a.txt\n@@ create a.txt\nTWO\n@@ end\n"
+	shapes := []struct {
+		name  string
+		args  []string
+		patch string
+		code  int
+		want  string
+	}{
+		{"a modify", nil, modify, exitOK, "ONE\n"},
+		{"an overwrite", nil, overwrite, exitOK, "TWO"},
+		{"--try, a modify", []string{"--try", "true"}, modify, exitOK, "one\n"},
+		{"--try, a delete", []string{"--try", "true"}, "@@ delete a.txt\n", exitOK, "one\n"},
+		{"a failed --verify, a modify", []string{"--verify", "false"}, modify, exitVerifyFailed, "one\n"},
+		{"a failed --verify, a delete", []string{"--verify", "false"}, "@@ delete a.txt\n", exitVerifyFailed, "one\n"},
+		{"a failed --verify, an overwrite", []string{"--verify", "false"}, overwrite, exitVerifyFailed, "one\n"},
+	}
+	for _, mode := range []fs.FileMode{
+		0o755 | fs.ModeSetuid,
+		0o755 | fs.ModeSetgid,
+		0o755 | fs.ModeSetuid | fs.ModeSetgid,
+		0o644 | fs.ModeSticky,
+		0o644 | fs.ModeSetgid,
+		0o755 | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky,
+	} {
+		for _, c := range shapes {
+			t.Run(mode.String()+", "+c.name, func(t *testing.T) {
+				root := cliTree(t, map[string]string{"a.txt": "one\n"})
+				p := filepath.Join(root, "a.txt")
+				withSpecialMode(t, p, mode)
+				code, stdout, stderr := runCLI(t, root, c.args, c.patch)
+				if code != c.code {
+					t.Fatalf("exit %d, want %d\nstdout: %s\nstderr: %s", code, c.code, stdout, stderr)
+				}
+				if got := readFile(t, root, "a.txt"); got != c.want {
+					t.Errorf("a.txt = %q, want %q", got, c.want)
+				}
+				fi, err := os.Stat(p)
+				must(t, err)
+				assertMode(t, fi.Mode(), mode)
+			})
+		}
+	}
+}
+
+// keepOwner keeps setuid only while the file keeps its owner, and setgid only
+// while it keeps its group, decided 2026-10-07. A rewrite of another user's
+// file comes out the invoker's, and setuid on it would run as the invoker; a
+// group that cannot be kept leaves the file in another, and setgid would run
+// as that. Sticky means the same whoever owns the file, and is kept. So every
+// bit hunk sets is one the invoker could set with chmod on the file as it ends
+// up.
+//
+// The owner and group that cannot be kept are a fake like's, since giving a
+// real file another owner needs privilege, and fchown refuses any but the
+// invoker's own, as it does without privilege, so that root gets the same
+// answers. The directory is in the invoker's group, so the rewrite lands
+// where a setgid would be honoured if hunk asked for one.
+func TestASpecialBitIsKeptOnlyWithWhatItNames(t *testing.T) {
+	needsPOSIXPerms(t)
+	me, mine := os.Geteuid(), os.Getegid()
+	notMine := mine + 1
+	for inGroup(t, notMine) {
+		notMine++
+	}
+	const all = 0o750 | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
+	for _, c := range []struct {
+		name      string
+		uid, gid  int
+		want      fs.FileMode
+		wantCalls int
+	}{
+		{"the owner and the group kept", me, mine, all, 1},
+		{"the owner not kept", me + 1, mine, 0o750 | fs.ModeSetgid | fs.ModeSticky, 2},
+		{"the group not kept", me, notMine, 0o700 | fs.ModeSetuid | fs.ModeSticky, 2},
+		{"neither kept", me + 1, notMine, 0o700 | fs.ModeSticky, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := mktree(t)
+			p := filepath.Join(root, "top.txt")
+			withSpecialMode(t, p, all)
+			fi, err := os.Stat(p)
+			must(t, err)
+			like := ownedBy(t, fi, c.uid, c.gid)
+
+			calls := 0
+			orig := fchown
+			t.Cleanup(func() { fchown = orig })
+			fchown = func(f *os.File, uid, gid int) error {
+				calls++
+				if (uid != -1 && uid != me) || gid != mine {
+					return fs.ErrPermission
+				}
+				return f.Chown(uid, gid)
+			}
+
+			tree, err := OpenTree(root, false)
+			must(t, err)
+			defer tree.Close()
+			tg, err := tree.Resolve("top.txt")
+			must(t, err)
+			must(t, tree.WriteAtomic(tg, []byte("rewritten\n"), all, like))
+
+			fi, err = os.Stat(p)
+			must(t, err)
+			assertMode(t, fi.Mode(), c.want)
+			if calls != c.wantCalls {
+				t.Errorf("fchown called %d times, want %d", calls, c.wantCalls)
+			}
+		})
+	}
+}
+
+// Perm() is how the special bits were lost: in Go it is the nine permission
+// bits alone, and load recorded it and the check compared it, so setuid, setgid
+// and sticky were dropped by every rewrite and invisible to the check until
+// 2026-10-07. A file's mode is recorded, compared and written as keptMode now,
+// and nothing outside the tests calls Perm() at all, so a new use has to be
+// argued for here rather than slip in.
+func TestNoCodeKeepsOnlyThePermissionBits(t *testing.T) {
+	names, err := filepath.Glob("*.go")
+	must(t, err)
+	fset := token.NewFileSet()
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		must(t, err)
+		ast.Inspect(f, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Perm" {
+					t.Errorf("%s calls Perm(), which drops setuid, setgid and sticky; use keptMode", fset.Position(call.Pos()))
+				}
+			}
+			return true
 		})
 	}
 }

@@ -179,7 +179,10 @@ func brokenShell(t *testing.T) string {
 	return dir
 }
 
-// assertMode checks a permission bit set on the platforms that have one.
+// assertMode checks a mode on the platforms that have one: the permission bits
+// and setuid, setgid and sticky, everything a chmod sets. Until 2026-10-07 it
+// compared Perm(), which leaves those three out, so no test could see a rewrite
+// drop them, and every rewrite did.
 //
 // Preferred over needsPOSIXPerms wherever the mode is one assertion inside a
 // test that checks other things too: skipping the whole test to skip one line
@@ -190,10 +193,55 @@ func assertMode(t *testing.T, got fs.FileMode, want fs.FileMode) {
 	if runtime.GOOS == "windows" {
 		return // no POSIX permission bits to assert; see needsPOSIXPerms
 	}
-	if got.Perm() != want {
-		t.Errorf("mode %v, want %v", got.Perm(), want)
+	if got := got & chmodBits; got != want {
+		t.Errorf("mode %v, want %v", got, want)
 	}
 }
+
+// chmodBits is what assertMode compares. Spelled out here rather than taken
+// from the code under test, so that a mistake in the code's set is not made
+// in the test's too.
+const chmodBits = fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
+
+// withSpecialMode gives the file p mode, which may hold setuid, setgid or
+// sticky, after putting p and its directory in the invoker's own group: macOS
+// drops setgid, silently, from a file in a group the caller is not in, and a
+// directory made under /tmp there is in wheel. A platform that still refuses
+// or drops a bit for the file's own owner is a fact about it, not about hunk,
+// and skips.
+func withSpecialMode(t *testing.T, p string, mode fs.FileMode) {
+	t.Helper()
+	must(t, os.Chown(filepath.Dir(p), -1, os.Getegid()))
+	must(t, os.Chown(p, -1, os.Getegid()))
+	if err := os.Chmod(p, mode); err != nil {
+		t.Skipf("chmod %v is refused here for the file's owner: %v", mode, err)
+	}
+	fi, err := os.Stat(p)
+	must(t, err)
+	if got := fi.Mode() & chmodBits; got != mode {
+		t.Skipf("chmod %v leaves %v here, for the file's owner", mode, got)
+	}
+}
+
+// ownedBy is fi as if its owner were uid and its group gid, for a keepOwner
+// that must not be able to keep them: giving a real file another owner needs
+// privilege. Set through reflect, as groupOf reads, so that this file compiles
+// on Windows, where syscall.Stat_t does not exist.
+func ownedBy(t *testing.T, fi fs.FileInfo, uid, gid int) fs.FileInfo {
+	t.Helper()
+	st := reflect.New(reflect.TypeOf(fi.Sys()).Elem())
+	st.Elem().Set(reflect.ValueOf(fi.Sys()).Elem())
+	st.Elem().FieldByName("Uid").SetUint(uint64(uid))
+	st.Elem().FieldByName("Gid").SetUint(uint64(gid))
+	return fakeOwner{fi, st.Interface()}
+}
+
+type fakeOwner struct {
+	fs.FileInfo
+	sys any
+}
+
+func (f fakeOwner) Sys() any { return f.sys }
 
 // groupOf is the group a file belongs to. The tests that ask are POSIX ones and
 // call needsPOSIXPerms first, since Windows has no file groups. The field is

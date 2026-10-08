@@ -339,13 +339,15 @@ Both gaps are repaired by the version control your tree is already under, which
 is why neither is worth the complexity of closing.
 
 Every write is a new file renamed over the old one, so a file `hunk` rewrites,
-including one a rollback puts back, keeps its bytes and its permission bits but
-is a new file. It keeps the file's group where you are in that group. Where you
-are not, the group it ends up in gets only the permissions everyone else had,
-so nobody in that group gains anything by the change. It keeps the owner only
-when run as root: editing a file someone else owns makes it yours. ACLs and
-extended attributes are not kept. A file whose access depends on any of those
-is better edited another way.
+including one a rollback puts back, keeps its bytes and its mode, setuid,
+setgid and sticky included, but is a new file. It keeps the file's group where
+you are in that group. Where you are not, the group it ends up in gets only the
+permissions everyone else had, so nobody in that group gains anything by the
+change, and setgid is dropped, since it would name the wrong group. It keeps
+the owner only when run as root: editing a file someone else owns makes it
+yours, and drops setuid, which would otherwise run it as you. ACLs and extended
+attributes are not kept. A file whose access depends on any of those is better
+edited another way.
 
 ## Install
 

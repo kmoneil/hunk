@@ -26,21 +26,38 @@ import (
 //     file now has can do more than anybody could. Never a refusal: sed -i
 //     makes the same edit without complaint.
 //
-// A filesystem with no owners refuses both chowns, and there the group is
-// usually already the right one, so the last resort is only for a group that
-// actually differs. The owner of another user's file is not kept without
-// privilege, and ACLs and extended attributes are not kept at all: the standard
-// library has no way to copy them on macOS. README says so.
+// What the file ended up with is asked of the file, not inferred from which
+// chown took. A filesystem with no owners refuses both chowns, and there the
+// group is usually already the right one, so the last resort is only for a
+// group that actually differs.
+//
+// setuid and setgid are kept only with what they name, decided 2026-10-07:
+// setuid while the file keeps its owner, since on the invoker's file it would
+// run as the invoker, and setgid while it keeps its group, since in another
+// group it would run as that one. So every bit kept is one the invoker could
+// set with chmod on the file as it ends up. Sticky means the same whoever owns
+// the file, and is kept.
+//
+// The owner of another user's file is not kept without privilege, and ACLs and
+// extended attributes are not kept at all: the standard library has no way to
+// copy them on macOS. README says so.
 func keepOwner(f *os.File, like fs.FileInfo, mode fs.FileMode) fs.FileMode {
 	if like == nil {
 		return mode
 	}
 	want := like.Sys().(*syscall.Stat_t)
-	if fchown(f, int(want.Uid), int(want.Gid)) == nil || fchown(f, -1, int(want.Gid)) == nil {
-		return mode
+	if fchown(f, int(want.Uid), int(want.Gid)) != nil {
+		_ = fchown(f, -1, int(want.Gid))
 	}
-	if fi, err := f.Stat(); err == nil && fi.Sys().(*syscall.Stat_t).Gid == want.Gid {
-		return mode
+	var got *syscall.Stat_t
+	if fi, err := f.Stat(); err == nil {
+		got = fi.Sys().(*syscall.Stat_t)
 	}
-	return mode&^0o070 | (mode&0o007)<<3
+	if got == nil || got.Uid != want.Uid {
+		mode &^= fs.ModeSetuid
+	}
+	if got == nil || got.Gid != want.Gid {
+		mode = mode&^fs.ModeSetgid&^0o070 | (mode&0o007)<<3
+	}
+	return mode
 }
