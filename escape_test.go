@@ -355,7 +355,9 @@ func TestAPathThatLeavesTheRootIsGolden(t *testing.T) {
 }
 
 // The report of an edit through an absolute link in a parent names the path
-// as the patch wrote it, as every report does, in both renderings.
+// as the patch wrote it, and the file it resolved to, in both renderings.
+// Changed deliberately on 2026-10-08, when reports began to say where a path
+// led (resolved_test.go).
 func TestAnEditThroughAnAbsoluteLinkInAParentIsGolden(t *testing.T) {
 	tree := func() string {
 		root := cliTree(t, map[string]string{"sub/in.txt": "x\n"})

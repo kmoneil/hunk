@@ -4,6 +4,7 @@
   "files": [
     {
       "path": "absdir/in.txt",
+      "resolved": "sub/in.txt",
       "op": "modify",
       "added": 1,
       "removed": 1

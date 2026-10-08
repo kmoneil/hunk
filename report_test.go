@@ -198,6 +198,35 @@ func TestSuccessLinesUpOnTheLongestPath(t *testing.T) {
 	}
 }
 
+// The same rule for a path that is not ASCII. The width was counted in bytes
+// until 2026-10-08 and fmt pads in runes, so such a path was padded past
+// itself, and two rows did not line up. A test for the resolved-name note
+// found it, with a decomposed é: two bytes for one more rune.
+func TestSuccessPadsAPathByItsRunes(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{"alone, composed", []string{"café.txt"}, "M café.txt +1 -1"},
+		{"alone, decomposed", []string{"café.txt"}, "M café.txt +1 -1"},
+		{"beside an ASCII path", []string{"café.txt", "a.txt"}, "M café.txt +1 -1\nM a.txt    +1 -1"},
+		{"the ASCII path longer", []string{"é.txt", "abcdef.txt"}, "M é.txt      +1 -1\nM abcdef.txt +1 -1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			res := &Result{Hunks: len(c.paths)}
+			for _, p := range c.paths {
+				res.Files = append(res.Files, FileResult{Path: p, Op: "modify", Added: 1, Removed: 1})
+			}
+			var out, errOut bytes.Buffer
+			(&Report{Result: res}).Text(&out, &errOut, false)
+			if got := rows(out.String()); got != c.want {
+				t.Errorf("rows:\n got %q\nwant %q", got, c.want)
+			}
+		})
+	}
+}
+
 // §4.1 is a closed set, and §5.2's JSON carries the number, so one mapping
 // serves both. Two mappings for one table is how they diverge.
 func TestExitCode(t *testing.T) {

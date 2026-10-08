@@ -137,6 +137,22 @@ the link behind; the refusal names the file it leads to. Name that file to
 delete it, or remove the link with `rm`. A symlink in a directory above the
 file is fine: `@@ delete` removes the file the path names.
 
+The report names each path as you wrote it and, when it led to a file under
+another name, that name as well:
+
+```
+M link.txt +1 -1  (it resolves to real.txt)
+```
+
+That is the name version control knows, and the link's is not: after an edit
+through `link.txt`, `git diff link.txt` shows nothing and `git checkout
+link.txt` restores nothing. A spelling the directory stores another way is
+named the same way, such as `sub/README.MD` for `Sub/README.md` on a filesystem
+that folds case. A file rollback could not put back carries the same clause,
+since the report sends you to version control for it, and `--json` gives the
+name as `"resolved"`. Under `--allow-outside-root` a file outside the root is
+named by its absolute path, so a write that left the root says where it went.
+
 Every path is resolved against `--root`, the current directory unless one is
 given. An absolute path is under the root when it names the root's directory by
 any spelling, so on macOS `/tmp/x/f.txt` and `/private/tmp/x/f.txt` are the same
