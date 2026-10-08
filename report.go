@@ -23,6 +23,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // A Verify is the outcome of --verify (§5.1's JSON, §5.3's text).
@@ -80,8 +81,20 @@ type Verify struct {
 // A NotRestored is a file rollback left alone because something rewrote it
 // after hunk did (§6.3). Naming it is the whole of exit 4's usefulness.
 type NotRestored struct {
-	Path   string
-	Reason string
+	Path     string
+	Resolved string // where Path led, when that is another name (§6.5)
+	Reason   string
+}
+
+// withResolved is a path as the patch wrote it, followed by where it led when
+// that is another name. The name comes from the tree, a link's destination
+// among it, so a control character in it is shown by name, as a refusal
+// shows one.
+func withResolved(path, resolved string) string {
+	if resolved == "" {
+		return path
+	}
+	return path + " " + resolvedClause(showControls(resolved))
 }
 
 // A Report is everything one invocation has to say.
@@ -246,14 +259,21 @@ func (r *Report) writeSuccess(w io.Writer) {
 	}
 	// Pad to the longest path so the stats line up. §5.1's example puts two of
 	// three rows at the column this produces and the third one past it.
+	//
+	// Counted in runes, because fmt pads in runes. Until 2026-10-08 it was
+	// counted in bytes, so a path with a non-ASCII letter was padded past
+	// itself: alone, "M é.txt  +1 -1" in NFD, and beside an ASCII path the
+	// two did not line up.
 	width := 0
 	for _, f := range res.Files {
-		if len(f.Path) > width {
-			width = len(f.Path)
-		}
+		width = max(width, utf8.RuneCountInString(f.Path))
 	}
 	for _, f := range res.Files {
 		fmt.Fprintf(w, "%s %-*s +%d -%d", opLetter(f.Op), width, f.Path, f.Added, f.Removed)
+		// About the path, so before the notes about the bytes.
+		if f.Resolved != "" {
+			fmt.Fprint(w, "  "+resolvedClause(showControls(f.Resolved)))
+		}
 		if f.SeamAdded {
 			fmt.Fprint(w, "  (added a final newline)")
 		}
@@ -449,16 +469,20 @@ func writeTranscript(w io.Writer, v *Verify) {
 		fmt.Fprintf(w, "\n%s, which hunk created, was already gone: something else removed it.\n", p)
 	}
 	for _, d := range v.Left {
-		fmt.Fprintf(w, "\n%s, which hunk made as a directory, %s, so hunk left it.\n", d.Path, d.State)
+		// The name is the tree's, through any link, so it is shown as a
+		// destination is. Printed raw until 2026-10-08.
+		fmt.Fprintf(w, "\n%s, which hunk made as a directory, %s, so hunk left it.\n", showControls(d.Path), d.State)
 	}
 	writeNotRestored(w, v.NotRestored)
 }
 
 func writeNotRestored(w io.Writer, notRestored []NotRestored) {
 	for _, n := range notRestored {
-		fmt.Fprintf(w, "\n%s was not restored.\n", n.Path)
+		fmt.Fprintf(w, "\n%s was not restored.\n", withResolved(n.Path, n.Resolved))
+		// A reason can name a directory on the path, which is the tree's
+		// name too. Printed raw until 2026-10-08.
 		for _, line := range strings.Split(n.Reason, "\n") {
-			fmt.Fprintf(w, "  %s\n", line)
+			fmt.Fprintf(w, "  %s\n", showControls(line))
 		}
 		fmt.Fprintln(w, "  hunk did not write its original bytes back; they are in version control.")
 	}
@@ -512,6 +536,7 @@ type jsonReport struct {
 
 type jsonFile struct {
 	Path           string `json:"path"`
+	Resolved       string `json:"resolved,omitempty"`
 	Op             string `json:"op"`
 	Added          int    `json:"added"`
 	Removed        int    `json:"removed"`
@@ -582,8 +607,9 @@ type jsonLeft struct {
 }
 
 type jsonRestore struct {
-	Path   string `json:"path"`
-	Reason string `json:"reason"`
+	Path     string `json:"path"`
+	Resolved string `json:"resolved,omitempty"`
+	Reason   string `json:"reason"`
 }
 
 type jsonFailure struct {
@@ -632,7 +658,7 @@ func (r *Report) JSON(w io.Writer) error {
 	if r.Result != nil {
 		out.Hunks = r.Result.Hunks
 		for _, f := range r.Result.Files {
-			out.Files = append(out.Files, jsonFile{f.Path, f.Op, f.Added, f.Removed, f.SeamAdded, f.NoFinalNewline})
+			out.Files = append(out.Files, jsonFile{f.Path, f.Resolved, f.Op, f.Added, f.Removed, f.SeamAdded, f.NoFinalNewline})
 		}
 	}
 	if v := r.Verify; v != nil && v.Try {
@@ -641,7 +667,7 @@ func (r *Report) JSON(w io.Writer) error {
 			Output: v.Tail, RolledBack: v.RolledBack, Gone: v.Gone, jsonEnded: endedJSON(v),
 		}
 		for _, n := range v.NotRestored {
-			jt.NotRestored = append(jt.NotRestored, jsonRestore{n.Path, n.Reason})
+			jt.NotRestored = append(jt.NotRestored, jsonRestore{n.Path, n.Resolved, n.Reason})
 		}
 		jt.Left = jsonLefts(v.Left)
 		out.Try = jt
@@ -652,7 +678,7 @@ func (r *Report) JSON(w io.Writer) error {
 			jsonEnded: endedJSON(v),
 		}
 		for _, n := range v.NotRestored {
-			jv.NotRestored = append(jv.NotRestored, jsonRestore{n.Path, n.Reason})
+			jv.NotRestored = append(jv.NotRestored, jsonRestore{n.Path, n.Resolved, n.Reason})
 		}
 		jv.Left = jsonLefts(v.Left)
 		out.Verify = jv
@@ -693,7 +719,7 @@ func (r *Report) JSON(w io.Writer) error {
 		var ce *CommitError
 		if errors.As(r.Err, &ce) {
 			for _, n := range ce.NotRestored {
-				out.NotRestored = append(out.NotRestored, jsonRestore{n.Path, n.Reason})
+				out.NotRestored = append(out.NotRestored, jsonRestore{n.Path, n.Resolved, n.Reason})
 			}
 		}
 	}

@@ -81,7 +81,7 @@ func (e *PathRefusal) detail() string {
 	// POSIX, where a backslash is an ordinary character in a filename and must
 	// keep telling two paths apart.
 	if e.Resolved != "" && filepath.ToSlash(e.Resolved) != filepath.ToSlash(e.Path) {
-		fmt.Fprintf(&b, " (it resolves to %s)", e.Resolved)
+		b.WriteString(" " + resolvedClause(e.Resolved))
 	}
 	fmt.Fprintf(&b, "; the root is %s", e.Root)
 	return b.String()
@@ -94,7 +94,11 @@ func (e *PathRefusal) detail() string {
 type Target struct {
 	name string // relative to the tree root when confined, absolute when not
 	orig string // as written in the patch, for messages
-	link bool   // a symlink on the path the patch wrote led here
+	// written is the name orig gives before any link is followed or any
+	// component respelled: cleaned, and relative to the root when confined.
+	// ResolvesTo compares it with name to say where a path led.
+	written string
+	link    bool // a symlink on the path the patch wrote led here
 	// named means the entry the patch named is itself a symlink, as against
 	// one in a directory above it. A write goes through either (§6.5), and a
 	// delete can go through only the second: through the first it would
@@ -102,13 +106,70 @@ type Target struct {
 	named bool
 }
 
-// Orig is the path as the patch wrote it. Reports say that, not the resolved
-// name, because that is the string the agent can act on.
+// Orig is the path as the patch wrote it. Reports say that, because it is the
+// string the agent wrote and can find in its patch, and where it led beside it
+// when that is another name (Tree.ResolvesTo).
 func (t Target) Orig() string { return t.orig }
 
 // ViaSymlink reports whether a symlink anywhere on the path the patch wrote led
 // to this target. §6.5 writes through the link rather than replacing it.
 func (t Target) ViaSymlink() bool { return t.link }
+
+// ResolvesTo is where tg led, as a report shows it, when that is not the name
+// the patch wrote: through a symlink, or in a spelling its directory stores
+// another way (§6.5, §3.5). It is "" when the path names its file by the
+// file's own name, as "./a.txt" and an absolute path under the root do.
+//
+// Until 2026-10-08 every report named the path as written and nothing else,
+// and that is a name git cannot act on: with in.txt -> sub/real.txt,
+// "git diff in.txt" is empty and "git checkout in.txt" restores nothing, while
+// exit 4 sends the reader to version control for the file it names.
+func (t *Tree) ResolvesTo(tg Target) string {
+	if got := t.shownName(tg.name); got != t.shownName(tg.written) {
+		return got
+	}
+	return ""
+}
+
+// shownName is a name as a report shows it: with slashes, and relative to the
+// root wherever it is under it, as a patch would write it. Confined, a name
+// already is. Unconfined, it is absolute: under the root by any spelling it is
+// shown relative, and outside it stays absolute, since where it went is the
+// thing worth seeing. ResolvesTo compares these forms, so a path that reaches
+// the root through a link in the root's own path, /tmp on macOS, is not said
+// to lead anywhere.
+func (t *Tree) shownName(name string) string {
+	if t.r == nil {
+		if rest, ok := t.underRoot(name); ok {
+			name = filepath.Join(rest...)
+		}
+	}
+	return filepath.ToSlash(name)
+}
+
+// underRoot is an unconfined name's components under the root. A name is under
+// it when a prefix of it is the root's directory, by identity whatever spelling
+// reaches it, which is §6.5's rule for a confined absolute path; the two
+// spellings the tree already holds are tried as text first, since identity
+// stats each prefix. Without identity, a path through another link to the
+// root, or a name Respell spelled as its directories store it under a --root
+// given in another case, was said to lead to an absolute name.
+func (t *Tree) underRoot(name string) ([]string, bool) {
+	for _, root := range []string{t.root, t.given} {
+		if rest, ok := below(root, name); ok && len(rest) > 0 {
+			return rest, true
+		}
+	}
+	if rest, ok := t.within(name); ok && len(rest) > 0 {
+		return rest, true
+	}
+	return nil, false
+}
+
+// resolvedClause is the clause a report adds after a path that led somewhere
+// else: a refusal, a success row, a file rollback could not put back. One
+// wording, so that it means one thing wherever it is read.
+func resolvedClause(name string) string { return "(it resolves to " + name + ")" }
 
 // A Tree is the file tree a patch applies to, confined to the root unless
 // --allow-outside-root was given.
@@ -116,7 +177,7 @@ type Tree struct {
 	root  string      // absolute, with symlinks in the root path itself resolved
 	given string      // absolute, as the caller gave it, which is where it thinks it is
 	r     *os.Root    // nil when unconfined
-	top   fs.FileInfo // the root directory r holds, for telling it by identity
+	top   fs.FileInfo // the root directory, for telling it by identity
 	// dotsAsText is the platform's reading of a ".." in a link's destination:
 	// as text on Windows, walked on POSIX (see cleanDots). A field rather than
 	// a constant so a test on either can ask for the other's rule.
@@ -139,6 +200,10 @@ func OpenTree(root string, allowOutside bool) (*Tree, error) {
 		t.root = resolved
 	}
 	if allowOutside {
+		// Unconfined, the identity is only for a report: which names are
+		// under the root (underRoot). Nil, if it cannot be described, means
+		// under it as text alone.
+		t.top, _ = os.Stat(t.root)
 		return t, nil
 	}
 	if t.r, err = os.OpenRoot(t.root); err != nil {
@@ -234,7 +299,7 @@ func (t *Tree) Resolve(p string) (Target, error) {
 			Reason: "it is .git or inside it, which is git's own and not the working tree; hunk never edits there",
 		}
 	}
-	return Target{name: final, orig: p, link: viaLink, named: named}, nil
+	return Target{name: final, orig: p, written: name, link: viaLink, named: named}, nil
 }
 
 // insideDotGit reports whether any component of name is .git, or a spelling of
@@ -1171,7 +1236,10 @@ func (s *Spellings) Respell(tg Target) Target {
 		}
 		spelled = append(spelled, s.firstSpelling(existing, dir, c))
 	}
-	return Target{name: s.tree.joinName(base, spelled, true), orig: tg.orig, link: tg.link, named: tg.named}
+	return Target{
+		name: s.tree.joinName(base, spelled, true), orig: tg.orig, written: tg.written,
+		link: tg.link, named: tg.named,
+	}
 }
 
 // stored is the spelling dir keeps for c, which exists there as fi.

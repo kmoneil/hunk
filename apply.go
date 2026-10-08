@@ -112,10 +112,14 @@ func (f Failure) Skipped() bool { return f.SkippedAfter != 0 }
 
 // A FileResult is one line of §5.1's success output.
 type FileResult struct {
-	Path    string
-	Op      string // "modify", "create" or "delete" (§6.6)
-	Added   int
-	Removed int
+	Path string
+	// Resolved is where Path led, when that is another name: through a
+	// symlink, or respelled as its directory stores it (§6.5). Path is what
+	// the patch wrote and Resolved is the name version control knows.
+	Resolved string
+	Op       string // "modify", "create" or "delete" (§6.6)
+	Added    int
+	Removed  int
 
 	// SeamAdded means append ended the file's last line before appending,
 	// because it had no newline: a byte the patch did not contain, which
@@ -160,21 +164,27 @@ func (e *ValidationError) Error() string {
 
 // ChangedError is exit 6: a file changed on disk between load and commit.
 // Something else is writing the tree; re-read and retry.
-type ChangedError struct{ Path string }
+type ChangedError struct {
+	Path     string // as the patch wrote it
+	Resolved string // where it led, when that is another name (§6.5)
+}
 
 func (e *ChangedError) Error() string {
-	return e.Path + " changed on disk between being read and being written; nothing was written"
+	return withResolved(e.Path, e.Resolved) + " changed on disk between being read and being written; nothing was written"
 }
 
 // a loaded file, and the hunks' running effect on it
 type file struct {
-	target  Target
-	orig    []byte
-	cur     []byte // as the hunks so far have left it
-	mode    fs.FileMode
-	sum     [sha256.Size]byte
-	eol     string // the dominant line ending (§6.4)
-	changed bool
+	target Target
+	// resolved is where target led, as reports show it, when that is another
+	// name than the patch wrote (Tree.ResolvesTo); "" when it is not.
+	resolved string
+	orig     []byte
+	cur      []byte // as the hunks so far have left it
+	mode     fs.FileMode
+	sum      [sha256.Size]byte
+	eol      string // the dominant line ending (§6.4)
+	changed  bool
 	// info is the file load read, from the descriptor it read the bytes
 	// through, so Check can tell the same file from another one at the name.
 	// Nil for a path that was absent.
@@ -394,7 +404,7 @@ func (x *Txn) load(h Hunk) (*file, error) {
 	if f, ok := x.index[tg.name]; ok {
 		return f, nil
 	}
-	f := &file{target: tg, mode: createMode, eol: "\n"}
+	f := &file{target: tg, resolved: x.tree.ResolvesTo(tg), mode: createMode, eol: "\n"}
 	// One open for the mode and the bytes, so they are the same file's: commit
 	// and rollback write these bytes with this mode, and from two lookups by
 	// name they could be two files'.
@@ -784,7 +794,7 @@ func (x *Txn) Check() error {
 			// ENOENT, a directory above it hunk cannot read, is left for commit
 			// to meet at the same place and report.
 			if _, err := x.tree.lstat(f.target.name); err == nil {
-				return &ChangedError{Path: f.target.Orig()}
+				return &ChangedError{Path: f.target.Orig(), Resolved: f.resolved}
 			}
 			continue
 		}
@@ -797,7 +807,7 @@ func (x *Txn) Check() error {
 		fi, b, err := x.tree.ReadTarget(f.target)
 		if err != nil || sha256.Sum256(b) != f.sum ||
 			!os.SameFile(fi, f.info) || fi.Mode()&keptMode != f.mode {
-			return &ChangedError{Path: f.target.Orig()}
+			return &ChangedError{Path: f.target.Orig(), Resolved: f.resolved}
 		}
 	}
 	return nil
@@ -817,7 +827,7 @@ func (x *Txn) Commit() error {
 			// process has to be alive (§6.2).
 			restored, notRestored, _, _ := x.Rollback(false)
 			return &CommitError{
-				Path: f.target.Orig(), Op: f.finalOp(), Err: cause(err),
+				Path: f.target.Orig(), Resolved: f.resolved, Op: f.finalOp(), Err: cause(err),
 				Restored: restored, NotRestored: notRestored,
 			}
 		}
@@ -866,6 +876,7 @@ func (x *Txn) commit(f *file) error {
 // way: the tree is fine or the message says where it is not.
 type CommitError struct {
 	Path        string // as the patch wrote it
+	Resolved    string // where it led, when that is another name (§6.5)
 	Op          string // "create", "modify" or "delete"
 	Err         error  // the cause, without the syscall and the temp file's name
 	Restored    int
@@ -874,7 +885,7 @@ type CommitError struct {
 
 func (e *CommitError) Error() string {
 	verb := map[string]string{"create": "creating", "modify": "writing", "delete": "deleting"}[e.Op]
-	msg := fmt.Sprintf("%s %s failed: %v; ", verb, e.Path, e.Err)
+	msg := fmt.Sprintf("%s %s failed: %v; ", verb, withResolved(e.Path, e.Resolved), e.Err)
 	written := e.Restored + len(e.NotRestored)
 	switch {
 	case len(e.NotRestored) > 0:
@@ -1125,7 +1136,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 				after = "so hunk did not look for it there."
 			}
 			notRestored = append(notRestored, NotRestored{
-				Path:   f.target.Orig(),
+				Path: f.target.Orig(), Resolved: f.resolved,
 				Reason: fmt.Sprintf("%s, the directory hunk %s, %s,\n%s", dir, did, state, after),
 			})
 			continue
@@ -1144,7 +1155,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 			}
 			if there && !fi.Mode().IsRegular() {
 				notRestored = append(notRestored, NotRestored{
-					Path: f.target.Orig(),
+					Path: f.target.Orig(), Resolved: f.resolved,
 					Reason: fmt.Sprintf("hunk created it as a file, and it is now %s, which hunk did not make,\n"+
 						"so hunk left it.", kindOf(fi)),
 				})
@@ -1154,7 +1165,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 				now, err := x.tree.ReadFile(f.target)
 				if err != nil || sha256.Sum256(now) != f.wrote {
 					notRestored = append(notRestored, NotRestored{
-						Path: f.target.Orig(),
+						Path: f.target.Orig(), Resolved: f.resolved,
 						Reason: fmt.Sprintf("hunk created it and wrote %s; it is now something else,\n"+
 							"so removing it could discard somebody's work.\n"+
 							"--verify-may-format says the verify command is expected to rewrite files.",
@@ -1165,7 +1176,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 			}
 			if err := x.tree.Remove(f.target); err != nil {
 				notRestored = append(notRestored, NotRestored{
-					Path: f.target.Orig(), Reason: "It could not be removed: " + err.Error(),
+					Path: f.target.Orig(), Resolved: f.resolved, Reason: "It could not be removed: " + err.Error(),
 				})
 				continue
 			}
@@ -1180,7 +1191,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 			// does, and no formatter makes one.
 			if there && fi.Mode()&fs.ModeSymlink != 0 {
 				notRestored = append(notRestored, NotRestored{
-					Path: f.target.Orig(),
+					Path: f.target.Orig(), Resolved: f.resolved,
 					Reason: "hunk deleted it and something has since put a symbolic link there,\n" +
 						"so restoring would replace that link with a file.",
 				})
@@ -1188,7 +1199,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 			}
 			if !mayFormat && there {
 				notRestored = append(notRestored, NotRestored{
-					Path: f.target.Orig(),
+					Path: f.target.Orig(), Resolved: f.resolved,
 					Reason: "hunk deleted it and something has since created it there,\n" +
 						"so restoring would overwrite that.\n" +
 						"--verify-may-format says the verify command is expected to do that.",
@@ -1197,7 +1208,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 			}
 			if err := x.tree.WriteAtomic(f.target, f.orig, f.mode, f.info); err != nil {
 				notRestored = append(notRestored, NotRestored{
-					Path: f.target.Orig(), Reason: "It could not be written: " + err.Error(),
+					Path: f.target.Orig(), Resolved: f.resolved, Reason: "It could not be written: " + err.Error(),
 				})
 				continue
 			}
@@ -1209,7 +1220,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 		// replace it.
 		if there && !fi.Mode().IsRegular() {
 			notRestored = append(notRestored, NotRestored{
-				Path: f.target.Orig(),
+				Path: f.target.Orig(), Resolved: f.resolved,
 				Reason: fmt.Sprintf("hunk wrote %s there, and it is now %s, which hunk did not make,\n"+
 					"so restoring would replace it with a file.", shortHash(f.wrote), kindOf(fi)),
 			})
@@ -1219,7 +1230,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 			now, err := x.tree.ReadFile(f.target)
 			if err != nil {
 				notRestored = append(notRestored, NotRestored{
-					Path: f.target.Orig(),
+					Path: f.target.Orig(), Resolved: f.resolved,
 					Reason: fmt.Sprintf("It is gone from disk, so something removed it after hunk\n"+
 						"wrote %s there.\n"+
 						"--verify-may-format says the verify command is expected to do that.",
@@ -1229,7 +1240,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 			}
 			if sum := sha256.Sum256(now); sum != f.wrote {
 				notRestored = append(notRestored, NotRestored{
-					Path: f.target.Orig(),
+					Path: f.target.Orig(), Resolved: f.resolved,
 					Reason: fmt.Sprintf("Something rewrote it after hunk did, and restoring could\n"+
 						"discard that work. hunk wrote %s; the file is now %s.\n"+
 						"--verify-may-format says the verify command is expected to rewrite files.",
@@ -1240,7 +1251,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 		}
 		if err := x.tree.WriteAtomic(f.target, f.orig, f.mode, f.info); err != nil {
 			notRestored = append(notRestored, NotRestored{
-				Path:   f.target.Orig(),
+				Path: f.target.Orig(), Resolved: f.resolved,
 				Reason: "It could not be written: " + err.Error(),
 			})
 			continue
@@ -1381,7 +1392,7 @@ func (x *Txn) result(hunks int) *Result {
 			continue
 		}
 		r.Files = append(r.Files, FileResult{
-			Path: f.target.Orig(), Op: op, Added: f.added, Removed: f.removed,
+			Path: f.target.Orig(), Resolved: f.resolved, Op: op, Added: f.added, Removed: f.removed,
 			SeamAdded: f.seamAdded,
 			// Read off the bytes the batch ends with, not the create's payload:
 			// a later hunk can take the newline away or give it back, and a

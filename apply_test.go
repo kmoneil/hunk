@@ -13,6 +13,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -1536,6 +1537,11 @@ func FuzzApplyIsAllOrNothing(f *testing.F) {
 // d is relative and then absolute. Until 2026-10-07 an absolute d was refused
 // for every path through it, which made the two spellings differ in every
 // patch that used d; it is translated now, and has to be the same file too.
+//
+// The two reports have to name the same files as well, since 2026-10-08: each
+// row's resolved name where it has one, and its path cleaned where it does
+// not, which is the claim that a path with no note names its file by the
+// file's own name.
 func FuzzASpellingThroughALinkIsTheSameFile(f *testing.F) {
 	for _, s := range []string{
 		"@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ file d/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
@@ -1560,8 +1566,8 @@ func FuzzASpellingThroughALinkIsTheSameFile(f *testing.F) {
 			t.Fatalf("respelling made the patch unparseable: %v\n%q", err, respelled)
 		}
 		for _, absolute := range []bool{false, true} {
-			linkExit, linkTree := applyToLinkedTree(t, p, absolute)
-			subExit, subTree := applyToLinkedTree(t, q, absolute)
+			linkExit, linkTree, linkRes := applyToLinkedTree(t, p, absolute)
+			subExit, subTree, subRes := applyToLinkedTree(t, q, absolute)
 			if linkExit != subExit {
 				t.Fatalf("absolute=%v: exit %d through the link, %d through sub\n%q\n%q",
 					absolute, linkExit, subExit, patch, respelled)
@@ -1569,6 +1575,19 @@ func FuzzASpellingThroughALinkIsTheSameFile(f *testing.F) {
 			if !maps.Equal(linkTree, subTree) {
 				t.Fatalf("absolute=%v: the trees differ\nthrough the link: %q\nthrough sub:      %q\npatch: %q",
 					absolute, linkTree, subTree, patch)
+			}
+			if linkRes == nil {
+				continue
+			}
+			if len(linkRes.Files) != len(subRes.Files) {
+				t.Fatalf("absolute=%v: %d rows through the link, %d through sub\n%q",
+					absolute, len(linkRes.Files), len(subRes.Files), patch)
+			}
+			for i := range linkRes.Files {
+				if a, b := fileNamed(linkRes.Files[i]), fileNamed(subRes.Files[i]); a != b {
+					t.Fatalf("absolute=%v: row %d names %q through the link, %q through sub\n%+v\n%+v\npatch: %q",
+						absolute, i+1, a, b, linkRes.Files[i], subRes.Files[i], patch)
+				}
 			}
 		}
 	})
@@ -1592,12 +1611,22 @@ func respellThroughSub(patch string) string {
 	return strings.Join(lines, "\n")
 }
 
+// fileNamed is the file a success row names: where its path led, or, where
+// the row says nothing about that, its path cleaned.
+func fileNamed(r FileResult) string {
+	if r.Resolved != "" {
+		return r.Resolved
+	}
+	return path.Clean(filepath.ToSlash(r.Path))
+}
+
 // applyToLinkedTree applies p to a fresh tree of sub/b.go, a.go and the
 // directory link d -> sub, absolute or relative, and returns the exit and the
 // whole tree afterwards: files with their contents and modes, links, and
-// directories. An absolute d's destination names this tree's root, so the
-// root is put back as {root} for two trees to compare.
-func applyToLinkedTree(t *testing.T, p *Patch, absolute bool) (int, map[string]string) {
+// directories, and the result when there is one. An absolute d's destination
+// names this tree's root, so the root is put back as {root} for two trees to
+// compare.
+func applyToLinkedTree(t *testing.T, p *Patch, absolute bool) (int, map[string]string, *Result) {
 	t.Helper()
 	root := t.TempDir()
 	if r, err := filepath.EvalSymlinks(root); err == nil {
@@ -1615,12 +1644,12 @@ func applyToLinkedTree(t *testing.T, p *Patch, absolute bool) (int, map[string]s
 	must(t, err)
 	defer tree.Close()
 
-	_, runErr := NewTxn(tree, Options{}).Run(p)
+	res, runErr := NewTxn(tree, Options{}).Run(p)
 	after := snapshot(t, root)
 	if absolute {
 		after["d"] = strings.ReplaceAll(after["d"], root, "{root}")
 	}
-	return ExitCode(runErr), after
+	return ExitCode(runErr), after, res
 }
 
 // An "@@ old x2" that rewrites two lines changed two lines. Counting per hunk
