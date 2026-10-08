@@ -414,7 +414,7 @@ func (x *Txn) load(h Hunk) (*file, error) {
 		f.existed = true
 		f.info = fi
 		f.orig, f.cur = b, b
-		f.mode = fi.Mode().Perm()
+		f.mode = fi.Mode() & keptMode
 		f.sum = sha256.Sum256(b)
 		f.eol = dominantEOL(b)
 	default:
@@ -445,6 +445,15 @@ func (x *Txn) load(h Hunk) (*file, error) {
 // 2026-10-06 this was set with a chmod after it, which the umask does not
 // filter, so "before umask" was true of the comment and not of the file.
 const createMode fs.FileMode = 0o644
+
+// keptMode is the part of a file's mode that load records, the check compares
+// and every rewrite puts back: the permission bits, and setuid, setgid and
+// sticky, which is what a chmod sets and what §6.1 means by "the original
+// mode". Until 2026-10-07 it was Perm(), which in Go is the nine permission
+// bits alone, so every rewrite dropped the other three, including a rollback
+// that reported the file back with the same bytes and mode. keepOwner decides
+// which of setuid and setgid the rewritten file may keep.
+const keptMode = fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
 
 // Validate walks the hunks in order, applying each in memory against the file
 // as previous hunks have left it (§6.1 step 3, §3.5). Nothing is written.
@@ -783,10 +792,11 @@ func (x *Txn) Check() error {
 		// recorded, so the file at the name has to be the one load read and
 		// still have that mode: another file put there with the same bytes,
 		// or a chmod since load, is a second writer too, and committing would
-		// silently undo it.
+		// silently undo it. Until 2026-10-07 this compared Perm(), so a chmod
+		// of setuid, setgid or sticky passed and was undone.
 		fi, b, err := x.tree.ReadTarget(f.target)
 		if err != nil || sha256.Sum256(b) != f.sum ||
-			!os.SameFile(fi, f.info) || fi.Mode().Perm() != f.mode {
+			!os.SameFile(fi, f.info) || fi.Mode()&keptMode != f.mode {
 			return &ChangedError{Path: f.target.Orig()}
 		}
 	}

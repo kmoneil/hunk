@@ -487,6 +487,58 @@ func TestCheckCatchesAWriterUnderneath(t *testing.T) {
 	}
 }
 
+// The same check for a chmod of setuid, setgid or sticky between load and
+// commit. Until 2026-10-07 it compared Perm(), which leaves all three out, so
+// each of these passed and commit silently undid the chmod, which #46 had
+// decided to refuse. Since commit writes the bits back, a setuid removed in
+// the window would otherwise come back. The control is a setuid file nobody
+// touched, which must pass.
+func TestCheckCatchesAChmodOfASpecialBit(t *testing.T) {
+	needsPOSIXPerms(t)
+	for _, c := range []struct {
+		name      string
+		load, now fs.FileMode
+	}{
+		{"setuid added", 0o755, 0o755 | fs.ModeSetuid},
+		{"setuid removed", 0o755 | fs.ModeSetuid, 0o755},
+		{"setgid added", 0o755, 0o755 | fs.ModeSetgid},
+		{"setgid removed", 0o755 | fs.ModeSetgid, 0o755},
+		{"sticky added", 0o644, 0o644 | fs.ModeSticky},
+		{"sticky removed", 0o644 | fs.ModeSticky, 0o644},
+		{"setuid untouched, the control", 0o755 | fs.ModeSetuid, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tree, root := fixture(t, map[string]string{"a.go": "one\n"})
+			p := filepath.Join(root, "a.go")
+			withSpecialMode(t, p, c.load)
+			pt, err := Parse([]byte("@@ file a.go\n@@ old\none\n@@ new\nONE\n"), DefaultMarker)
+			must(t, err)
+			x := NewTxn(tree, Options{})
+			must(t, x.Load(pt))
+			if f := x.Validate(pt); len(f) != 0 {
+				t.Fatalf("validate: %+v", f)
+			}
+
+			if c.now == 0 {
+				must(t, x.Check())
+				return
+			}
+			withSpecialMode(t, p, c.now)
+			before := snapshot(t, root)
+
+			err = x.Check()
+			var ce *ChangedError
+			if !errors.As(err, &ce) {
+				t.Fatalf("want *ChangedError, got %T: %v", err, err)
+			}
+			if !strings.Contains(ce.Error(), "nothing was written") {
+				t.Errorf("message = %q", ce.Error())
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
+}
+
 // A commit that fails part-way puts back what it wrote, decided 2026-09-21.
 // What a filesystem refuses, such as a name too long for it or a full disk, is
 // not knowable before asking it, so the refusal comes at the rename, after
