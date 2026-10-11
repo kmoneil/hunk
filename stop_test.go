@@ -174,7 +174,7 @@ func TestATimeoutEndsTheCommand(t *testing.T) {
 		},
 		{
 			name: "--try is 124, put back", flags: []string{"--try"}, code: exitTimedOut,
-			say: "hunk: tried 1 hunk and put back 1 file; the command timed out after 300ms, exit 124\n", file: "one\n",
+			say: "tried 1 hunk and put back 1 file; the command timed out after 300ms, exit 124\n", file: "one\n",
 			cmd: func(pid, _ string) string { return fmt.Sprintf("echo $$ > '%s'; exec "+longSleep(), pid) },
 		},
 		{
@@ -381,7 +381,7 @@ func TestASignalPutsTheBatchBack(t *testing.T) {
 			"SIGTERM during a --try", syscall.SIGTERM,
 			[]string{"--try"},
 			143,
-			"hunk: tried 1 hunk and put back 1 file; interrupted by SIGTERM, the command was ended (", "one\n",
+			"tried 1 hunk and put back 1 file; interrupted by SIGTERM, the command was ended (", "one\n",
 		},
 		{
 			"SIGINT with --keep-on-fail keeps the batch", syscall.SIGINT,

@@ -363,6 +363,9 @@ func TestHunkExit(t *testing.T) {
 		// --try exits with its command's status, which is not hunk's verdict.
 		{"--try, and the command passed", "hunk --try 'zig build' -f p", "tried 1 hunk and put back 1 file; the command exited 0 (0.4s)\n", 0},
 		{"--try, and the command exited 3", "hunk --try 'zig build' -f p", "hunk: tried 1 hunk and put back 1 file; the command exited 3 (0.4s)\n", 0},
+		// Before #73's fix the failed form carried the `hunk: ` prefix, and
+		// the field's transcripts keep it, so both spellings stay readable.
+		{"--try interrupted, an old transcript", "hunk --try x -f p", "hunk: tried 1 hunk and put back 1 file; interrupted by SIGINT, the command was ended (0.0s)\n", 130},
 		{"--try, and a file was left alone", "hunk --try x -f p", "hunk: tried 2 hunks and put back 1 file, 1 file left alone; the command exited 0 (0.1s)\n", 4},
 		{"--try, and the command could not start", "hunk --try x -f p", "hunk: could not run the --try command: exec: \"sh\": not found; the batch was put back\n", 5},
 		{"a verify whose command could not start", "hunk --verify x -f p", "hunk: could not run the verify command: fork/exec sh: exec format error; the batch was rolled back\n", 5},

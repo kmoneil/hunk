@@ -279,9 +279,10 @@ now leads. That holds under `--verify-may-format` and `--try` alike.
 measurement, a deliberate hang to see what the logs say (with `--timeout`). It
 applies the batch, runs `CMD` the way `--verify` would, puts every file back
 whatever `CMD` says, and exits with `CMD`'s own status. The report starts
-`tried`, so a caller can tell `CMD`'s 2 from `hunk`'s own. If a file could not
-be put back, because `CMD` rewrote it, the exit is 4, and `--verify-may-format`
-puts it back anyway.
+`tried` whatever `CMD` said, on stdout when it passed and stderr otherwise, so
+a caller can tell `CMD`'s 2 from `hunk`'s own; in `--json`, `try.ran` says it.
+If a file could not be put back, because `CMD` rewrote it, the exit is 4, and
+`--verify-may-format` puts it back anyway.
 
 ### When the command does not end
 

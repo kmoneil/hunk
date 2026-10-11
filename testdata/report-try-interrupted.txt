@@ -1,4 +1,4 @@
-hunk: tried 2 hunks and put back 1 file; interrupted by SIGINT, the command was ended (4.2s)
+tried 2 hunks and put back 1 file; interrupted by SIGINT, the command was ended (4.2s)
 
 $ zig build test
 Build Summary: 3/5 steps succeeded

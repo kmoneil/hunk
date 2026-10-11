@@ -398,14 +398,14 @@ func TestTryPutsTheTreeBackWhateverTheCommandSays(t *testing.T) {
 			"the command fails",
 			[]string{"--try", "grep -c ONE a.txt; exit 3"},
 			vPatch,
-			3, "", "hunk: tried 1 hunk and put back 1 file; the command exited 3", "one\n",
+			3, "", "tried 1 hunk and put back 1 file; the command exited 3", "one\n",
 		},
 		{
 			// The command's 2, told apart from hunk's own by the report.
 			"the command exits 2",
 			[]string{"--try", "exit 2"},
 			vPatch,
-			exitNoMatch, "", "hunk: tried 1 hunk", "one\n",
+			exitNoMatch, "", "tried 1 hunk", "one\n",
 		},
 		{
 			// hunk's own 2: the command never ran, so it wrote no marker.
@@ -612,6 +612,59 @@ func TestTryGoldens(t *testing.T) {
 			golden(t, c.name+"-json", js.String())
 		})
 	}
+}
+
+// §4.4: a --try report starts `tried` whenever the command ran, whatever it
+// said, and on the documented stream: stdout when the command passed, stderr
+// otherwise. The word is how a caller tells the command's own exit 2 from a
+// refused patch, and a field script grepped `^tried` as the skill says to, so
+// the `hunk: ` prefix the failure line used to carry broke it (issue #73).
+func TestATryReportStartsTried(t *testing.T) {
+	res := &Result{Files: []FileResult{{Path: "a.txt", Op: "modify", Added: 1}}, Hunks: 1}
+	for _, c := range []struct {
+		name     string
+		edit     func(v *Verify)
+		onStdout bool
+	}{
+		{"the command passed", func(v *Verify) { v.OK = true }, true},
+		{"the command failed", func(v *Verify) { v.Status = 2 }, false},
+		{"the command timed out", func(v *Verify) { v.TimedOut, v.Status = 90*time.Second, exitTimedOut }, false},
+		{"hunk was interrupted", func(v *Verify) { v.Signal, v.Status = syscall.SIGINT, 130 }, false},
+		{"a file was left alone", func(v *Verify) {
+			v.OK, v.RolledBack = true, 0
+			v.NotRestored = []NotRestored{{Path: "a.txt", Reason: "Something rewrote it after hunk did."}}
+		}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			v := &Verify{Ran: true, Try: true, Command: "true", Seconds: 0.1, Applied: 1, RolledBack: 1}
+			c.edit(v)
+			rep := NewReport(res, nil, v, false, 2)
+			var out, errOut bytes.Buffer
+			rep.Text(&out, &errOut, false)
+			got, other, stream := out.String(), errOut.String(), "stdout"
+			if !c.onStdout {
+				got, other, stream = errOut.String(), out.String(), "stderr"
+			}
+			if !strings.HasPrefix(got, "tried ") {
+				t.Errorf("%s starts %q, want \"tried \"", stream, got)
+			}
+			if other != "" {
+				t.Errorf("the other stream is not empty: %q", other)
+			}
+		})
+	}
+	// The control: a refused patch is hunk's own report, `hunk: ` on stderr,
+	// which is the difference the word exists to mark.
+	t.Run("a refused patch does not say tried", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"a.txt": "one\n"})
+		code, out, errOut := runCLI(t, root, []string{"--try", "true"}, "@@ file a.txt\n@@ old\nmissing\n@@ new\nONE\n")
+		if code != exitNoMatch {
+			t.Fatalf("exit %d: %s%s", code, out, errOut)
+		}
+		if !strings.HasPrefix(errOut, "hunk: ") || strings.HasPrefix(errOut, "hunk: tried") {
+			t.Errorf("stderr starts %q, want a refusal under \"hunk: \"", errOut)
+		}
+	})
 }
 
 // A verify whose command cannot start verified nothing, and --verify keeps a

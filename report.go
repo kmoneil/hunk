@@ -214,14 +214,16 @@ func (r *Report) Text(out, errOut io.Writer, quiet bool) {
 	// --try's report is its command's transcript, whatever the command said,
 	// since that is what the caller ran it for. On exit 0 it is a success
 	// report, on stdout and subject to --quiet; otherwise it goes to stderr.
+	// Either way it starts `tried`, never the `hunk: ` prefix: §4.4 makes that
+	// word how a caller tells the command's own failure from a refused patch.
 	if v := r.Verify; v != nil && v.Try && v.Ran {
 		if r.Exit == exitOK {
 			if !quiet {
-				r.writeTry(out, "")
+				r.writeTry(out)
 			}
 			return
 		}
-		r.writeTry(errOut, "hunk: ")
+		r.writeTry(errOut)
 		return
 	}
 	if r.Exit == exitOK {
@@ -379,9 +381,9 @@ func (r *Report) writeVerifyFailure(w io.Writer) {
 
 // writeTry is --try's report: what was tried, what was put back, and what
 // the command said, which is the whole reason it ran.
-func (r *Report) writeTry(w io.Writer, prefix string) {
+func (r *Report) writeTry(w io.Writer) {
 	v := r.Verify
-	fmt.Fprintf(w, "%stried %s and put back %s", prefix, count(v.Applied, "hunk"), count(v.RolledBack, "file"))
+	fmt.Fprintf(w, "tried %s and put back %s", count(v.Applied, "hunk"), count(v.RolledBack, "file"))
 	if len(v.NotRestored) > 0 {
 		fmt.Fprintf(w, ", %s left alone", count(len(v.NotRestored), "file"))
 	}
