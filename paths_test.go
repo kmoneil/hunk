@@ -988,6 +988,7 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 		"./x", "sub/./../top.txt", strings.Repeat("../", 40) + "etc/passwd",
 		"d/in.txt", "d/new/x.go", "l/x", "sub/../d/in.txt", "rel.link/x",
 		"d/../in.txt", "rel.link/../x", "d/../../x",
+		strings.Repeat("d/../", 16000) + "x",
 		"SUB/IN.TXT", "Sub/New/X.go", "D/in.txt", "\u00e9.txt", "e\u0301.txt",
 		".git/config", ".GIT/config", "g/config", "cfg.link", "sub/../.git/HEAD", ".git", "sub/.git",
 		"g/" + strings.Repeat("0", 256),
@@ -1967,6 +1968,13 @@ func TestADotDotThePatchWroteAfterALinkIsRefused(t *testing.T) {
 
 	twoWays := "a .. follows the symlink x -> sub/deep, so the path reads two ways: " +
 		"sub/in.txt walked, in.txt as text; name the file itself"
+	// The quadratic shape the fuzz sweep's deadline caught on 2026-10-11: one
+	// cancelled link, sixteen thousand times, is one chain walk and a cached
+	// verdict, not sixteen thousand walks over the whole path.
+	wide := strings.Repeat("d/../", 16000) + "in.txt"
+	// And past maxLinkHops rest-dependent cancellations, the loop shape is
+	// refused rather than resolved forever.
+	budget := "d" + strings.Repeat("/z/..", maxLinkHops+1) + "/in.txt"
 	for _, c := range []struct {
 		name, path string
 		tree       *Tree
@@ -1994,6 +2002,11 @@ func TestADotDotThePatchWroteAfterALinkIsRefused(t *testing.T) {
 			"", "other.txt", "other.txt",
 		},
 		{"a link to a file", "f.link/../other.txt", confined, "", "other.txt", "other.txt"},
+		{"one link cancelled sixteen thousand times", wide, confined, "", "in.txt", "in.txt"},
+		{
+			"the loop shape of rest-dependent cancellations", budget, confined,
+			"too many symlinks", "", "sub/in.txt",
+		},
 		{
 			"a link that loops", "loop/../in.txt", confined,
 			"too many symlinks", "", "in.txt",
