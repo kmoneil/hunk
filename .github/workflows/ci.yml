@@ -16,10 +16,12 @@ permissions:
 # newest 1.26.x it ships and sets GOTOOLCHAIN=local, so a go.mod asking for
 # 1.26.8 against an installed 1.26.7 failed six of the seven jobs at once, with
 # the same one-line error in each. The indirection is load-bearing here rather
-# than tidy: the go directive is at 1.26.8 for GO-2026-4970, a root escape via
-# symlink in os.Root, which is the exact mechanism paths.go uses to confine
-# every write to --root. A CI that quietly fell back to an older toolchain
-# would be testing the vulnerable one and reporting green.
+# than tidy: the go directive moves for stdlib fixes in os.Root, the exact
+# mechanism paths.go uses to confine every write to --root: GO-2026-4970, a
+# root escape via symlink, took it to 1.26.8, and GO-2026-6604, a directory
+# made outside the root through a Windows junction, to 1.26.9. A CI that
+# quietly fell back to an older toolchain would be testing the vulnerable one
+# and reporting green.
 
 jobs:
   check:
