@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "exit": 2,
+  "error": "x/../in.txt: a .. follows the symlink x -> sub/deep, so the path reads two ways: sub/in.txt walked, in.txt as text; name the file itself; the root is /the/root"
+}

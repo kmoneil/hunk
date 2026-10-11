@@ -987,6 +987,7 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 		"a.go", "sub/in.txt", "../escape", "/etc/passwd", "", "a/../../b",
 		"./x", "sub/./../top.txt", strings.Repeat("../", 40) + "etc/passwd",
 		"d/in.txt", "d/new/x.go", "l/x", "sub/../d/in.txt", "rel.link/x",
+		"d/../in.txt", "rel.link/../x", "d/../../x",
 		"SUB/IN.TXT", "Sub/New/X.go", "D/in.txt", "\u00e9.txt", "e\u0301.txt",
 		".git/config", ".GIT/config", "g/config", "cfg.link", "sub/../.git/HEAD", ".git", "sub/.git",
 		"g/" + strings.Repeat("0", 256),
@@ -1922,6 +1923,175 @@ func TestALinkThatCannotBeFollowedIsGolden(t *testing.T) {
 	must(t, err)
 	out = strings.ReplaceAll(out, strings.Trim(string(escaped), `"`), "/the/root")
 	golden(t, "cli-path-refused-link-cannot-be-followed-json", strings.ReplaceAll(out, `\\`, "/"))
+	assertUnchanged(t, root, before)
+}
+
+// A ".." the patch itself writes after a symlink names one file walked and
+// another read as text, and until 2026-10-11 hunk edited, or deleted, the
+// textual one at exit 0 while the kernel reads the other: with x -> sub/deep,
+// "x/../in.txt" edited in.txt where `cat x/../in.txt` prints sub/in.txt.
+// Refused now, when and only when the two readings are two files: a ".."
+// against a plain directory, a missing component, or a file reads one way (the
+// kernel errors where text proceeds, and no second file is named), and a link
+// that keeps its parent, or a path that is one file under two spellings, has
+// nothing to guess. On Windows the kernel itself reads the path as text, so
+// there is one reading and the textual edit stands.
+func TestADotDotThePatchWroteAfterALinkIsRefused(t *testing.T) {
+	root := t.TempDir()
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	must(t, os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755))
+	must(t, os.MkdirAll(filepath.Join(root, "deep"), 0o755))
+	for _, f := range []string{"in.txt", "other.txt", filepath.Join("sub", "in.txt")} {
+		must(t, os.WriteFile(filepath.Join(root, f), []byte("same\n"), 0o644))
+	}
+	for _, l := range [][2]string{
+		{"x", "sub/deep"},
+		{"y", "deep"},
+		{"f.link", "in.txt"},
+		{"loop", "loop"},
+		{"out", filepath.Dir(root)},
+		{"d", "sub"},
+	} {
+		must(t, os.Symlink(native(l[1]), filepath.Join(root, l[0])))
+	}
+	must(t, os.Symlink("deep", filepath.Join(root, "sub", "z")))
+
+	confined, err := OpenTree(root, false)
+	must(t, err)
+	defer confined.Close()
+	unconfined, err := OpenTree(root, true)
+	must(t, err)
+	defer unconfined.Close()
+
+	twoWays := "a .. follows the symlink x -> sub/deep, so the path reads two ways: " +
+		"sub/in.txt walked, in.txt as text; name the file itself"
+	for _, c := range []struct {
+		name, path string
+		tree       *Tree
+		refused    string // a substring of the refusal, or "" when the path resolves
+		resolves   string // the name it resolves to when refused is ""
+		windows    string // the textual name where the kernel reads text; "" to expect the same refusal
+	}{
+		{
+			"a link whose destination moves the parent", "x/../in.txt", confined,
+			twoWays, "", "in.txt",
+		},
+		{
+			"the same, written absolute", root + native("/x/../in.txt"), confined,
+			"reads two ways: sub/in.txt walked, in.txt as text", "", "in.txt",
+		},
+		{
+			"one file under two spellings", "d/z/../in.txt", confined,
+			"", native("sub/in.txt"), "sub/in.txt",
+		},
+		{"a link that keeps its parent", "y/../in.txt", confined, "", "in.txt", "in.txt"},
+		{"a plain directory", "sub/../in.txt", confined, "", "in.txt", "in.txt"},
+		{"a directory that does not exist", "missing/../in.txt", confined, "", "in.txt", "in.txt"},
+		{
+			"a file, which no kernel walks through", "in.txt/../other.txt", confined,
+			"", "other.txt", "other.txt",
+		},
+		{"a link to a file", "f.link/../other.txt", confined, "", "other.txt", "other.txt"},
+		{
+			"a link that loops", "loop/../in.txt", confined,
+			"too many symlinks", "", "in.txt",
+		},
+		{
+			"a link out of the root", "out/../in.txt", confined,
+			"a symlink out of the root", "", "in.txt",
+		},
+		{
+			"a refused prefix is the walk's to refuse", "out/q/../f.txt", confined,
+			"leads out of the root", "", "",
+		},
+		// On Windows the check stands aside, and the cleaned path's looping
+		// component is nobody's to refuse here: the name comes back as it
+		// stands, for load to report.
+		{
+			"a loop after the two readings", "x/../loop/f.txt", confined,
+			"reads two ways: " + native("sub/loop/f.txt") + " walked, " + native("loop/f.txt") + " as text",
+			"", "loop/f.txt",
+		},
+		{
+			"nothing of the patch's own to cancel", "../escape.txt", confined,
+			"climbs out of the root", "", "",
+		},
+		// With the root's volume, because a rooted path without one is not
+		// absolute on Windows, and the row is about an absolute path.
+		{
+			"an absolute path that never reaches the root",
+			filepath.VolumeName(root) + native("/absolutely/not/here/x/../f.txt"), confined,
+			"an absolute path is allowed only under the root", "", "",
+		},
+		{
+			"unconfined, relative", "x/../in.txt", unconfined,
+			"reads two ways: " + filepath.Join(root, "sub", "in.txt") + " walked, " +
+				filepath.Join(root, "in.txt") + " as text", "", filepath.Join(root, "in.txt"),
+		},
+		{
+			"unconfined, absolute", root + native("/x/../in.txt"), unconfined,
+			"reads two ways: " + filepath.Join(root, "sub", "in.txt") + " walked, " +
+				filepath.Join(root, "in.txt") + " as text", "", filepath.Join(root, "in.txt"),
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			wantRefusal, wantName := c.refused, c.resolves
+			if !dotDotIsWalked() && c.windows != "" {
+				wantRefusal, wantName = "", native(c.windows)
+			}
+			tg, err := c.tree.Resolve(c.path)
+			if wantRefusal != "" {
+				if err == nil {
+					t.Fatalf("Resolve(%q) = %q, want a refusal saying %q", c.path, tg.name, wantRefusal)
+				}
+				var pr *PathRefusal
+				if !errors.As(err, &pr) {
+					t.Fatalf("Resolve(%q): a %T, not a PathRefusal: %v", c.path, err, err)
+				}
+				if !strings.Contains(err.Error(), wantRefusal) {
+					t.Errorf("the refusal does not say %q:\n%s", wantRefusal, err.Error())
+				}
+				return
+			}
+			must(t, err)
+			if tg.name != wantName {
+				t.Errorf("Resolve(%q) = %q, want %q", c.path, tg.name, wantName)
+			}
+		})
+	}
+}
+
+// The refusal is new wording, so it is a contract (§8.1), in both renderings.
+// The root is substituted as in TestAPathRefusalIsGolden.
+func TestADotDotAfterALinkIsGolden(t *testing.T) {
+	if !dotDotIsWalked() {
+		t.Skip("on Windows the kernel reads a path's .. as text, so the readings are one and nothing is refused; see dotDotIsWalked")
+	}
+	root := cliTree(t, map[string]string{"in.txt": "same\n", "sub/in.txt": "same\n"})
+	must(t, os.MkdirAll(filepath.Join(root, "sub", "deep"), 0o755))
+	must(t, os.Symlink(native("sub/deep"), filepath.Join(root, "x")))
+	before := snapshot(t, root)
+	patch := "@@ file x/../in.txt\n@@ old\nsame\n@@ new\nchanged\n"
+
+	code, out, errOut := runCLI(t, root, nil, patch)
+	if code != exitNoMatch {
+		t.Fatalf("exit %d, want %d: %s", code, exitNoMatch, errOut)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
+	}
+	golden(t, "cli-path-refused-dotdot-after-link", slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
+
+	code, out, errOut = runCLI(t, root, []string{"--json"}, patch)
+	if code != exitNoMatch || errOut != "" {
+		t.Fatalf("exit %d, stderr %q; want %d and nothing on stderr", code, errOut, exitNoMatch)
+	}
+	escaped, err := json.Marshal(root)
+	must(t, err)
+	out = strings.ReplaceAll(out, strings.Trim(string(escaped), `"`), "/the/root")
+	golden(t, "cli-path-refused-dotdot-after-link-json", strings.ReplaceAll(out, `\\`, "/"))
 	assertUnchanged(t, root, before)
 }
 
