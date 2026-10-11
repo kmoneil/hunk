@@ -496,6 +496,16 @@ promised: one by a test that walks the transitive import graph, the other by a
 check that `go.mod` declares no requirements at all. `make check` fails if
 either stops being true.
 
+From v0.3.8 on, every file in a release also carries build provenance: a
+signed statement, held in this repository's attestation store, that it was
+built by the release workflow here, from that tag, on a runner GitHub hosts.
+The Homebrew tap and the Scoop bucket verify it before they move to a release,
+and with [GitHub's CLI](https://cli.github.com/) so can you:
+
+```sh
+gh attestation verify hunk-darwin-arm64 --repo kmoneil/hunk
+```
+
 ## Development
 
 ```sh
