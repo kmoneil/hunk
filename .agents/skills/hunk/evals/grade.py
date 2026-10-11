@@ -45,10 +45,16 @@ def used_hunk(r):
 def heredoc(r):
     t = repo_cmds(r)
     return bool(re.search(r"python[23]?\s*-?\s*<<", t)) or "sed -i" in t or "perl -0" in t or "perl -i" in t
+def gorun(args, repo):
+    """go in a fixture tree, pinned to the toolchain already installed: the
+    tree is the graded run's own output, and its go.mod must not choose a
+    toolchain for the grader to fetch and run."""
+    return subprocess.run(args, cwd=repo, capture_output=True,
+                          env={**os.environ, "GOTOOLCHAIN": "local"})
 def builds(repo):
-    return subprocess.run(["go","build","./..."],cwd=repo,capture_output=True).returncode==0
+    return gorun(["go","build","./..."],repo).returncode==0
 def tests(repo):
-    return subprocess.run(["go","test","-count=1","./..."],cwd=repo,capture_output=True).returncode==0
+    return gorun(["go","test","-count=1","./..."],repo).returncode==0
 def verify_cmds(r):
     """Every command handed to --verify, in order."""
     return [m.group(2) for m in re.finditer(r"--verify\s+(['\"])(.*?)\1", cmds(r))]
@@ -197,6 +203,14 @@ def grade(eid, r):
             TC("used hunk",used_hunk(r))]
     return []
 
+def write_grading(path, obj):
+    """The run directory is the graded agent's own output, so a grading.json
+    left there as a symbolic link is input, and this write must not follow it
+    anywhere. O_NOFOLLOW refuses the link; the caller says so and moves on."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "w") as f:
+        json.dump(obj, f, indent=2)
+
 def collect(root):
     """Grade every run under root, writing each run's grading.json.
 
@@ -222,8 +236,11 @@ def collect(root):
                 r=f"{d}/{arm}/run-{run}"
                 if not os.path.exists(f"{r}/outputs/transcript.md"): continue
                 ex=grade(eid,r)
-                with open(f"{r}/grading.json","w") as f:
-                    json.dump({"eval_id":eid,"expectations":ex},f,indent=2)
+                try:
+                    write_grading(f"{r}/grading.json",{"eval_id":eid,"expectations":ex})
+                except OSError as e:
+                    print(f"  ! {r}/grading.json was not written ({e.strerror}): a symbolic link there is refused. Not counted.")
+                    continue
                 rows.append((eid,arm,run,ex))
     return rows
 

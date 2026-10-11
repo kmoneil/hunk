@@ -25,6 +25,12 @@ _bench/
 # The grader's tests import grade.py, and importing compiles it.
 __pycache__/
 
+# Generic secret shapes, so a scratch credential never lands in a commit. A
+# fixture that wants one of these names is a deliberate `git add -f`.
+.env*
+*.pem
+*.key
+
 # OS / editor
 .DS_Store
 *.swp

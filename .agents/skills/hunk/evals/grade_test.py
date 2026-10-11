@@ -384,6 +384,56 @@ class Instrument(unittest.TestCase):
             rows = grade.collect(root)  # cases 0-8 have no directory at all
             self.assertEqual([r[0] for r in rows], [9])
 
+    def test_a_grading_json_left_as_a_link_is_refused(self):
+        # The run directory is the graded agent's own output, so a link
+        # planted at grading.json is input. Before this guard, collect()
+        # followed it and overwrote the file at the other end.
+        with tempfile.TemporaryDirectory() as root:
+            self.scaffold(root, 9, "unprompted-verify")
+            target = f"{root}/elsewhere.txt"
+            write(target, "precious\n")
+            os.symlink(target, f"{root}/eval-9/with_skill/run-1/grading.json")
+            said = io.StringIO()
+            with contextlib.redirect_stdout(said):
+                rows = grade.collect(root)
+            self.assertEqual(rows, [], "a run that planted a link is not counted")
+            with open(target) as f:
+                self.assertEqual(f.read(), "precious\n")
+            self.assertTrue(os.path.islink(f"{root}/eval-9/with_skill/run-1/grading.json"))
+            self.assertIn("grading.json", said.getvalue())
+
+    def test_a_plain_grading_json_is_written_and_counted(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.scaffold(root, 9, "unprompted-verify")
+            p = f"{root}/eval-9/with_skill/run-1/grading.json"
+            write(p, "{}")  # a previous grading is overwritten in place
+            rows = grade.collect(root)
+            self.assertEqual(len(rows), 1)
+            with open(p) as f:
+                self.assertEqual(json.load(f)["eval_id"], 9)
+
+    def test_go_runs_only_the_toolchain_already_here(self):
+        # A fixture tree's go.mod can name a toolchain, and the grader must
+        # not fetch and run what the graded agent wrote. Asserted on the
+        # call, because a tree that proves it live would need the network.
+        calls = []
+        real = grade.subprocess.run
+        def record(args, **kw):
+            calls.append((args[0], kw.get("env")))
+            class R:
+                returncode = 0
+            return R()
+        grade.subprocess.run = record
+        try:
+            grade.builds("/nowhere")
+            grade.tests("/nowhere")
+        finally:
+            grade.subprocess.run = real
+        self.assertEqual(len(calls), 2)
+        for argv0, env in calls:
+            self.assertEqual(argv0, "go")
+            self.assertEqual((env or {}).get("GOTOOLCHAIN"), "local")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

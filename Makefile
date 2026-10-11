@@ -29,8 +29,11 @@ all: check
 build:
 	$(GO) build -o $(BIN) .
 
+# Null-terminated, because a file name is one argument however it is spelled:
+# the word-split form fell over on a name with a space, exiting 2 with nothing
+# formatted. The .agents/ exclusion is a pathspec so no grep re-splits it.
 fmt:
-	gofumpt -w $$(git ls-files '*.go' | grep -v '^\.agents/')
+	git ls-files -z -- '*.go' ':(exclude).agents/*' | xargs -0 gofumpt -w --
 	cd scripts/corpus && gofumpt -w .
 
 # The eval fixtures under .agents/skills/*-workspace/ include deliberately
@@ -60,8 +63,11 @@ lint:
 # which is the exact mechanism paths.go relies on for confinement, and it was
 # live in the toolchain this module asked for until the go directive was moved
 # to 1.26.8.
+# Both modules: the classifier's figures are published, and its module lagged
+# the root's go directive once already.
 vuln:
 	govulncheck ./...
+	cd scripts/corpus && govulncheck ./...
 
 # The tripwire, not a target. See SIZE_BUDGET_BYTES.
 #
