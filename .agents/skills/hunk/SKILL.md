@@ -334,8 +334,9 @@ printed, and the exit is still 3.
 measurement, a deliberate hang (with `--timeout`), use `--try CMD` instead of a
 backup and a restore. It applies the batch, runs `CMD`, puts every file back
 whatever `CMD` does, prints `CMD`'s output, and exits with `CMD`'s own status,
-or 124 if `--timeout` ended it. The report starts `tried`, which is how its exit
-2 differs from a refused patch.
+or 124 if `--timeout` ended it. The report starts `tried` whatever the command
+said, on stdout when it passed and stderr otherwise, which is how its exit 2
+differs from a refused patch; a script should read `--json`'s `try.ran`.
 
 **Pass `--timeout` whenever the command could run long**, below your tool's own
 limit for the call: `--timeout 90s` under a two-minute limit. It ends the

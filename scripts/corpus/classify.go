@@ -146,8 +146,10 @@ var (
 	// back and hunk died of the signal, which a shell reports as 128 plus it.
 	// The text names the signal, so the code is read from it, and a file that
 	// could not be put back is 4 as it is after a verify. The --try form says
-	// it before "tried" can claim it, and the JSON form carries interrupted_by.
-	reExitInterrupted        = regexp.MustCompile(`(?m)^hunk: (?:applied \d+ hunks?, |tried \d+ hunks? and put back .*; )?interrupted by (SIG[A-Z]+)`)
+	// it before "tried" can claim it, and since #73's fix it has no `hunk: `
+	// prefix, which transcripts from before keep, so both are read. The JSON
+	// form carries interrupted_by.
+	reExitInterrupted        = regexp.MustCompile(`(?m)^(?:hunk: (?:applied \d+ hunks?, )?|(?:hunk: )?tried \d+ hunks? and put back .*; )interrupted by (SIG[A-Z]+)`)
 	reExitInterruptedNotBack = regexp.MustCompile(`(?m)^hunk: interrupted by SIG[A-Z]+ before .* could not be put back`)
 	reTryJSONInterrupted     = regexp.MustCompile(`"interrupted_by"`)
 	reExitChanged            = regexp.MustCompile(`changed on disk between being read and being written`)
