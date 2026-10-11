@@ -404,6 +404,15 @@ func (t *Tree) toName(p string) (string, error) {
 // is walked. And on Windows nothing here fires: its kernel reads the whole
 // path as text before it opens anything (#68), so the textual reading is the
 // kernel's and there is no second one.
+//
+// One pass, linear: the textual reading is built once, a victim's name is
+// built from its parent's name, a verdict that does not depend on the rest of
+// the path is cached by the victim's name, and the rest-dependent comparison
+// is budgeted by maxLinkHops, past which the path is refused as the loop
+// shape it is. Until 2026-10-11 each was done per ".." against the whole
+// path, and the fuzz sweep's deadline caught "d/../" repeated 16000 times
+// taking seven seconds: a patch path is agent-shaped input, and §9 means it
+// terminates promptly or it is a defect.
 func (t *Tree) refuseOwnDotDotAfterALink(p string) error {
 	if t.dotsAsText || !strings.Contains(p, "..") {
 		return nil
@@ -412,31 +421,60 @@ func (t *Tree) refuseOwnDotDotAfterALink(p string) error {
 	if !slices.Contains(parts, "..") {
 		return nil
 	}
+	text := t.joinName(base, cleanDots(parts), true)
+	top := "."
+	if base != "" {
+		top = filepath.Clean(base)
+	}
+	sep := string(filepath.Separator)
 	var named bool
-	var kept []string
+	// names[k] is the first k+1 kept components joined under the base, each
+	// built from the one before it; safe holds victims already known to read
+	// one way whatever follows them.
+	var names []string
+	safe := map[string]bool{}
+	thorough := 0
 	for i, c := range parts {
 		if c == "." {
 			continue
 		}
 		if c != ".." {
-			kept = append(kept, c)
+			parent := top
+			if len(names) > 0 {
+				parent = names[len(names)-1]
+			}
+			switch {
+			case parent == ".":
+				names = append(names, c)
+			case strings.HasSuffix(parent, sep):
+				names = append(names, parent+c)
+			default:
+				names = append(names, parent+sep+c)
+			}
 			continue
 		}
-		if len(kept) == 0 {
+		if len(names) == 0 {
 			// Nothing of the patch's own left to cancel: the ".." climbs the
 			// root or the filesystem's top, which toName judges as it always
 			// has.
 			return nil
 		}
-		victim := kept[len(kept)-1]
-		kept = kept[:len(kept)-1]
 		// The component this ".." cancels, where the kernel finds it: lstat
 		// follows a link among the components before it, as the kernel has by
 		// the time it reads the "..", and a prefix it cannot traverse stays
 		// in the textual reading too, for the ordinary walk to judge.
-		name := t.joinName(base, append(slices.Clone(kept), victim), true)
+		name := names[len(names)-1]
+		parent := top
+		if len(names) > 1 {
+			parent = names[len(names)-2]
+		}
+		names = names[:len(names)-1]
+		if safe[name] {
+			continue
+		}
 		fi, err := t.lstat(name)
 		if err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+			safe[name] = true
 			continue
 		}
 		// The link's own chain first: one that loops or leads out is refused
@@ -446,18 +484,29 @@ func (t *Tree) refuseOwnDotDotAfterALink(p string) error {
 		if err != nil {
 			return err
 		}
-		// The two readings. Walked, the link is a directory the kernel is
-		// inside and the ".." leaves it, so the chain's parent takes the
-		// rest; as text, the ".." cancels the link unfollowed. Equal text is
-		// one reading, and so are two spellings that resolve to one file.
-		walked := filepath.Join(append([]string{filepath.Dir(chain)}, parts[i+1:]...)...)
-		text := t.joinName(base, cleanDots(parts), true)
-		if walked == text {
+		if filepath.Dir(chain) == parent {
+			// The chain keeps the victim's parent, so walked or cancelled the
+			// path goes on from the same directory: one reading whatever
+			// follows, which is what lets the verdict be cached.
+			safe[name] = true
 			continue
 		}
+		thorough++
+		if thorough > maxLinkHops {
+			return &PathRefusal{
+				Path: p, Root: t.Shown(), Resolved: name,
+				Reason: "too many symlinks; the chain loops or is absurd",
+			}
+		}
+		// The two readings. Walked, the link is a directory the kernel is
+		// inside and the ".." leaves it, so the chain's parent takes the
+		// rest; as text, the ".." cancels the link unfollowed. Two spellings
+		// that resolve to one file are one reading, and rest-dependent, so
+		// not cached.
+		walked := filepath.Join(append([]string{filepath.Dir(chain)}, parts[i+1:]...)...)
 		wFull, _, wErr := t.resolveLinks(name, walked, &named)
 		tFull, _, tErr := t.resolveLinks(p, text, &named)
-		if wErr == nil && tErr == nil && wFull == tFull {
+		if walked == text || (wErr == nil && tErr == nil && wFull == tFull) {
 			continue
 		}
 		return &PathRefusal{
