@@ -275,6 +275,12 @@ func (t *Tree) Resolve(p string) (Target, error) {
 				", a control character, which hunk does not allow in a file name; remove it from the patch",
 		}
 	}
+	// A ".." the patch wrote that cancels a symlink has two readings, the
+	// kernel's and the textual one toName is about to take. One path has to be
+	// one file, so the ambiguous shape is refused before it is cleaned.
+	if err := t.refuseOwnDotDotAfterALink(p); err != nil {
+		return Target{}, err
+	}
 	name, err := t.toName(p)
 	if err != nil {
 		return Target{}, err
@@ -375,6 +381,115 @@ func (t *Tree) toName(p string) (string, error) {
 		}
 	}
 	return clean, nil
+}
+
+// refuseOwnDotDotAfterALink refuses a ".." the patch itself wrote that cancels
+// a symlink and leaves the path with two readings (§6.5). toName reads a patch
+// path as text, which is what every path library does: with x -> sub/deep,
+// "x/../in.txt" is in.txt. The kernel follows x first and reads sub/in.txt.
+// Both readings have tools behind them, so until 2026-10-11 an edit, or a
+// delete, of x/../in.txt acted on in.txt at exit 0 while `cat x/../in.txt`
+// printed sub/in.txt: a wrong-file edit of exactly the kind hunk exists to
+// refuse, found building #72. A ".." in a link's destination has been walked
+// physically since 2026-10-06; this closes the same question for the patch's
+// own path the other way, by refusing it, which keeps the walk the one walker
+// and prints both readings for the caller to pick from.
+//
+// Only the two-readings shape is refused. A ".." cancelling a plain directory
+// reads the same both ways. One cancelling a missing or non-directory
+// component is a path the kernel cannot open at all, where reading it as text
+// is the most anything can do, and it stands as it always has. One cancelling
+// a symlink whose two readings are one file stands too: y -> deep beside it
+// has nothing to guess, and d/z/../f is one file under two spellings once d
+// is walked. And on Windows nothing here fires: its kernel reads the whole
+// path as text before it opens anything (#68), so the textual reading is the
+// kernel's and there is no second one.
+func (t *Tree) refuseOwnDotDotAfterALink(p string) error {
+	if t.dotsAsText || !strings.Contains(p, "..") {
+		return nil
+	}
+	base, parts := t.ownParts(p)
+	if !slices.Contains(parts, "..") {
+		return nil
+	}
+	var named bool
+	var kept []string
+	for i, c := range parts {
+		if c == "." {
+			continue
+		}
+		if c != ".." {
+			kept = append(kept, c)
+			continue
+		}
+		if len(kept) == 0 {
+			// Nothing of the patch's own left to cancel: the ".." climbs the
+			// root or the filesystem's top, which toName judges as it always
+			// has.
+			return nil
+		}
+		victim := kept[len(kept)-1]
+		kept = kept[:len(kept)-1]
+		// The component this ".." cancels, where the kernel finds it: lstat
+		// follows a link among the components before it, as the kernel has by
+		// the time it reads the "..", and a prefix it cannot traverse stays
+		// in the textual reading too, for the ordinary walk to judge.
+		name := t.joinName(base, append(slices.Clone(kept), victim), true)
+		fi, err := t.lstat(name)
+		if err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+			continue
+		}
+		// The link's own chain first: one that loops or leads out is refused
+		// by the walk's wording, about the link, which a ".." after it does
+		// not improve.
+		chain, _, err := t.resolveLinks(name, name, &named)
+		if err != nil {
+			return err
+		}
+		// The two readings. Walked, the link is a directory the kernel is
+		// inside and the ".." leaves it, so the chain's parent takes the
+		// rest; as text, the ".." cancels the link unfollowed. Equal text is
+		// one reading, and so are two spellings that resolve to one file.
+		walked := filepath.Join(append([]string{filepath.Dir(chain)}, parts[i+1:]...)...)
+		text := t.joinName(base, cleanDots(parts), true)
+		if walked == text {
+			continue
+		}
+		wFull, _, wErr := t.resolveLinks(name, walked, &named)
+		tFull, _, tErr := t.resolveLinks(p, text, &named)
+		if wErr == nil && tErr == nil && wFull == tFull {
+			continue
+		}
+		return &PathRefusal{
+			Path: p, Root: t.Shown(),
+			Reason: fmt.Sprintf("a .. follows the symlink %s -> %s, so the path reads two ways: %s walked, %s as text; name the file itself",
+				name, chain, walked, text),
+		}
+	}
+	return nil
+}
+
+// ownParts returns the components the patch itself wrote, in this tree's
+// terms, under the base lstat and the walk take them with. For an absolute
+// path that is the part written below the root when confined, and the whole
+// path when not; a confined absolute path that does not reach the root as
+// written comes back empty, for toName to judge on its textual reading as it
+// always has.
+func (t *Tree) ownParts(p string) (string, []string) {
+	abs := filepath.IsAbs(p) || filepath.VolumeName(p) != ""
+	if t.r == nil {
+		if abs {
+			return t.splitName(p)
+		}
+		return t.root + string(filepath.Separator), splitPath(p)
+	}
+	if !abs {
+		return "", splitPath(p)
+	}
+	if rest, ok := below(t.root, p); ok {
+		return "", rest
+	}
+	return "", nil
 }
 
 // resolveLinks resolves every symlink on name, in whichever component it is, and

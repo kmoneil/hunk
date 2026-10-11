@@ -160,6 +160,9 @@ file. A symlink that stays inside the root is followed wherever it stands on
 the path, whether it holds an absolute path or a relative one. A path that
 leads outside, through `..` or a symlink, is refused with exit 2, and the
 refusal names the symlink when there is one, and the root as you gave it.
+A `..` written after a symlink in a patch's path is refused too, when
+following the link and cancelling it as text name two different files: the
+refusal prints both readings, so name the file itself.
 `--allow-outside-root` lifts that for every path in the batch, not only the one
 that needed it, and those paths are then opened by name rather than through the
 handle `hunk` otherwise holds on the root: a symlink on any of them is followed
