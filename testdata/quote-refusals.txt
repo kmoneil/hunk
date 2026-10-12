@@ -1,0 +1,60 @@
+no arguments
+    quote takes FILE START END, and got 0 arguments; run "hunk quote --help"
+one argument
+    quote takes FILE START END, and got 1 argument; run "hunk quote --help"
+two arguments
+    quote takes FILE START END, and got 2 arguments; run "hunk quote --help"
+four arguments
+    quote takes FILE START END, and got 4 arguments; run "hunk quote --help"
+START is not a number
+    START and END are line numbers counted from 1, and "x" is not one
+END is not a number
+    START and END are line numbers counted from 1, and "2a" is not one
+START is 0
+    START and END are line numbers counted from 1, and "0" is not one
+a sign
+    START and END are line numbers counted from 1, and "+1" is not one
+a fraction
+    START and END are line numbers counted from 1, and "2.5" is not one
+an empty number
+    START and END are line numbers counted from 1, and "" is not one
+a number no int holds
+    START and END are line numbers counted from 1, and "99999999999999999999" is not one
+a number with a control character in it
+    START and END are line numbers counted from 1, and "1\x1b[2J" is not one
+START after END
+    START is 6 and END is 3, so the range runs backwards
+a path a directive line would trim
+    "f.txt " begins or ends with a space or a tab, which a directive line drops, so no patch can name it
+a path with a leading tab
+    "\tf.txt" begins or ends with a space or a tab, which a directive line drops, so no patch can name it
+an unknown flag
+    flag provided but not defined: -nwe; run "hunk quote --help"
+a negative number is read as a flag
+    flag provided but not defined: -3; run "hunk quote --help"
+a flag with an escape in its name
+    flag provided but not defined: -x<U+001B>[2J; run "hunk quote --help"
+an empty --marker
+    --marker must not be empty
+a --marker with a newline in it
+    --marker contains U+000A, a control character, and a directive line could not start with it
+a FILE that is not there
+    absent.txt: no such file; only @@ create makes one; the root is /the/root
+a FILE that is a directory
+    sub: it is a directory, not a file; the root is /the/root
+a FILE outside the root
+    ../out.txt: the path climbs out of the root; the root is /the/root
+a FILE inside .git
+    .git/config: it is .git or inside it, which is git's own and not the working tree; hunk never edits there; the root is /the/root
+a FILE inside a file
+    f.txt/x: no such file; f.txt is a file, so nothing can be inside it; the root is /the/root
+a FILE with a control character in its name
+    f<U+001B>.txt: the path contains U+001B, a control character, which hunk does not allow in a file name; remove it from the patch; the root is /the/root
+an empty FILE
+    FILE is empty
+END past the last line
+    f.txt has 10 lines, so there is no line 40
+one empty line
+    gap.txt line 2 is empty, and an old of nothing matches at every position in the file; quote it together with a line beside it
+a directive in the range
+    doc.md line 2 is "@@ old", which a patch reads as a directive and not as text; pass --marker with a prefix that no line quoted starts with, here and to the hunk that applies the patch

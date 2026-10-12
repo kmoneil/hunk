@@ -102,6 +102,8 @@ const usage = `hunk applies literal text edits, in batches, as one transaction.
   hunk [flags]                 patch on stdin
   hunk [flags] -f patch.txt    patch from a file
   hunk format                  print the grammar and one worked example
+  hunk quote FILE START END    print lines of FILE as a hunk, to replace a
+                               block without pasting it; see its --help
 
 Nothing is written until every hunk in the batch is known to match exactly as
 many times as it claimed, and until every target is known to be unchanged since
@@ -217,6 +219,11 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		fmt.Fprint(stdout, formatDoc)
 		return exitOK
 	}
+	// quote reads the tree and writes a patch; it has its own flags and reads
+	// no patch, so it is told apart before anything here is parsed.
+	if len(args) > 0 && args[0] == "quote" {
+		return runQuote(args[1:], stdout, stderr)
+	}
 
 	fs := flag.NewFlagSet("hunk", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // the errors are written below, once, to stderr
@@ -282,6 +289,9 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		// synopsis says. Saying that beats "unexpected argument".
 		if fs.Arg(0) == "format" {
 			return fail(exitUsage, errors.New(`format is a subcommand and takes no flags; run "hunk format"`), "")
+		}
+		if fs.Arg(0) == "quote" {
+			return fail(exitUsage, errors.New(`quote is a subcommand and comes first, its flags after it; run "hunk quote --help"`), "")
 		}
 		return fail(exitUsage, fmt.Errorf("unexpected argument %q; the patch comes from stdin or -f", fs.Arg(0)), "")
 	}

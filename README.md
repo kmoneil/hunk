@@ -235,6 +235,93 @@ so no line in it can end anything.
 
 `hunk format` prints the full grammar and a worked example that applies.
 
+## Replacing a whole block: `hunk quote`
+
+`@@ old` wants the text it replaces, and for a block of a hundred lines that
+means pasting a hundred lines, which is slow and is where mistakes get in. When
+you know the block by its line numbers, `hunk quote FILE START END` prints it
+as a hunk instead: `@@ file FILE`, `@@ old`, and lines START through END,
+counted from 1.
+
+```sh
+{
+  hunk quote src/parse.go 40 95 --new new/parse.go
+  hunk quote src/parse.go 210 262
+  cat <<'HUNK'
+@@ new
+func walk(t *Tree) error {
+	return walkFrom(t.Root)
+}
+@@ file src/main.go
+@@ old
+	parse(src)
+@@ new
+	parse(src, defaults)
+HUNK
+} | hunk --dry-run
+```
+
+```
+quoted src/parse.go 40-95, 56 lines: "func parse(src []byte) (*Tree, error) {" to "}"
+quoted src/parse.go 210-262, 53 lines: "func walk(t *Tree) error {" to "}"
+M src/parse.go +9 -109
+M src/main.go  +1 -1
+2 files, 3 hunks, +10 -110 (dry run: nothing written)
+```
+
+`--new FILE` adds `@@ new` and FILE's content, so the range is replaced by it.
+Without it the hunk stops after the old text, and you write `@@ new` and the
+replacement yourself, as the second one above does. Either way what comes out
+is a patch like any other: concatenate it with other hunks, pipe it in, and it
+is one batch and one transaction.
+
+Nothing about applying changes, and `hunk quote` writes nothing to the tree. The
+quoted text still has to be in the file exactly once when the batch is applied,
+so a range too short to be unique is refused there, and so is a file that
+changed in between.
+
+**What it cannot check is the numbers.** The text it quotes is whatever is at
+those lines now, so it always matches. A line number that has gone stale since
+you read the file, or is off by one, quotes a different block, and that block
+is then replaced at exit 0. So each range's first and last line are printed on
+stderr, the `quoted` lines above, and the way to use them is to run the batch
+with `--dry-run` first, read them, and run it again without. Every range is
+read before anything is applied, so all the numbers are the file's as it is
+now, not as an earlier hunk in the batch will leave it.
+
+What it decides for you, so that the result is whole lines whichever file ends
+in a newline:
+
+- **A range is whole lines and so is the replacement.** `old` is the lines
+  without the last one's line ending and `new` is the `--new` file without its
+  last one, so a file or a replacement with no final newline comes out the same
+  as one with it, and a CRLF file stays CRLF under the default `--eol auto`.
+- **An empty `--new` file deletes the lines**, endings included, leaving no
+  blank line behind. `--new /dev/null` is one.
+- **A line that would read as a directive is refused**, in the range or in the
+  `--new` file, naming the file and the line. A replacement that quotes
+  `@@ delete b.txt` must not delete `b.txt`. Give `--marker` another prefix, to
+  every `hunk quote` and to the `hunk` that applies the batch, and write the
+  batch's other hunks under it too.
+- **`FILE` is found as the apply will find it**: relative to `--root`, and
+  refused for the same reasons in the same words.
+
+**A refusal is written into the patch as well as to stderr.** The `hunk` at the
+end of a brace group cannot see a command inside it fail, so a quote that
+refused and printed nothing would leave the rest of the batch to apply without
+it. Instead it prints an `@@ end` line that carries the reason. `@@ end` takes
+no argument, so the batch stops at exit 1 with nothing written, and says why:
+
+```
+hunk: patch line 66: "@@ end" takes no argument; found: refused by hunk quote: src/parse.go has 180 lines, so there is no line 210
+```
+
+`hunk quote` exits 1 for a call that is wrong whatever the tree holds (a flag,
+a number, START after END, a `--new` file that cannot be read), 2 for what the
+tree decides (a FILE the apply would refuse, a line past the end, a directive
+line, a range that is one empty line), and 5 for an I/O error. `hunk quote
+--help` has the whole of it.
+
 ## Verify, and rollback
 
 `--verify CMD` runs after a successful apply, from `--root`, through `sh -c`.

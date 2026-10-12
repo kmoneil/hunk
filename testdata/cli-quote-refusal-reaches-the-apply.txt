@@ -1,0 +1,1 @@
+hunk: patch line 6: "@@ end" takes no argument; found: refused by hunk quote: f.txt has 10 lines, so there is no line 40

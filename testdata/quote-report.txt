@@ -1,0 +1,9 @@
+quoted f.txt 2-9, 8 lines: "line 2" to "line 9"
+quoted f.txt 7, 1 line: "line 7"
+quoted f.txt 1-2, 2 lines: "line 1" to "line 2"
+quoted crlf.txt 1-3, 3 lines: "one" to "three"
+quoted odd.txt 1-2, 2 lines: "\tindented" to a blank line
+quoted odd.txt 2-3, 2 lines: a blank line to "esc\x1b[2J"
+quoted odd.txt 4-5, 2 lines: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"... to "last"
+quoted a b.txt 1-2, 2 lines: "x" to "y"
+quoted f.txt 2-3, 2 lines: "line 2" to "line 3"
