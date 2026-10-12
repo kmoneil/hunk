@@ -520,6 +520,8 @@ var reportGoldens = map[string]int{
 	"cli-parse-not-a-directive-bom":         1,
 	"cli-crlf-payload-on-an-lf-file":        2,
 	"cli-crlf-payload-on-an-lf-file-json":   2,
+	"cli-verify-piped-into-a-filter":        1,
+	"cli-verify-piped-into-a-filter-json":   1,
 }
 
 // The classifier reads hunk's diagnostics, and SPEC §8.1 says "a reworded

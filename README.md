@@ -255,6 +255,19 @@ of a compiled language. Every hunk can match, every file can be plausible on its
 own, and the batch can still not build, because what broke is *between* the
 files.
 
+`--verify` decides on the command's exit status, and a shell pipeline's status
+is its last command's. So `go test ./... 2>&1 | tail -5` exits 0 with every test
+failing, and a verify written that way cannot fail. `hunk` refuses one at exit
+1, before it reads the patch: a `--verify` command whose last pipeline ends in
+`tail`, `head`, `tee` or `cat`. Drop the pipe. The command's output is printed
+only when the verify fails, and then only its last 40 lines, which
+`--verify-lines N` changes. A pipeline that ends in `grep` is left alone,
+because `grep`'s status depends on what it read, and so is `--try`, whose tree
+goes back whatever its command says. The check reads plain pipelines and nothing
+cleverer: a command with a subshell, a command substitution or a here-document
+runs as written, and so does one that says `set -o pipefail`, which is how to
+keep a pipe and still have the verify fail.
+
 One subtlety, because it is the one behaviour that could make the tool
 dangerous. If your verify command rewrites files (`gofmt -w`, `prettier
 --write`, `make fmt`), pass `--verify-may-format`. Without it, a file that

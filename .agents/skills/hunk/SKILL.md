@@ -34,6 +34,7 @@ success.
 | `no anchor found` | Try a shorter `old` | Every line of your `old` was compared with every line of the file, whitespace ignored, and not one of them is there. Check the path, or that an earlier hunk did not already change it |
 | `would fall above the top of the file` | Re-read the file | Your `old` overhangs the top. The line it did find is printed with its number; drop the lines above it from your `old` |
 | `skipped: same file as hunk N` | Fix this hunk | It was never evaluated. Fix hunk N; this one may then be fine |
+| exit 1, `--verify cannot see the command piped into tail fail` | Wrap the pipe in a subshell to get it past | Drop the pipe. The verify's output is printed only when it fails, and then only its last 40 lines |
 | exit 3, `verify failed, rolled back` | Re-apply and hope | Every file is back to the same bytes and mode. The verify output is below the line; fix the patch |
 | exit 4, `was not restored` | Ignore it | The tree is inconsistent. Read which file and why, then repair it before doing anything else |
 | exit 5 | Assume the edit landed | Read the message. Unless it says otherwise, nothing was written, or it was put back. The cause is outside the patch: a missing shell, a name the filesystem refused, a full disk |
@@ -352,6 +353,16 @@ you compose. `--verify` decides on the exit code, and some tools report a
 problem and exit 0 anyway: `gofmt -l .` prints every unformatted file and
 succeeds. A verify that cannot fail is worse than none, because it says the
 tree is good.
+
+**Do not pipe the command into a filter to shorten its output.** A pipeline's
+exit status is its last command's, so `go test ./... 2>&1 | tail -5` exits 0
+with every test failing. `hunk` refuses a `--verify` whose last pipeline ends
+in `tail`, `head`, `tee` or `cat`, at exit 1, before anything is written. There
+is nothing to shorten: the command's output is printed only when the verify
+fails, and then only its last 40 lines. A pipeline that ends in `grep -q` is a
+test and is left alone, and so is anything under `--try`, where a filter on the
+output is the usual way to read it. `hunk` reads plain pipelines only, so a
+pipe inside a subshell or a `$(...)` is still yours to get right.
 
 One flag to know: if your verify command **rewrites files** (`gofmt -w`,
 `prettier --write`, `make fmt`), pass `--verify-may-format`. Without it, a file
