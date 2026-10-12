@@ -381,7 +381,12 @@ loop:
 		switch word {
 		case "end":
 			if arg != "" {
-				return nil, &ParseError{ln, fmt.Sprintf("%q takes no argument", marker+" end")}
+				// The argument is shown, since 2026-10-12, because it can be
+				// the message: "hunk quote" writes a refusal into the patch
+				// as this line, the one directive that is an error wherever
+				// it sits, so that a batch missing a quoted hunk does not
+				// apply without it.
+				return nil, &ParseError{ln, fmt.Sprintf("%q takes no argument; found: %s", marker+" end", showControls(arg))}
 			}
 			if i < len(lines) {
 				return nil, &ParseError{i + 1, fmt.Sprintf(

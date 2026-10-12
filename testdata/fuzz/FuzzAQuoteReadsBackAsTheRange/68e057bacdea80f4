@@ -1,0 +1,7 @@
+go test fuzz v1
+[]byte("\a\xa1\x98old\n0")
+int(1)
+int(2)
+[]byte("0")
+bool(true)
+string(" \xa1")

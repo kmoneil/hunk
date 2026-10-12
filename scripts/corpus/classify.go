@@ -102,6 +102,17 @@ var (
 	// be counted as an application.
 	reHunkProbe = regexp.MustCompile(hunkAnchor + `(?:\S*/)?hunk\s+(?:format|--help|-h|--version)\b`)
 
+	// "hunk quote", from 2026-10-12: it prints lines of a file as a hunk and
+	// applies nothing, so on its own it is no application either. It is nearly
+	// always in a brace group piped into the hunk that does apply, and that
+	// call is the apply's: quotesOnly asks whether a command has any other
+	// invocation, and hunkInvocation reads past these to the one whose flags
+	// are the batch's. The word boundary rather than a space after it, so the
+	// match ends at the word and the next invocation's anchor is still there
+	// to be found.
+	reHunkQuote = regexp.MustCompile(hunkAnchor + `(?:\S*/)?hunk\s+quote\b`)
+	reQuoteNext = regexp.MustCompile(`^\s*quote\b`)
+
 	// hunk's own report, exit by exit. Every one of these is goldened in
 	// testdata/, and classify_test.go reads the golden files rather than copies
 	// of them, so a reworded diagnostic fails this measurement rather than
@@ -242,7 +253,8 @@ var hunkDirectives = map[string]bool{
 // Exit categories that are not exit codes. Negative, so they cannot collide
 // with one.
 const (
-	// ExitProbe: the invocation asked hunk about itself.
+	// ExitProbe: the invocation asked hunk about itself, or only for lines of
+	// a file as a hunk ("hunk quote"). Either way it applied nothing.
 	ExitProbe = -1
 	// ExitUnclassified: an application whose output this file does not
 	// recognise. Counted and printed rather than folded into exit 5: defaulting
@@ -327,7 +339,7 @@ func IsHunkCall(cmd string) bool { return reHunkCall.MatchString(commandSkeleton
 // Returns ExitProbe for an invocation that asked hunk about itself, and
 // ExitUnclassified for output this file does not recognise.
 func HunkExit(cmd, result string) int {
-	if reHunkProbe.MatchString(commandSkeleton(cmd)) {
+	if sk := commandSkeleton(cmd); reHunkProbe.MatchString(sk) || quotesOnly(sk) {
 		return ExitProbe
 	}
 	if reTryJSON.MatchString(result) {
@@ -380,6 +392,14 @@ func HunkExit(cmd, result string) int {
 		return ExitOK
 	}
 	return ExitUnclassified
+}
+
+// quotesOnly reports whether a command's skeleton runs hunk only as "hunk
+// quote". One apply among the quotes makes it an application, classified by
+// the report the apply printed.
+func quotesOnly(skeleton string) bool {
+	n := len(reHunkQuote.FindAllStringIndex(skeleton, -1))
+	return n > 0 && n == len(reHunkCall.FindAllStringIndex(skeleton, -1))
 }
 
 // signalExit is the status a shell reports for a process the named signal
@@ -493,9 +513,20 @@ func Marker(cmd string) string {
 // hunkInvocation is the part of a command that runs hunk: from the invocation
 // to the end of its line. A flag on the other side of a && belongs to another
 // command, and a patch payload is not a flag at all.
+//
+// The first one that is not "hunk quote": in `{ hunk quote a.go 4 9 --new n; }
+// | hunk --verify 'go build ./...'` the flags of the batch are the second
+// invocation's, and --new is not a flag an application was given. A command
+// that only quotes has no such part.
 func hunkInvocation(cmd string) string {
 	sk := commandSkeleton(cmd)
-	loc := reHunkCall.FindStringSubmatchIndex(sk)
+	var loc []int
+	for _, m := range reHunkCall.FindAllStringSubmatchIndex(sk, -1) {
+		if !reQuoteNext.MatchString(sk[m[3]:]) {
+			loc = m
+			break
+		}
+	}
 	if loc == nil {
 		return ""
 	}

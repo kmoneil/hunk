@@ -385,6 +385,36 @@ func TestHunkExit(t *testing.T) {
 		// counted as an application.
 		{"a probe with an assignment in front", "GODEBUG=x hunk --version", "hunk v0.2.4\n", ExitProbe},
 		{"a probe in a loop", "for v in a b; do hunk --help; done", "hunk applies literal text edits\n", ExitProbe},
+		// "hunk quote" prints lines as a hunk and applies nothing. Alone, or
+		// with other quotes, it is not an application whatever it printed.
+		{"a quote alone applies nothing", "hunk quote a.go 4 9", "@@ file a.go\n@@ old\nx\nquoted a.go 4-9, 6 lines: \"x\" to \"y\"\n", ExitProbe},
+		{"nor does one that refused", "hunk quote a.go 40 50", "hunk quote: a.go has 9 lines, so there is no line 40\n@@ end refused by hunk quote: a.go has 9 lines, so there is no line 40\n", ExitProbe},
+		{
+			"nor do several written to a file",
+			"{ hunk quote a.go 4 9 --new n.go; ./bin/hunk quote b.go 1 2; } > r.hunk",
+			"quoted a.go 4-9, 6 lines: \"x\" to \"y\"\nquoted b.go 1-2, 2 lines: \"a\" to \"b\"\n", ExitProbe,
+		},
+		{"nor two on two lines", "hunk quote a.go 4 9 > 1.hunk\nhunk quote b.go 1 2 > 2.hunk", "", ExitProbe},
+		{"a quote with nothing after it is still only a quote", "hunk quote\nhunk quote b.go 1 2", "", ExitProbe},
+		// Piped into an apply it is the apply's call, read off the apply's
+		// report, which comes after the quotes' own lines.
+		{
+			"a quote piped into an apply is an application",
+			"{ hunk quote a.go 4 9 --new n.go; } | hunk --dry-run",
+			"quoted a.go 4-9, 6 lines: \"x\" to \"y\"\nM a.go +1 -6\n1 file, 1 hunk, +1 -6 (dry run: nothing written)\n", 0,
+		},
+		{
+			"and its refusal is the apply's exit 1",
+			"{ hunk quote a.go 40 50; cat rest.hunk; } | hunk",
+			"hunk quote: a.go has 9 lines, so there is no line 40\nhunk: patch line 1: \"@@ end\" takes no argument; found: refused by hunk quote: a.go has 9 lines, so there is no line 40\n", 1,
+		},
+		{
+			"an apply on a later line makes it an application too",
+			"hunk quote a.go 4 9 --new n.go > r.hunk\nhunk -f r.hunk",
+			"quoted a.go 4-9, 6 lines: \"x\" to \"y\"\nhunk: 1 hunk did not match; nothing was written\n", 2,
+		},
+		{"a file named quote is not the subcommand", "hunk -f quote", "M a.go +1 -1\n1 file, 1 hunk, +1 -1\n", 0},
+		{"nor is a word that starts like it", "hunk quoted", "", ExitUnclassified},
 		// A loop is one call, one round trip, and its exit is the worst the
 		// text shows (IsHunkCall's comment has the argument).
 		{
@@ -522,6 +552,11 @@ var reportGoldens = map[string]int{
 	"cli-crlf-payload-on-an-lf-file-json":   2,
 	"cli-verify-piped-into-a-filter":        1,
 	"cli-verify-piped-into-a-filter-json":   1,
+	// "hunk quote --help" is asked for by its command, as cli-help is, and a
+	// quote's refusal reaches the classifier as the apply's parse error.
+	"cli-quote-help":                           ExitProbe,
+	"cli-quote-refusal-reaches-the-apply":      1,
+	"cli-quote-refusal-reaches-the-apply-json": 1,
 }
 
 // The classifier reads hunk's diagnostics, and SPEC §8.1 says "a reworded
@@ -950,6 +985,17 @@ func TestHunkFlags(t *testing.T) {
 		{"an assignment's value is not a flag", "X=--dry-run hunk -f p.txt", nil},
 		{"flags in a loop body", "for p in a b; do hunk --verify x -f $p; done", []string{"--verify"}},
 		{"flags behind timeout", "out=$(timeout 600 hunk --json -f p)", []string{"--json"}},
+		// A quote's flags are not an application's. The batch's are those of
+		// the hunk the quotes are piped into.
+		{
+			"a quote's flags are passed over for the apply's",
+			"{ hunk quote a.go 4 9 --new n.go; hunk quote --marker=%% b.go 1 2; } | hunk --dry-run --verify 'go build ./...'",
+			[]string{"--dry-run", "--verify"},
+		},
+		{"the apply on a later line", "hunk quote a.go 4 9 --new n.go > r.hunk\nhunk --json -f r.hunk", []string{"--json"}},
+		{"a command that only quotes passed an application nothing", "hunk quote a.go 4 9 --new n.go --marker %%", nil},
+		// Only the word right after the name is the subcommand.
+		{"an apply whose patch file is named quote", "hunk --json -f quote", []string{"--json"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := HunkFlags(c.cmd); !reflect.DeepEqual(got, c.want) {
@@ -972,6 +1018,8 @@ func TestReadsPatchFromFile(t *testing.T) {
 		{"a heredoc", "hunk <<'H'\n@@ old\nH", false},
 		{"another command's -f", "grep -f pats.txt x && hunk <<'H'\n@@ old\nH", false},
 		{"no -f at all", "hunk --dry-run <<'H'\n@@ old\nH", false},
+		{"the apply's -f behind a quote", "hunk quote a.go 4 9 > r.hunk; hunk -f r.hunk", true},
+		{"a quote has no -f", "hunk quote a.go 4 9 | hunk", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := ReadsPatchFromFile(c.cmd); got != c.want {

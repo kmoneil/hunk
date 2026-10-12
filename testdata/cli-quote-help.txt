@@ -1,0 +1,48 @@
+hunk quote prints a line range of a file as a hunk, so that replacing a whole
+block does not start with pasting it.
+
+  hunk quote [flags] FILE START END
+
+On stdout: "@@ file FILE", "@@ old", and lines START through END of FILE,
+counted from 1. It is a patch like any other. Follow it with "@@ new" and the
+replacement, or pass --new, then concatenate it with other hunks and pipe the
+lot into hunk:
+
+  { hunk quote --new new/parse.go src/parse.go 40 95
+    cat rest.hunk
+  } | hunk --dry-run
+
+Nothing is written to the tree. The apply still has to find the quoted text
+exactly once, so a range too short to be unique is refused there, and so is a
+file that changed in between.
+
+WHAT IT CANNOT CHECK
+
+The numbers. The text quoted is whatever is at those lines now, so it always
+matches, and a line number that has gone stale since you read the file quotes
+another block. Each range's first and last line are printed on stderr for that
+reason: run the batch with --dry-run first and read them.
+
+FLAGS
+
+  --new FILE            Add "@@ new" and FILE's content, so the range is
+                        replaced by it. An empty FILE deletes the lines. FILE
+                        is relative to the working directory, as -f is.
+  --marker STR          Directive prefix. (@@) Give the same one to the hunk
+                        that applies the patch. For when a line of the range,
+                        or of --new's file, would read as a directive.
+  --root DIR            Resolve FILE here, as the apply will. (cwd)
+  --allow-outside-root  Permit a FILE that resolves outside --root.
+
+REFUSALS
+
+A refusal is written twice: on stderr, and on stdout as an "@@ end" line that
+carries the reason, which no patch may hold. So the batch the quote was meant
+for stops at exit 1 instead of applying without it.
+
+  1  a flag, a number, START after END, a FILE no directive line can name,
+     or a --new file that cannot be read
+  2  FILE refused as the apply would refuse it, a line past the end of FILE,
+     a line of the range or of --new's file that is a directive under the
+     marker, or a range that is one empty line
+  5  I/O error

@@ -262,6 +262,69 @@ that asserts and writes one file at a time rebuilds the guard and loses the
 transaction: an assert that fails on the fourth file leaves the first three
 changed.
 
+## Replacing a whole block: `hunk quote`
+
+`@@ old` wants the text it replaces. For a block you know by its line numbers,
+because you have just read the file, do not paste a hundred lines and do not
+print them into a patch with `sed`. `hunk quote FILE START END` prints lines
+START through END as a hunk: `@@ file`, `@@ old`, and the lines.
+
+```sh
+{
+  hunk quote src/parse.go 40 95 --new new/parse.go
+  hunk quote src/parse.go 210 262
+  cat <<'HUNK'
+@@ new
+func walk(t *Tree) error {
+	return walkFrom(t.Root)
+}
+@@ file src/main.go
+@@ old
+	parse(src)
+@@ new
+	parse(src, defaults)
+HUNK
+} | hunk --dry-run
+```
+
+```
+quoted src/parse.go 40-95, 56 lines: "func parse(src []byte) (*Tree, error) {" to "}"
+quoted src/parse.go 210-262, 53 lines: "func walk(t *Tree) error {" to "}"
+M src/parse.go +9 -109
+M src/main.go  +1 -1
+2 files, 3 hunks, +10 -110 (dry run: nothing written)
+```
+
+`--new FILE` adds `@@ new` and FILE's content. Without it the hunk stops after
+the old text and you write `@@ new` and the replacement yourself, as the second
+one does. It is one batch and one transaction with everything else in the pipe,
+and the quoted text must still be in the file exactly once when it is applied.
+
+**Read the `quoted` lines before you apply.** They are each range's first and
+last line, and they are the only check on the numbers. The text quoted is
+whatever is at those lines now, so it always matches: a number that has gone
+stale since you read the file, or is off by one, quotes a different block, and
+that block is replaced at exit 0. That is why the example ends in `--dry-run`.
+When both ends of every range are the lines you meant, run the same pipe again
+without it.
+
+Five things to know:
+
+- **All the numbers are the file's as it is now.** Every quote reads the file
+  before anything is applied, so take them from one read and do not adjust a
+  later range for what an earlier hunk will add or remove.
+- **Whole lines in and out.** The `--new` file's final newline, or the lack of
+  one, changes nothing, and neither does the file's.
+- **An empty `--new` file deletes the lines** and leaves no blank line:
+  `--new /dev/null`.
+- **A line that would read as a directive is refused**, in the range or in the
+  `--new` file, naming it. Pass `--marker '%%'` to every `hunk quote` and to
+  the `hunk` that applies, and write the other hunks under it too.
+- **A quote that refuses stops the batch.** It writes its reason into the patch
+  as an `@@ end` line, so the `hunk` at the end of the pipe exits 1 with that
+  reason and applies nothing. Fix that quote and run the pipe again. Its own
+  exits are 1 for a bad call, 2 for a refusal about the file or the range.
+
 ## When to reach for it, and when not
 
 `hunk` earns its keep when an edit has something to go wrong: several changes
@@ -280,6 +343,7 @@ mirror of the habit this replaces, and it costs the same thing: round trips.
 | You are about to write `python3 - <<'PY'` that reads a file, replaces text and writes it back | `hunk`, always |
 | An edit that has to be **computed**: a block built from a list, a file split at an index | Python or the shell. `hunk` takes literal bytes in and literal bytes out, and has no expression language. Compute the patch if it helps, then pipe it in |
 | One literal edit repeated across files: a version bump, a year | `hunk`, with a loop that writes the patch (above) |
+| Replacing or deleting a whole block you know by its line numbers | `hunk quote`, piped into `hunk --dry-run` first (above) |
 | Several replacements, or several files, that must land together | `hunk` |
 | An edit that must be undone if the tests fail | `hunk --verify '...'` |
 | More than one file of a compiled language in one batch | `hunk --verify 'go build ./...'` |

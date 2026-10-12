@@ -3,6 +3,8 @@ hunk applies literal text edits, in batches, as one transaction.
   hunk [flags]                 patch on stdin
   hunk [flags] -f patch.txt    patch from a file
   hunk format                  print the grammar and one worked example
+  hunk quote FILE START END    print lines of FILE as a hunk, to replace a
+                               block without pasting it; see its --help
 
 Nothing is written until every hunk in the batch is known to match exactly as
 many times as it claimed, and until every target is known to be unchanged since

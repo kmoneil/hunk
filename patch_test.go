@@ -319,6 +319,10 @@ func TestParseErrors(t *testing.T) {
 		{"an overflowing count", "", "@@ file a.go\n@@ old x99999999999999999999\nx\n@@ new\ny\n", 2, "not an occurrence count"},
 
 		{"@@ end takes no argument", "", "@@ delete a.go\n@@ end now\n", 2, "takes no argument"},
+		// And shows the one it was given, since 2026-10-12: "hunk quote" writes
+		// its refusal there, and the argument is then the reason.
+		{"and says what it found", "", "@@ delete a.go\n@@ end now\n", 2, `"@@ end" takes no argument; found: now`},
+		{"with a control character in it named, not printed", "", "@@ delete a.go\n@@ end x\x1b[2Jy\n", 2, "found: x<U+001B>[2Jy"},
 		{"content after @@ end", "", "@@ delete a.go\n@@ end\njunk\n", 3, "terminates the patch"},
 		{"content after @@ end with a CR", "", "@@ delete a.go\r\n@@ end\r\njunk\r\n", 3, "terminates the patch"},
 
@@ -509,6 +513,7 @@ func FuzzParse(f *testing.F) {
 	f.Add("")
 	f.Add("@@ create c.txt\r\nhello\r\n@@ end\r\n")
 	f.Add("@@ delete a.go\n@@ end\f\n")
+	f.Add("@@ delete a.go\n@@ end refused by hunk quote: x\x1b[2J\n")
 	f.Add("@@\x0bdelete a\n")
 	f.Add("@@ file a\n@@ old x2\nx\n\n@@ new\n\n@@ end\n")
 
