@@ -15,6 +15,10 @@ FLAGS
                         rolls everything back. Optional: 58% of the measured
                         calls this tool was designed from bundled one, and
                         requiring it would be obnoxious for documentation edits.
+                        Refused, exit 1, if its last pipeline ends in tail,
+                        head, tee or cat: the exit status would be the
+                        filter's, and the verify could not fail. The output is
+                        printed only on failure, already cut by --verify-lines.
   --verify-may-format   On verify failure, or after --try, restore original
                         bytes even for files the command rewrote. Set this when
                         the command formats. Without it, a file that changed

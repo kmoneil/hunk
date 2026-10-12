@@ -114,6 +114,10 @@ FLAGS
                         rolls everything back. Optional: 58% of the measured
                         calls this tool was designed from bundled one, and
                         requiring it would be obnoxious for documentation edits.
+                        Refused, exit 1, if its last pipeline ends in tail,
+                        head, tee or cat: the exit status would be the
+                        filter's, and the verify could not fail. The output is
+                        printed only on failure, already cut by --verify-lines.
   --verify-may-format   On verify failure, or after --try, restore original
                         bytes even for files the command rewrote. Set this when
                         the command formats. Without it, a file that changed
@@ -305,6 +309,20 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	// --verify-may-format governs putting files back, which --try does too.
 	if *verifyFormat && *verify == "" && *try == "" {
 		return fail(exitUsage, errors.New("--verify-may-format does nothing without --verify or --try"), "")
+	}
+	// A --verify whose last pipeline ends in tail exits 0 whatever the command
+	// in front of it did, so it keeps a failing batch and says "verify ok":
+	// issue #80, and §4's flag that would do nothing in its most convincing
+	// form. It is refused here, before the patch is read, and under --dry-run
+	// too, so that a dry run that passes is not followed by a refusal. The fix
+	// is in the error rather than in a hint, because --json carries only the
+	// error. --try is not read: its tree goes back whatever the command says,
+	// and a filter on its output is how it is used.
+	if filter, ok := maskingFilter(*verify); ok {
+		return fail(exitUsage, fmt.Errorf("--verify cannot see the command piped into %[1]s fail: "+
+			"a pipeline's exit status is its last command's, and that is %[1]s; "+
+			"drop the pipe, since hunk prints the output only when the verify fails, "+
+			"cut to its last lines by --verify-lines (%[2]d), or set -o pipefail in the command", filter, *verifyLines), "")
 	}
 	timeout, err := parseTimeout(*timeoutFlag, *verify != "" || *try != "")
 	if err != nil {

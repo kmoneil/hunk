@@ -1,0 +1,1 @@
+hunk: --verify cannot see the command piped into tail fail: a pipeline's exit status is its last command's, and that is tail; drop the pipe, since hunk prints the output only when the verify fails, cut to its last lines by --verify-lines (40), or set -o pipefail in the command
