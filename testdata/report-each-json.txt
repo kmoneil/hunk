@@ -1,0 +1,34 @@
+{
+  "ok": false,
+  "exit": 3,
+  "each": {
+    "command": "zig build test",
+    "patches": [
+      {
+        "patch": "breaks/01-shadow-reach.hunk",
+        "ran": true,
+        "status": 1,
+        "seconds": 41.2,
+        "rolled_back": 1
+      },
+      {
+        "patch": "breaks/06-texture-not-hashed.hunk",
+        "ran": true,
+        "status": 0,
+        "seconds": 41.2,
+        "output": [
+          "All 212 tests passed."
+        ],
+        "rolled_back": 1
+      },
+      {
+        "patch": "breaks/19-loose.hunk",
+        "ran": true,
+        "status": 124,
+        "seconds": 170,
+        "rolled_back": 1,
+        "timed_out_after": 170
+      }
+    ]
+  }
+}

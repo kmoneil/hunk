@@ -2,6 +2,8 @@ hunk applies literal text edits, in batches, as one transaction.
 
   hunk [flags]                 patch on stdin
   hunk [flags] -f patch.txt    patch from a file
+  hunk --try CMD --each a.hunk b.hunk ...
+                               try each patch alone, one at a time
   hunk format                  print the grammar and one worked example
   hunk quote FILE START END    print lines of FILE as a hunk, to replace a
                                block without pasting it; see its --help
@@ -36,6 +38,17 @@ FLAGS
                         back whatever it says, and exit with its status. For a
                         print statement or a measurement you do not mean to
                         keep. 4 if a file could not be put back.
+  --each PATCH...       With --try: run its command over several patches, one
+                        at a time, the patches as arguments after the flags.
+                        Every patch is parsed and validated before the first
+                        try, so none is ever scored by an exit that was really
+                        hunk's; a line per patch goes to stderr as it
+                        finishes; the run stops at once if a file is not put
+                        back. The exit is the run's, never a command's: 0 when
+                        every command exited nonzero, 3 when one exited 0 or
+                        timed out, which in a deliberate-break run means the
+                        suite missed a break or hung on it. --timeout applies
+                        to each command separately.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put
@@ -72,6 +85,12 @@ EXIT CODES
 Exit 2 is the one to expect routinely and act on without alarm: fix the patch
 and resend. The report prints the bytes that are actually in the file, so the
 fix is usually a paste rather than a re-read.
+
+Under --try the exit is the command's own status, 124 for a --timeout. Under
+--try --each it is the run's, and a command's status never passes through: 0
+when every patch was tried and put back and every command exited nonzero, 3
+when a command exited 0 or timed out, and the table's own codes where the run
+refused or stopped.
 
 SIGINT, SIGTERM or SIGHUP while the --verify or --try command runs ends the
 command and everything it started, puts the batch back, and then ends hunk by

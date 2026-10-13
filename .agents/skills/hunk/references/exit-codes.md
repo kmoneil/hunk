@@ -22,6 +22,15 @@ without that word, the exit is `hunk`'s own, and `CMD` never ran. 124 means
 `--timeout` ended `CMD`, as `timeout(1)` exits; under `--verify` a timeout is 3,
 rolled back.
 
+**Under `--try CMD --each` the exit is the run's own, never a command's**: 0
+when every patch was tried and put back and every command exited nonzero; 3
+when a command exited 0 or timed out, which a deliberate-break run reads as a
+missed break or a hang; 4 when a file was not put back, and the run stopped
+there; 1, 2 or 5 when the preflight refused ("could not be read", "would not
+apply", "could not be checked"), or a patch stopped applying mid-run (2,
+"no longer applies": the tree changed under the run). A command's own 124
+never becomes the exit; a timed-out patch is a line and a `--json` entry.
+
 **What rollback leaves.** A symbolic link standing where `hunk` expected its own
 file is never removed or overwritten: the file is named and the exit is 4. A
 directory `hunk` made that holds something, or is no longer the one it made, is

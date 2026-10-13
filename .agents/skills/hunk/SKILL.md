@@ -403,6 +403,20 @@ or 124 if `--timeout` ended it. The report starts `tried` whatever the command
 said, on stdout when it passed and stderr otherwise, which is how its exit 2
 differs from a refused patch; a script should read `--json`'s `try.ran`.
 
+**For a set of break-patches tried one at a time**, a mutation or
+deliberate-break run, use `--try CMD --each a.hunk b.hunk ...` instead of a
+shell loop reading `$?`. The loop misreads what `--try`'s exit conflates: a
+patch with a typo exits 1 like an ordinary catch, so it scores as "caught"
+forever, and a file not put back prints `the command exited 0` on its first
+line. `--each` parses and validates every patch before the first try, applies
+each alone and puts every file back, prints a line per patch on stderr as it
+finishes, and stops at once if a file is not put back, where a loop would carry
+on against a broken tree. The exit is the run's, never a command's: 0 means
+every command exited nonzero (every break caught), 3 means a command exited 0
+or timed out (read the lines), 4 means it stopped with a file not restored.
+`--timeout` applies to each command separately. A script should read `--json`'s
+`each.patches`.
+
 **Pass `--timeout` whenever the command could run long**, below your tool's own
 limit for the call: `--timeout 90s` under a two-minute limit. It ends the
 command and everything it started, then rolls back (exit 3) or, under `--try`,

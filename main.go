@@ -101,6 +101,8 @@ const usage = `hunk applies literal text edits, in batches, as one transaction.
 
   hunk [flags]                 patch on stdin
   hunk [flags] -f patch.txt    patch from a file
+  hunk --try CMD --each a.hunk b.hunk ...
+                               try each patch alone, one at a time
   hunk format                  print the grammar and one worked example
   hunk quote FILE START END    print lines of FILE as a hunk, to replace a
                                block without pasting it; see its --help
@@ -135,6 +137,17 @@ FLAGS
                         back whatever it says, and exit with its status. For a
                         print statement or a measurement you do not mean to
                         keep. 4 if a file could not be put back.
+  --each PATCH...       With --try: run its command over several patches, one
+                        at a time, the patches as arguments after the flags.
+                        Every patch is parsed and validated before the first
+                        try, so none is ever scored by an exit that was really
+                        hunk's; a line per patch goes to stderr as it
+                        finishes; the run stops at once if a file is not put
+                        back. The exit is the run's, never a command's: 0 when
+                        every command exited nonzero, 3 when one exited 0 or
+                        timed out, which in a deliberate-break run means the
+                        suite missed a break or hung on it. --timeout applies
+                        to each command separately.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put
@@ -171,6 +184,12 @@ EXIT CODES
 Exit 2 is the one to expect routinely and act on without alarm: fix the patch
 and resend. The report prints the bytes that are actually in the file, so the
 fix is usually a paste rather than a re-read.
+
+Under --try the exit is the command's own status, 124 for a --timeout. Under
+--try --each it is the run's, and a command's status never passes through: 0
+when every patch was tried and put back and every command exited nonzero, 3
+when a command exited 0 or timed out, and the table's own codes where the run
+refused or stopped.
 
 SIGINT, SIGTERM or SIGHUP while the --verify or --try command runs ends the
 command and everything it started, puts the batch back, and then ends hunk by
@@ -232,13 +251,14 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	var (
 		verify       = fs.String("verify", "", "")
 		try          = fs.String("try", "", "")
+		each         = fs.Bool("each", false, "")
 		verifyFormat = fs.Bool("verify-may-format", false, "")
 		verifyLines  = fs.Int("verify-lines", 40, "")
 		keepOnFail   = fs.Bool("keep-on-fail", false, "")
 		dryRun       = fs.Bool("dry-run", false, "")
 		root         = fs.String("root", "", "")
 		marker       = fs.String("marker", DefaultMarker, "")
-		patchFile    = fs.String("f", "", "")
+		patchFile    onceFlag
 		asJSON       = fs.Bool("json", false, "")
 		quiet        = fs.Bool("quiet", false, "")
 		context      = fs.Int("context", DefaultContext, "")
@@ -249,6 +269,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		h            = fs.Bool("h", false, "")
 		showVersion  = fs.Bool("version", false, "")
 	)
+	fs.Var(&patchFile, "f", "")
 
 	// fail reports an error found before the transaction runs. §4: a caller
 	// that passed --json "asked for it on every path", so it gets the object
@@ -284,7 +305,34 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		fmt.Fprintf(stdout, "hunk %s\n", versionString(bi))
 		return exitOK
 	}
-	if fs.NArg() > 0 {
+	switch {
+	case *each:
+		// --each's patches are the positional arguments, so its refusals
+		// stand where "unexpected argument" otherwise would (§4.3).
+		switch {
+		case *try == "" && *verify != "":
+			return fail(exitUsage, errors.New("--each needs --try, not --verify: a verify keeps the batch that passes, and --each puts every patch back"), "")
+		case *try == "":
+			return fail(exitUsage, errors.New("--each tries each patch alone and does nothing without --try CMD"), "")
+		case patchFile.path != "":
+			return fail(exitUsage, errors.New("--each takes its patches as arguments, not from -f"), "")
+		case fs.NArg() == 0:
+			return fail(exitUsage, errors.New("--each needs at least one patch file"), "")
+		}
+		seen := make(map[string]bool, fs.NArg())
+		for _, name := range fs.Args() {
+			// The flag package stops reading flags at the first file, so a
+			// flag after one would be read as a patch named like one, and a
+			// run of forty would be one patch short with nothing said.
+			if strings.HasPrefix(name, "-") {
+				return fail(exitUsage, fmt.Errorf("argument %q begins with \"-\": flags come before --each's patch files", name), "")
+			}
+			if seen[name] {
+				return fail(exitUsage, fmt.Errorf("%s is listed twice", name), "")
+			}
+			seen[name] = true
+		}
+	case fs.NArg() > 0:
 		// "format" is a subcommand and has to come first, which is what §4's
 		// synopsis says. Saying that beats "unexpected argument".
 		if fs.Arg(0) == "format" {
@@ -355,14 +403,18 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		return fail(exitUsage, fmt.Errorf("--context must be at least 1, not %d", *context), "")
 	}
 
-	src, err := readPatch(*patchFile, stdin)
-	if err != nil {
-		return fail(exitUsage, err, "")
-	}
-
-	p, err := Parse(src, *marker)
-	if err != nil {
-		return fail(exitUsage, err, heredocHint(err, *patchFile == ""))
+	// --each reads its patches itself, one file each, once the tree is open.
+	var p *Patch
+	if !*each {
+		src, readErr := readPatch(patchFile.path, stdin)
+		if readErr != nil {
+			return fail(exitUsage, readErr, "")
+		}
+		var parseErr error
+		p, parseErr = Parse(src, *marker)
+		if parseErr != nil {
+			return fail(exitUsage, parseErr, heredocHint(parseErr, patchFile.path == ""))
+		}
 	}
 
 	dir := *root
@@ -386,6 +438,14 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		if _, lookErr := exec.LookPath("sh"); lookErr != nil {
 			return fail(exitIO, fmt.Errorf("%s runs its command with sh, which was not found (%v); nothing was written", name, lookErr), "")
 		}
+	}
+
+	if *each {
+		return runEach(eachConfig{
+			names: fs.Args(), command: *try, marker: *marker, opt: opt,
+			timeout: timeout, verifyLines: *verifyLines, verifyFormat: *verifyFormat,
+			dryRun: *dryRun, asJSON: *asJSON, quiet: *quiet,
+		}, tree, stdout, stderr, interrupted)
 	}
 
 	txn := NewTxn(tree, opt)
@@ -612,6 +672,25 @@ func heredocHint(err error, fromStdin bool) string {
 	}
 	return "the patch came from stdin: if two heredocs share its command line, the shell feeds them " +
 		"in the order their delimiters appear, so check that the one hunk reads is the patch"
+}
+
+// onceFlag is -f: a string flag that refuses to be set twice. As a plain
+// flag.String it took the last value silently, so "hunk -f a.hunk -f b.hunk"
+// read only b.hunk and exited 0, the silent kind of wrong result this tool
+// refuses everywhere else (§4.3).
+type onceFlag struct {
+	set  bool
+	path string
+}
+
+func (o *onceFlag) String() string { return o.path }
+
+func (o *onceFlag) Set(v string) error {
+	if o.set {
+		return fmt.Errorf("already reading %s; one -f is one patch. To try several patches one at a time, use --try CMD --each", o.path)
+	}
+	o.set, o.path = true, v
+	return nil
 }
 
 // readPatch reads the patch from -f or from stdin.

@@ -376,6 +376,61 @@ func TestHunkExit(t *testing.T) {
 		{"--try --json whose command could not start", "hunk --json --try x -f p", "{\n  \"exit\": 5,\n  \"error\": \"could not run the --try command\",\n  \"try\": {\n    \"ran\": false\n  }\n}\n", 5},
 		// A command that exits 5 with the tree back is still hunk's 0.
 		{"--try --json whose command exited 5", "hunk --json --try x -f p", "{\n  \"exit\": 5,\n  \"try\": {\n    \"ran\": true,\n    \"status\": 5\n  }\n}\n", 0},
+		// --each (§4.3), from 2026-10-13. Its exit is the run's own, read off
+		// the summary line, never a command's status: the per-patch "exited 2"
+		// below must not read as a refused patch.
+		{
+			"--each, every command exited nonzero", "hunk --try x --each a.hunk b.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\ntried b.hunk  the command exited 2 (0.1s)\ntried 2 patches and put back every file; every command exited nonzero (0.2s)\n", 0,
+		},
+		{
+			"--each, a command exited 0", "hunk --try x --each a.hunk b.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\ntried b.hunk  the command exited 0 (0.1s)\ntried 2 patches and put back every file; 1 exited nonzero, 1 exited 0 (0.2s)\n", 3,
+		},
+		{
+			"--each, a command timed out", "hunk --try x --timeout 90s --each a.hunk",
+			"tried a.hunk  the command timed out after 90s\ntried 1 patch and put back every file; 1 timed out (90.0s)\n", 3,
+		},
+		{
+			"--each stopped, a file not restored", "hunk --try x --each a.hunk b.hunk",
+			"tried a.hunk  the command exited 0 (0.1s); 1 file left alone\nnot tried: b.hunk\ntried 0 of 2 patches; stopped at a.hunk: 1 file was not restored; 1 patch not tried\n", 4,
+		},
+		{
+			"--each stopped, the tree changed under the run", "hunk --try x --each a.hunk b.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\nhunk: b.hunk no longer applies; the preflight matched every patch, so the tree has changed since the run began: by the command, or by another writer\n\nhunk 1  a.go  (patch line 2)\n  expected 1 occurrence, found 0\ntried 1 of 2 patches; stopped at b.hunk\n", 2,
+		},
+		{
+			"--each stopped, the command could not start", "hunk --try x --each a.hunk b.hunk",
+			"tried a.hunk  the command could not start\nhunk: at a.hunk: could not run the --try command: exec: \"sh\": not found; the batch was put back\nnot tried: b.hunk\ntried 0 of 2 patches; stopped at a.hunk; 1 patch not tried\n", 5,
+		},
+		{
+			"--each stopped, an I/O failure is 5 by the summary", "hunk --try x --each a.hunk b.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\nhunk: at b.hunk: open a.go: permission denied\ntried 1 of 2 patches; stopped at b.hunk\n", 5,
+		},
+		{
+			"--each interrupted", "hunk --try x --each a.hunk b.hunk",
+			"tried a.hunk  interrupted by SIGTERM, the command was ended (0.1s)\nnot tried: b.hunk\ntried 0 of 2 patches; interrupted by SIGTERM during a.hunk; 1 patch not tried\n", 143,
+		},
+		{
+			"--each refused: a patch could not be read", "hunk --try x --each a.hunk b.hunk",
+			"hunk: 1 of 2 patches could not be read; nothing was tried\n\nb.hunk: patch line 2: \"@@ old\" has no \"@@ new\"\n", 1,
+		},
+		{
+			"--each refused: a patch would not apply", "hunk --try x --each a.hunk b.hunk",
+			"hunk: 2 patches would not apply; nothing was tried\n", 2,
+		},
+		{
+			"--each refused: a patch could not be checked", "hunk --try x --each a.hunk b.hunk",
+			"hunk: 1 of 2 patches could not be checked; nothing was tried\n\na.hunk: open a.txt: permission denied\n", 5,
+		},
+		{
+			"--each dry run", "hunk --dry-run --try x --each a.hunk b.hunk",
+			"a.hunk  1 hunk, +1 -1\nb.hunk  2 hunks, +3 -2\n2 patches would apply, 3 hunks, +4 -3 (dry run: nothing written, command not run)\n", 0,
+		},
+		{
+			"--each in JSON carries the run's own exit", "hunk --json --try x --each a.hunk",
+			"{\n  \"ok\": false,\n  \"exit\": 3,\n  \"each\": {\n    \"command\": \"x\",\n    \"patches\": [\n      {\n        \"patch\": \"a.hunk\",\n        \"ran\": true,\n        \"status\": 0\n      }\n    ]\n  }\n}\n", 3,
+		},
 		{"--json says so outright", "hunk --json -f p", "{\n  \"ok\": false,\n  \"exit\": 6,\n}\n", 6},
 		{"a probe is not an application", "hunk --help", "hunk applies literal text edits\n", ExitProbe},
 		{"so is the grammar", "hunk format", "@@ file PATH\n", ExitProbe},
@@ -525,6 +580,16 @@ var reportGoldens = map[string]int{
 	"report-try-left-alone-json":                      4,
 	"report-rollback-incomplete":                      4,
 	"report-rollback-incomplete-json":                 4,
+	"report-each-clean":                               0,
+	"report-each-mixed":                               3,
+	"report-each-stopped":                             4,
+	"report-each-drift":                               2,
+	"report-each-interrupted":                         143,
+	"report-each-refused":                             1,
+	"report-each-would-not-apply":                     2,
+	"report-each-dry-run":                             0,
+	"report-each-json":                                3,
+	"report-each-refused-json":                        1,
 	"cli-rollback-incomplete":                         4,
 	"cli-rollback-left-a-directory":                   3,
 	"cli-rollback-left-a-directory-json":              3,

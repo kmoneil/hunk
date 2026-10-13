@@ -1,0 +1,3 @@
+hunk: 1 of 2 patches could not be read; nothing was tried
+
+breaks/19-typo.hunk: patch line 2: "@@ old" has no "@@ new"; every old needs the text to put in its place, even if that text is empty
