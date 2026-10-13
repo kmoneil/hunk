@@ -330,8 +330,14 @@ func (r *Report) writeValidationFailure(w io.Writer) {
 		fmt.Fprintf(w, ", %d skipped", skipped)
 	}
 	fmt.Fprintln(w, "; nothing was written")
+	writeFailureBlocks(w, r.Failures)
+}
 
-	for _, f := range r.Failures {
+// writeFailureBlocks is §5.2's body, one block per failure, shared with
+// --each's preflight, whose header names the patch rather than counting the
+// batch's hunks.
+func writeFailureBlocks(w io.Writer, failures []Failure) {
+	for _, f := range failures {
 		fmt.Fprintf(w, "\nhunk %d  %s  (patch line %d)\n", f.Hunk, f.Path, f.PatchLine)
 		if f.Skipped() {
 			fmt.Fprintf(w, "  skipped: same file as hunk %d, which did not match\n", f.SkippedAfter)
@@ -454,6 +460,14 @@ func shortDuration(d time.Duration) string {
 // writeTranscript is the command, its output's tail, and what rolling back
 // could not do, shared by a failed verify and --try.
 func writeTranscript(w io.Writer, v *Verify) {
+	writeCommandOutput(w, v)
+	writeAftermath(w, v)
+}
+
+// writeCommandOutput is the command and its output's tail. --each prints it
+// alone, under a patch whose command exited 0 or timed out, where the
+// aftermath lines belong to the patch's own line.
+func writeCommandOutput(w io.Writer, v *Verify) {
 	fmt.Fprintf(w, "\n$ %s\n", v.Command)
 	// The command's output is shown as a span line is, a control character by
 	// name: printed raw until 2026-10-07, a build log could clear the screen or
@@ -467,6 +481,11 @@ func writeTranscript(w io.Writer, v *Verify) {
 	if v.Cut {
 		fmt.Fprintf(w, "(%s)\n", cutNote())
 	}
+}
+
+// writeAftermath is what the run left that was not the plan: files already
+// gone, directories left, files not restored.
+func writeAftermath(w io.Writer, v *Verify) {
 	for _, p := range v.Gone {
 		fmt.Fprintf(w, "\n%s, which hunk created, was already gone: something else removed it.\n", p)
 	}
@@ -528,6 +547,7 @@ type jsonReport struct {
 	Hunks    int           `json:"hunks,omitempty"`
 	Verify   *jsonVerify   `json:"verify,omitempty"`
 	Try      *jsonTry      `json:"try,omitempty"`
+	Each     *jsonEach     `json:"each,omitempty"`
 	Failures []jsonFailure `json:"failures,omitempty"`
 	Error    string        `json:"error,omitempty"`
 	DryRun   bool          `json:"dry_run,omitempty"`
@@ -587,6 +607,36 @@ func endedJSON(v *Verify) jsonEnded {
 	return e
 }
 
+// jsonEach is --each's run (§4.3): the command and one entry per patch, in
+// the order they were given.
+type jsonEach struct {
+	Command string          `json:"command"`
+	Patches []jsonEachPatch `json:"patches"`
+}
+
+// jsonEachPatch is one patch of an --each run. ran says whether its command
+// did; a patch a stop left untried has ran false and nothing else. status is
+// a pointer because 0 is the most meaningful answer there is, a break the
+// suite let through, and no answer at all for a patch never tried. hunks,
+// added and removed are --dry-run's, where no command runs. output is there
+// where the text would show it: the command exited 0 or timed out.
+type jsonEachPatch struct {
+	Patch       string        `json:"patch"`
+	Ran         bool          `json:"ran"`
+	Status      *int          `json:"status,omitempty"`
+	Seconds     float64       `json:"seconds,omitempty"`
+	Hunks       int           `json:"hunks,omitempty"`
+	Added       *int          `json:"added,omitempty"`
+	Removed     *int          `json:"removed,omitempty"`
+	Output      []string      `json:"output,omitempty"`
+	RolledBack  int           `json:"rolled_back,omitempty"`
+	NotRestored []jsonRestore `json:"not_restored,omitempty"`
+	Gone        []string      `json:"already_gone,omitempty"`
+	Left        []jsonLeft    `json:"dirs_left,omitempty"`
+	Error       string        `json:"error,omitempty"`
+	jsonEnded
+}
+
 type jsonVerify struct {
 	Ran         bool          `json:"ran"`
 	OK          bool          `json:"ok"`
@@ -615,6 +665,9 @@ type jsonRestore struct {
 }
 
 type jsonFailure struct {
+	// Patch is the file the failing patch came from, under --each alone,
+	// where several patches share one failures array (§4.3).
+	Patch     string `json:"patch,omitempty"`
 	Hunk      int    `json:"hunk"`
 	Path      string `json:"path"`
 	PatchLine int    `json:"patch_line"`
@@ -686,35 +739,7 @@ func (r *Report) JSON(w io.Writer) error {
 		out.Verify = jv
 	}
 	for _, f := range r.Failures {
-		jf := jsonFailure{
-			Hunk: f.Hunk, Path: f.Path, PatchLine: f.PatchLine,
-			Expected: f.Expected, SkippedAfter: f.SkippedAfter, Refusal: f.Refusal,
-		}
-		if !f.Skipped() && f.Refusal == "" {
-			found := f.Found
-			jf.Found = &found
-		}
-		if d := f.Near; d != nil {
-			switch d.Kind {
-			case DiagTooMany:
-				jf.Lines = d.Lines
-			case DiagOverlap, DiagMixedEndings:
-				// The lines where copies are, as for too many, and the cause
-				// and the remedy, since found alone does not say why a count
-				// that equals the claim was refused.
-				jf.Lines, jf.LineEndings = d.Lines, d.Endings
-				jf.NearMiss = &jsonNear{Cause: d.causeName(), Detail: d.Detail, Shifted: d.Shifted}
-			case DiagNoAnchor:
-				jf.NearMiss = &jsonNear{Cause: d.causeName()}
-			default:
-				jf.NearMiss = &jsonNear{
-					Cause: d.causeName(), Line: d.Line,
-					Span: string(joinLines(d.Span)), SpanLines: d.SpanLines, Detail: d.Detail,
-					AlsoAt: d.Also, AlsoMore: d.AlsoMore, AlsoSame: d.AlsoSame, Shifted: d.Shifted,
-				}
-			}
-		}
-		out.Failures = append(out.Failures, jf)
+		out.Failures = append(out.Failures, jsonFailureOf(f))
 	}
 	if r.Exit != exitOK && len(r.Failures) == 0 && r.Err != nil {
 		out.Error = r.Err.Error()
@@ -725,6 +750,46 @@ func (r *Report) JSON(w io.Writer) error {
 			}
 		}
 	}
+	return encodeReport(w, out)
+}
+
+// jsonFailureOf is one failure's §5.2 object, shared by the batch's report
+// and --each's preflight, which adds the patch's name to each.
+func jsonFailureOf(f Failure) jsonFailure {
+	jf := jsonFailure{
+		Hunk: f.Hunk, Path: f.Path, PatchLine: f.PatchLine,
+		Expected: f.Expected, SkippedAfter: f.SkippedAfter, Refusal: f.Refusal,
+	}
+	if !f.Skipped() && f.Refusal == "" {
+		found := f.Found
+		jf.Found = &found
+	}
+	if d := f.Near; d != nil {
+		switch d.Kind {
+		case DiagTooMany:
+			jf.Lines = d.Lines
+		case DiagOverlap, DiagMixedEndings:
+			// The lines where copies are, as for too many, and the cause
+			// and the remedy, since found alone does not say why a count
+			// that equals the claim was refused.
+			jf.Lines, jf.LineEndings = d.Lines, d.Endings
+			jf.NearMiss = &jsonNear{Cause: d.causeName(), Detail: d.Detail, Shifted: d.Shifted}
+		case DiagNoAnchor:
+			jf.NearMiss = &jsonNear{Cause: d.causeName()}
+		default:
+			jf.NearMiss = &jsonNear{
+				Cause: d.causeName(), Line: d.Line,
+				Span: string(joinLines(d.Span)), SpanLines: d.SpanLines, Detail: d.Detail,
+				AlsoAt: d.Also, AlsoMore: d.AlsoMore, AlsoSame: d.AlsoSame, Shifted: d.Shifted,
+			}
+		}
+	}
+	return jf
+}
+
+// encodeReport writes one report object to w, shared by the batch's report
+// and --each's.
+func encodeReport(w io.Writer, out jsonReport) error {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")

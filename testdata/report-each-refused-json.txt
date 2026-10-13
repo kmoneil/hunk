@@ -1,0 +1,32 @@
+{
+  "ok": false,
+  "exit": 1,
+  "each": {
+    "command": "zig build test",
+    "patches": [
+      {
+        "patch": "breaks/01-shadow-reach.hunk",
+        "ran": false
+      },
+      {
+        "patch": "breaks/06-texture-not-hashed.hunk",
+        "ran": false
+      },
+      {
+        "patch": "breaks/19-typo.hunk",
+        "ran": false,
+        "error": "patch line 2: \"@@ old\" has no \"@@ new\""
+      }
+    ]
+  },
+  "failures": [
+    {
+      "patch": "breaks/06-texture-not-hashed.hunk",
+      "hunk": 1,
+      "path": "src/faults.zig",
+      "patch_line": 2,
+      "expected": 1,
+      "found": 0
+    }
+  ]
+}

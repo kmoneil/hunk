@@ -1,0 +1,5 @@
+hunk: 1 of 2 patches would not apply; nothing was tried
+
+breaks/06-texture-not-hashed.hunk:
+hunk 1  src/faults.zig  (patch line 2)
+  expected 1 occurrence, found 0

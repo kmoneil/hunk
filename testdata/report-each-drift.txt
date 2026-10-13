@@ -1,0 +1,7 @@
+tried breaks/01-shadow-reach.hunk  the command exited 1 (41.2s)
+hunk: breaks/02-texture.hunk no longer applies; the preflight matched every patch, so the tree has changed since the run began: by the command, or by another writer
+
+hunk 1  src/faults.zig  (patch line 2)
+  expected 1 occurrence, found 0
+not tried: breaks/19-loose.hunk
+tried 1 of 3 patches; stopped at breaks/02-texture.hunk; 1 patch not tried

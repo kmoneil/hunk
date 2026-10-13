@@ -148,10 +148,24 @@ var (
 	reExitTriedAlone     = regexp.MustCompile(`(?m)^(?:hunk: )?tried \d+ hunks? and put back .*left alone`)
 	reTryJSON            = regexp.MustCompile(`(?m)^\s*"try":\s*\{`)
 	reTryJSONNotRestored = regexp.MustCompile(`"not_restored"`)
+	// --each's report (§4.3), from 2026-10-13: one line per patch and a
+	// summary, each starting `tried`, with the wording tracking the exit one
+	// to one, so the code is read off the summary, the stop's story or the
+	// refusal header, never off a command's own status, which under --each
+	// never passes through as the exit.
+	reEachVerdict     = regexp.MustCompile(`(?m)^tried \d+ patch(?:es)? and put back every file; (.*)$`)
+	reEachStopped     = regexp.MustCompile(`(?m)^tried \d+ of \d+ patch(?:es)?; `)
+	reEachNotRestored = regexp.MustCompile(`(?m)^tried \d+ of \d+ patch(?:es)?; stopped at .*: \d+ files? (?:was|were) not restored`)
+	reEachInterrupted = regexp.MustCompile(`(?m)^tried \d+ of \d+ patch(?:es)?; interrupted by (SIG[A-Z]+)`)
+	reEachDrift       = regexp.MustCompile(`(?m)^hunk: .* no longer applies; the preflight matched every patch`)
+	reEachRefused     = regexp.MustCompile(`(?m)^hunk: (?:\d+ of )?\d+ patch(?:es)? (could not be read|would not apply|could not be checked); nothing was tried`)
+	reEachDryRun      = regexp.MustCompile(`(?m)^\d+ patch(?:es)? would apply, `)
+
 	// A --verify or --try command that could not start, which is 5 whether it
 	// was refused before writing (no sh) or rolled back after (an sh that
-	// would not run). Since 2026-09-22 both leave the tree as it was.
-	reExitCannotStart  = regexp.MustCompile(`(?m)^hunk: (?:could not run the (?:verify|--try) command|--(?:verify|try) runs its command with sh, which was not found)`)
+	// would not run). Since 2026-09-22 both leave the tree as it was. Under
+	// --each the same sentence follows the stopping patch's name.
+	reExitCannotStart  = regexp.MustCompile(`(?m)^hunk: (?:at .*: )?(?:could not run the (?:verify|--try) command|--(?:verify|try) runs its command with sh, which was not found)`)
 	reExitVerifyFailed = regexp.MustCompile(`(?m)^hunk: applied .*verify (?:failed|timed out)`)
 	// A signal to hunk while its command ran, from 2026-10-06: the batch went
 	// back and hunk died of the signal, which a shell reports as 128 plus it.
@@ -364,6 +378,45 @@ func HunkExit(cmd, result string) int {
 			return code
 		}
 	}
+	// --each first: its lines also start `tried`, but count patches where a
+	// single run counts hunks, so the two sets of rules cannot claim each
+	// other's reports.
+	if reEachStopped.MatchString(result) {
+		switch {
+		case reEachNotRestored.MatchString(result):
+			return 4
+		case reExitCannotStart.MatchString(result):
+			return 5
+		case reEachDrift.MatchString(result):
+			return ExitNoMatch
+		case reExitChanged.MatchString(result):
+			return 6
+		}
+		if m := reEachInterrupted.FindStringSubmatch(result); m != nil {
+			return signalExit(m[1])
+		}
+		// The remaining stop is an I/O failure, whose text is the OS's.
+		return 5
+	}
+	if m := reEachVerdict.FindStringSubmatch(result); m != nil {
+		if strings.Contains(m[1], "exited 0") || strings.Contains(m[1], "timed out") {
+			return 3
+		}
+		return ExitOK
+	}
+	if m := reEachRefused.FindStringSubmatch(result); m != nil {
+		switch m[1] {
+		case "could not be read":
+			return 1
+		case "would not apply":
+			return ExitNoMatch
+		}
+		return 5
+	}
+	if reEachDryRun.MatchString(result) {
+		return ExitOK
+	}
+
 	if m := reExitInterrupted.FindStringSubmatch(result); m != nil {
 		if reExitTriedAlone.MatchString(result) || reExitRollbackIncomplete.MatchString(result) ||
 			reExitInterruptedNotBack.MatchString(result) {

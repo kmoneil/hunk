@@ -387,6 +387,56 @@ a caller can tell `CMD`'s 2 from `hunk`'s own; in `--json`, `try.ran` says it.
 If a file could not be put back, because `CMD` rewrote it, the exit is 4, and
 `--verify-may-format` puts it back anyway.
 
+### Several patches, one at a time: `--try CMD --each`
+
+A deliberate-break run applies each of a set of small patches alone against
+the test suite, to see that the suite notices each one. A shell loop round
+`--try` misreads what its exit conflates on purpose: a patch with a typo exits
+1 like an ordinary catch, so it scores as "caught" forever; a command that
+exits 2 reads as "did not match" and one that exits 124 as a timeout; and when
+a file cannot be put back, the report's first line says `the command exited
+0`, which a loop reading that line scores as a missed break before carrying on
+against a broken tree.
+
+`--each` is that loop done right, once:
+
+```sh
+hunk --try 'zig build test' --timeout 170s --each breaks/*.hunk
+```
+
+Every patch is read, parsed and validated before the first try, and one that
+fails refuses the lot, nothing tried, so the typo in patch 19 is found before
+the first command runs. Then each patch alone, in the order given: apply, run
+the command, put every file back, exactly as one `--try` does, with
+`--timeout` applying to each command separately. One line per patch goes to
+stderr as it finishes, so a run your harness kills still shows every patch
+that completed:
+
+```
+tried breaks/01-shadow-reach.hunk   the command exited 1 (41.2s)
+tried breaks/06-texture.hunk        the command exited 0 (38.0s)
+tried breaks/19-loose.hunk          the command timed out after 170s
+tried 3 patches and put back every file; 1 exited nonzero, 1 exited 0, 1 timed out (249.2s)
+```
+
+The command's output is printed only under a patch whose command exited 0 or
+timed out, since those are the ones to investigate. The run stops at once
+where carrying on would lie: a file not put back (exit 4, the block names
+it), a patch refused after the preflight passed (the tree changed under the
+run, by the command or by another writer), a command that cannot start, a
+signal. Patches the stop left untried are listed as not tried.
+
+The exit is the run's, never a command's: 0 when every patch was tried and
+put back and every command exited nonzero; 3, as a verify whose verdict went
+against you, when a command exited 0 or timed out; 1, 2, 5 or 6 when the run
+refused or stopped; 4 when a file was not put back. In `--json` the run is an
+`each` object, one entry per patch, so a script reads `each.patches` rather
+than the lines.
+
+`--dry-run --each` is the preflight alone, one diffstat line per patch. And
+`-f` given twice is refused rather than read as the last one, which it
+silently was before `--each` existed.
+
 ### When the command does not end
 
 `--timeout DURATION` (`90s`, `5m`) ends the `--verify` or `--try` command after
@@ -431,7 +481,10 @@ and the five-second cut on its output covers what `sh` started.
 Under `--try` the exit is the command's own status instead, 124 if
 `--timeout` ended it, and 4 if a file could not be put back. A `hunk` ended by a
 signal during the command dies of that signal once the batch is back (130, 143,
-129).
+129). Under `--try --each` it is the run's, never a command's: 0 when every
+patch was tried and put back and every command exited nonzero, 3 when a
+command exited 0 or timed out, 4 when a file was not put back, the table's
+codes when the run refused or stopped.
 
 **Exit 2 is not an error condition to route around.** It is the tool working,
 and it is the one to expect routinely: fix the patch and resend. Exit 4 is the
