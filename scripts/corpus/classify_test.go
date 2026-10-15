@@ -175,6 +175,20 @@ func TestFailed(t *testing.T) {
 
 // A synthetic corpus, so the walker's arithmetic is checked against numbers
 // that can be counted by hand.
+// record is one transcript line as Claude Code writes it: a tool_use in an
+// assistant record, a tool_result in a user record. Until 2026-10-15 the
+// fixtures had no record type at all, which no real transcript lacks, and the
+// walk could not have been taught to read by type without them saying so.
+func record(blocks ...map[string]any) map[string]any {
+	typ := "assistant"
+	for _, b := range blocks {
+		if b["type"] == "tool_result" {
+			typ = "user"
+		}
+	}
+	return map[string]any{"type": typ, "message": map[string]any{"content": blocks}}
+}
+
 func fixtureCorpus(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -183,7 +197,7 @@ func fixtureCorpus(t *testing.T) string {
 		t.Fatal(err)
 	}
 	line := func(blocks ...map[string]any) string {
-		b, err := json.Marshal(map[string]any{"message": map[string]any{"content": blocks}})
+		b, err := json.Marshal(record(blocks...))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -844,7 +858,7 @@ func fixtureHunkCorpus(t *testing.T) string {
 		t.Fatal(err)
 	}
 	line := func(blocks ...map[string]any) string {
-		b, err := json.Marshal(map[string]any{"message": map[string]any{"content": blocks}})
+		b, err := json.Marshal(record(blocks...))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -938,7 +952,7 @@ func TestUnknownRecordsAreSkipped(t *testing.T) {
 	body := "not json at all\n" +
 		`{"type":"summary"}` + "\n" +
 		`{"message":{"content":"a string, not a list"}}` + "\n" +
-		`{"message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}` + "\n"
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}` + "\n"
 	if err := os.WriteFile(filepath.Join(root, "s.jsonl"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1234,7 +1248,7 @@ func fixtureAdoptionCorpus(t *testing.T) string {
 		t.Fatal(err)
 	}
 	line := func(blocks ...map[string]any) string {
-		b, err := json.Marshal(map[string]any{"message": map[string]any{"content": blocks}})
+		b, err := json.Marshal(record(blocks...))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1339,7 +1353,7 @@ func fixtureSplitCorpus(t *testing.T) string {
 				{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]any{"command": c[0]}},
 				{"type": "tool_result", "tool_use_id": id, "content": c[1]},
 			} {
-				b, err := json.Marshal(map[string]any{"message": map[string]any{"content": []any{rec}}})
+				b, err := json.Marshal(record(rec))
 				if err != nil {
 					t.Fatal(err)
 				}
