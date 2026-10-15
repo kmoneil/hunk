@@ -146,8 +146,17 @@ FLAGS
                         back. The exit is the run's, never a command's: 0 when
                         every command exited nonzero, 3 when one exited 0 or
                         timed out, which in a deliberate-break run means the
-                        suite missed a break or hung on it. --timeout applies
-                        to each command separately.
+                        suite missed a break or hung on it, or a patch did not
+                        build under --build. --timeout applies to each command
+                        separately.
+  --build CMD           With --try --each: run CMD once on the tree as it is,
+                        then after each patch is applied and before the --try
+                        command. A break that does not compile exits nonzero
+                        like a caught one; a patch whose build exits nonzero
+                        or times out is reported as "did not build", its
+                        output shown and its --try command not run, and the
+                        exit is 3. A build that fails with no patch applied
+                        refuses the run, exit 1.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put
@@ -188,8 +197,8 @@ fix is usually a paste rather than a re-read.
 Under --try the exit is the command's own status, 124 for a --timeout. Under
 --try --each it is the run's, and a command's status never passes through: 0
 when every patch was tried and put back and every command exited nonzero, 3
-when a command exited 0 or timed out, and the table's own codes where the run
-refused or stopped.
+when a command exited 0 or timed out or a patch did not build, and the table's
+own codes where the run refused or stopped.
 
 SIGINT, SIGTERM or SIGHUP while the --verify or --try command runs ends the
 command and everything it started, puts the batch back, and then ends hunk by
@@ -252,6 +261,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		verify       = fs.String("verify", "", "")
 		try          = fs.String("try", "", "")
 		each         = fs.Bool("each", false, "")
+		build        = fs.String("build", "", "")
 		verifyFormat = fs.Bool("verify-may-format", false, "")
 		verifyLines  = fs.Int("verify-lines", 40, "")
 		keepOnFail   = fs.Bool("keep-on-fail", false, "")
@@ -342,6 +352,12 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 			return fail(exitUsage, errors.New(`quote is a subcommand and comes first, its flags after it; run "hunk quote --help"`), "")
 		}
 		return fail(exitUsage, fmt.Errorf("unexpected argument %q; the patch comes from stdin or -f", fs.Arg(0)), "")
+	}
+	// --build runs between a patch and its command, a step only --each has:
+	// a single --try or --verify builds first in its own command.
+	if *build != "" && !*each {
+		return fail(exitUsage, errors.New("--build runs before each patch's command under --try --each, and does nothing without --each; "+
+			`one command can build first itself, as in "BUILD && TEST"`), "")
 	}
 
 	// --verify-may-format only ever acts during a rollback, and --keep-on-fail
@@ -442,7 +458,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 
 	if *each {
 		return runEach(eachConfig{
-			names: fs.Args(), command: *try, marker: *marker, opt: opt,
+			names: fs.Args(), command: *try, build: *build, marker: *marker, opt: opt,
 			timeout: timeout, verifyLines: *verifyLines, verifyFormat: *verifyFormat,
 			dryRun: *dryRun, asJSON: *asJSON, quiet: *quiet,
 		}, tree, stdout, stderr, interrupted)

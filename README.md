@@ -433,6 +433,41 @@ refused or stopped; 4 when a file was not put back. In `--json` the run is an
 `each` object, one entry per patch, so a script reads `each.patches` rather
 than the lines.
 
+**A break that does not compile reads as caught.** Zig and Go exit 1 for a
+compile error as for a failing test, and deleting one line easily leaves an
+unused parameter or variable behind, which both refuse. So the test command
+exits nonzero and the patch counts with the caught ones, though it never
+reached a test. `--build CMD` tells the two apart:
+
+```sh
+hunk --try 'go test ./...' --build 'go vet ./...' --timeout 170s --each breaks/*.hunk
+```
+
+The build runs once on the tree as it is, and a failure there refuses the
+run, exit 1, nothing tried: every patch would read as not built, true of each
+line and false about each patch. Then it runs after each patch is applied and
+before the command. A patch whose build exits nonzero or times out is put
+back without its command running, and its line says so, with the build's
+output under it, which is the compile error to fix the patch from:
+
+```
+tried breaks/01-shadow-reach.hunk  the command exited 1 (41.2s)
+tried breaks/04-depth-unused.hunk  did not build: the build exited 1 (1.6s)
+
+$ go vet ./...
+# example.com/faults
+# [example.com/faults]
+vet: ./reach.go:88:2: declared and not used: depth
+(last 3 of 3 lines)
+tried 2 patches and put back every file; 1 exited nonzero, 1 did not build (44.4s)
+```
+
+A patch that did not build is counted apart in the summary and makes the exit
+3, since a break that never reached a test was not shown caught. The build
+has to compile what the tests compile: `go vet ./...` or `go test -run '^$'
+./...`, `zig test --test-no-exec FILE`, `cargo test --no-run`. `go build
+./...` and `cargo build` leave the test files out.
+
 `--dry-run --each` is the preflight alone, one diffstat line per patch. And
 `-f` given twice is refused rather than read as the last one, which it
 silently was before `--each` existed.
@@ -483,8 +518,9 @@ Under `--try` the exit is the command's own status instead, 124 if
 signal during the command dies of that signal once the batch is back (130, 143,
 129). Under `--try --each` it is the run's, never a command's: 0 when every
 patch was tried and put back and every command exited nonzero, 3 when a
-command exited 0 or timed out, 4 when a file was not put back, the table's
-codes when the run refused or stopped.
+command exited 0 or timed out or, under `--build`, a patch did not build, 4
+when a file was not put back, the table's codes when the run refused or
+stopped, 1 among them when the build failed before the first patch.
 
 **Exit 2 is not an error condition to route around.** It is the tool working,
 and it is the one to expect routinely: fix the patch and resend. Exit 4 is the

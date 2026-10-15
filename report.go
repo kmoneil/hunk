@@ -608,10 +608,26 @@ func endedJSON(v *Verify) jsonEnded {
 }
 
 // jsonEach is --each's run (§4.3): the command and one entry per patch, in
-// the order they were given.
+// the order they were given. build is --build's command, and baseline its run
+// on the tree as it was before the first patch.
 type jsonEach struct {
-	Command string          `json:"command"`
-	Patches []jsonEachPatch `json:"patches"`
+	Command  string          `json:"command"`
+	Build    string          `json:"build,omitempty"`
+	Baseline *jsonEachBuild  `json:"baseline,omitempty"`
+	Patches  []jsonEachPatch `json:"patches"`
+}
+
+// jsonEachBuild is one --build run. ok is false for a build that exited
+// nonzero, timed out (status 124), was interrupted or could not start (ran
+// false); output is there when it ended by itself or by the timeout, since
+// that is the compile error the patch's author reads.
+type jsonEachBuild struct {
+	Ran     bool     `json:"ran"`
+	OK      bool     `json:"ok"`
+	Status  int      `json:"status"`
+	Seconds float64  `json:"seconds"`
+	Output  []string `json:"output,omitempty"`
+	jsonEnded
 }
 
 // jsonEachPatch is one patch of an --each run. ran says whether its command
@@ -619,21 +635,25 @@ type jsonEach struct {
 // a pointer because 0 is the most meaningful answer there is, a break the
 // suite let through, and no answer at all for a patch never tried. hunks,
 // added and removed are --dry-run's, where no command runs. output is there
-// where the text would show it: the command exited 0 or timed out.
+// where the text would show it: the command exited 0 or timed out. build is
+// the patch's --build run; when its ok is false, ran is false, since the
+// command never ran, and rolled_back and the rest are what the build's own
+// putting back did.
 type jsonEachPatch struct {
-	Patch       string        `json:"patch"`
-	Ran         bool          `json:"ran"`
-	Status      *int          `json:"status,omitempty"`
-	Seconds     float64       `json:"seconds,omitempty"`
-	Hunks       int           `json:"hunks,omitempty"`
-	Added       *int          `json:"added,omitempty"`
-	Removed     *int          `json:"removed,omitempty"`
-	Output      []string      `json:"output,omitempty"`
-	RolledBack  int           `json:"rolled_back,omitempty"`
-	NotRestored []jsonRestore `json:"not_restored,omitempty"`
-	Gone        []string      `json:"already_gone,omitempty"`
-	Left        []jsonLeft    `json:"dirs_left,omitempty"`
-	Error       string        `json:"error,omitempty"`
+	Patch       string         `json:"patch"`
+	Ran         bool           `json:"ran"`
+	Status      *int           `json:"status,omitempty"`
+	Seconds     float64        `json:"seconds,omitempty"`
+	Build       *jsonEachBuild `json:"build,omitempty"`
+	Hunks       int            `json:"hunks,omitempty"`
+	Added       *int           `json:"added,omitempty"`
+	Removed     *int           `json:"removed,omitempty"`
+	Output      []string       `json:"output,omitempty"`
+	RolledBack  int            `json:"rolled_back,omitempty"`
+	NotRestored []jsonRestore  `json:"not_restored,omitempty"`
+	Gone        []string       `json:"already_gone,omitempty"`
+	Left        []jsonLeft     `json:"dirs_left,omitempty"`
+	Error       string         `json:"error,omitempty"`
 	jsonEnded
 }
 

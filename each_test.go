@@ -865,7 +865,7 @@ func TestEachReportGoldens(t *testing.T) {
 				v.TimedOut, v.Seconds = 170*time.Second, 170.0
 			})},
 		}
-		code := eachJSON(eachConfig{command: "zig build test", asJSON: true}, patches, exitVerifyFailed, "", &out, &errOut)
+		code := eachJSON(eachConfig{command: "zig build test", asJSON: true}, patches, nil, exitVerifyFailed, "", &out, &errOut)
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d", code)
 		}
@@ -882,7 +882,7 @@ func TestEachReportGoldens(t *testing.T) {
 			}},
 			{name: "breaks/19-typo.hunk", loadErr: fmt.Errorf(`patch line 2: "@@ old" has no "@@ new"`)},
 		}
-		code := eachJSON(eachConfig{command: "zig build test", asJSON: true}, patches, exitUsage, "", &out, &errOut)
+		code := eachJSON(eachConfig{command: "zig build test", asJSON: true}, patches, nil, exitUsage, "", &out, &errOut)
 		if code != exitUsage {
 			t.Fatalf("exit %d", code)
 		}
@@ -1057,6 +1057,29 @@ func TestEachEndWritesACommitFailure(t *testing.T) {
 	}
 }
 
+// TestEachStopClauseCountsFiles is the stop clause's plural, which no live
+// row reaches: one failed try that leaves two files changed. It was the one
+// statement of each.go no test ran, at 88.9% of eachStopClause, from #84's
+// merge until 2026-10-15, though the card said 100%.
+func TestEachStopClauseCountsFiles(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		want string
+	}{
+		{1, "stopped at breaks/01.hunk: 1 file was not restored"},
+		{2, "stopped at breaks/01.hunk: 2 files were not restored"},
+	} {
+		nr := make([]NotRestored, c.n)
+		for i := range nr {
+			nr[i] = NotRestored{Path: fmt.Sprintf("f%d.txt", i), Reason: "changed"}
+		}
+		patches := []*eachPatch{{name: "breaks/01.hunk", v: &Verify{Ran: true, Try: true, NotRestored: nr}}}
+		if got := eachStopClause(patches, 0, nil, nil); got != c.want {
+			t.Errorf("%d files: %q, want %q", c.n, got, c.want)
+		}
+	}
+}
+
 // The --json report can itself fail to write, and the message must not claim
 // a tree state the run did not end in.
 func TestEachJSONReportCannotBeWritten(t *testing.T) {
@@ -1071,7 +1094,7 @@ func TestEachJSONReportCannotBeWritten(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var errOut bytes.Buffer
-			code := eachJSON(eachConfig{command: "true", asJSON: true}, patches, c.code, "", failingWriter{}, &errOut)
+			code := eachJSON(eachConfig{command: "true", asJSON: true}, patches, nil, c.code, "", failingWriter{}, &errOut)
 			if code != exitIO {
 				t.Errorf("exit %d, want 5", code)
 			}

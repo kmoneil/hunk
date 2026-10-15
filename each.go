@@ -27,6 +27,13 @@ package main
 //     and put back and every command exited nonzero, 3 when a command exited
 //     0 or timed out (as a verify whose verdict went against the caller), and
 //     the single-run codes where the run stopped.
+//
+// --build, from issue #86, is the same false catch one level down: a break
+// that does not compile makes the test command exit nonzero, and Zig and Go
+// exit 1 for a compile error as for a failing test. So a build command runs
+// between each patch and its command, and a patch whose build fails is its
+// own line and count, its command not run. It runs once on the tree as it is
+// first, so that "did not build" means the patch broke the build.
 
 import (
 	"errors"
@@ -44,6 +51,7 @@ import (
 type eachConfig struct {
 	names        []string
 	command      string
+	build        string // --build, empty for none
 	marker       string
 	opt          Options
 	timeout      time.Duration
@@ -66,8 +74,22 @@ type eachPatch struct {
 	failures []Failure
 	// res is the preflight's diffstat, which is the whole result of --dry-run.
 	res *Result
-	// v is the try's outcome, nil until this patch's turn came.
+	// v is the try's outcome, nil until this patch's turn came, and nil when
+	// its build failed, since then the command never ran.
 	v *Verify
+	// build is the --build command's run for this patch, nil without --build
+	// or before the patch's turn. When it failed, its rollback is the one that
+	// put the files back.
+	build *Verify
+}
+
+// outcome is the run that put this patch's files back: the command's, or the
+// build's when the command never ran. Nil for a patch the run did not reach.
+func (ep *eachPatch) outcome() *Verify {
+	if ep.v != nil {
+		return ep.v
+	}
+	return ep.build
 }
 
 // runEach is the mode: preflight, then the loop, then one summary. It returns
@@ -158,7 +180,7 @@ func countLoadErrs(patches []*eachPatch) int {
 // under its name, and nothing tried.
 func eachRefused(cfg eachConfig, patches []*eachPatch, what string, code int, stdout, stderr io.Writer) int {
 	if cfg.asJSON {
-		return eachJSON(cfg, patches, code, "", stdout, stderr)
+		return eachJSON(cfg, patches, nil, code, "", stdout, stderr)
 	}
 	bad := 0
 	for _, ep := range patches {
@@ -187,7 +209,7 @@ func eachRefused(cfg eachConfig, patches []*eachPatch, what string, code int, st
 // --dry-run prints nothing but what would happen.
 func eachDryRun(cfg eachConfig, patches []*eachPatch, stdout io.Writer) int {
 	if cfg.asJSON {
-		return eachJSON(cfg, patches, exitOK, "", stdout, io.Discard)
+		return eachJSON(cfg, patches, nil, exitOK, "", stdout, io.Discard)
 	}
 	if cfg.quiet {
 		return exitOK
@@ -201,8 +223,12 @@ func eachDryRun(cfg eachConfig, patches []*eachPatch, stdout io.Writer) int {
 		added += ep.res.Added()
 		removed += ep.res.Removed()
 	}
-	fmt.Fprintf(stdout, "%s would apply, %s, +%d -%d (dry run: nothing written, command not run)\n",
-		patchCount(len(patches)), count(hunks, "hunk"), added, removed)
+	ran := "command"
+	if cfg.build != "" {
+		ran = "build and command"
+	}
+	fmt.Fprintf(stdout, "%s would apply, %s, +%d -%d (dry run: nothing written, %s not run)\n",
+		patchCount(len(patches)), count(hunks, "hunk"), added, removed, ran)
 	return exitOK
 }
 
@@ -218,12 +244,35 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 	width := eachNameWidth(patches)
 	start := time.Now()
 
-	tried, zeros, timeouts := 0, 0, 0
+	tried, zeros, timeouts, notBuilt := 0, 0, 0, 0
 	stopAt := -1      // index of the patch the run stopped at, -1 for none
 	var stopErr error // a mid-run refusal or I/O failure, reported before the summary
 	var sig os.Signal // the signal that ended the run, re-raised by main
+	todo := patches
 
-	for i, ep := range patches {
+	var baseline *Verify
+	if cfg.build != "" {
+		// The build on the tree as it is, before any patch: one that fails
+		// here fails under every patch, and "did not build" would be true of
+		// each line and false about each patch. The handler goes in first:
+		// the build runs in its own process group, and would run on after a
+		// Ctrl-C that killed hunk.
+		notifyInterrupts(sigs)
+		b, err := runBuildCommand(cfg, tree, stop)
+		if err != nil {
+			return eachBaselineRefused(cfg, patches, nil,
+				fmt.Sprintf("could not run the --build command: %v; nothing was tried", err), exitIO, stdout, stderr)
+		}
+		baseline = b
+		switch {
+		case b.Signal != nil:
+			sig, stopAt, todo = b.Signal, 0, nil
+		case !b.OK:
+			return eachBaselineRefused(cfg, patches, b, baselineFailure(b), exitUsage, stdout, stderr)
+		}
+	}
+
+	for i, ep := range todo {
 		if s := pending(sigs); s != nil {
 			// Between patches: the tree is whole and nothing is running.
 			sig = s
@@ -244,27 +293,16 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 			}
 			break
 		}
-		var v *Verify
-		if s := pending(sigs); s != nil {
-			// The signal came while the batch was being written: commit
-			// finished, and the command never starts, as one --try has it.
-			// The sentence is the per-patch line's; the signal is the exit.
-			v, _ = interruptedBeforeTheCommand(txn, "", cfg.command, s, cfg.verifyFormat)
-			ep.v = v
-		} else {
-			var tryErr error
-			v, tryErr = runTry(txn, tree, cfg.command, cfg.verifyLines, cfg.verifyFormat, stop)
-			ep.v = v
-			if tryErr != nil {
-				// The command could not start. The batch is back (or the
-				// line says what is not), and a shell that lost sh mid-run
-				// will not find it for the next patch either.
-				stopAt, stopErr = i, tryErr
-				writeEachLine(cfg, stderr, width, ep)
-				break
-			}
-		}
+		tryErr := tryOne(cfg, ep, txn, tree, sigs, stop)
 		writeEachLine(cfg, stderr, width, ep)
+		if tryErr != nil {
+			// The command or the build could not start. The batch is back
+			// (or the line says what is not), and a shell that lost sh
+			// mid-run will not find it for the next patch either.
+			stopAt, stopErr = i, tryErr
+			break
+		}
+		v := ep.outcome()
 		if v.Signal != nil {
 			sig = v.Signal
 			stopAt = i
@@ -276,6 +314,8 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		}
 		tried++
 		switch {
+		case ep.v == nil:
+			notBuilt++
 		case v.TimedOut > 0:
 			timeouts++
 		case v.Status == 0:
@@ -283,7 +323,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		}
 	}
 	o := eachOutcome{
-		tried: tried, zeros: zeros, timeouts: timeouts,
+		tried: tried, zeros: zeros, timeouts: timeouts, notBuilt: notBuilt,
 		stopAt: stopAt, stopErr: stopErr, sig: sig,
 		seconds: time.Since(start).Seconds(),
 	}
@@ -292,15 +332,99 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		*interrupted = sig
 	}
 	if cfg.asJSON {
-		return eachJSON(cfg, patches, code, eachStopReason(patches, stopAt, sig, stopErr), stdout, stderr)
+		return eachJSON(cfg, patches, baseline, code, eachStopReason(patches, stopAt, sig, stopErr), stdout, stderr)
 	}
 	writeEachEnd(cfg, patches, o, code, stdout, stderr)
+	return code
+}
+
+// tryOne is one patch's turn once its batch is on disk: the build where there
+// is one, then the command, unless the build failed or a signal came first.
+// Whatever ran last put the files back, and ep.outcome() is that run. The
+// error is a build or a command that could not start.
+func tryOne(cfg eachConfig, ep *eachPatch, txn *Txn, tree *Tree, sigs chan os.Signal, stop Stop) error {
+	if s := pending(sigs); s != nil {
+		// The signal came while the batch was being written: commit
+		// finished, and nothing runs, as one --try has it. The sentence is
+		// the per-patch line's; the signal is the exit.
+		ep.v, _ = interruptedBeforeTheCommand(txn, "", cfg.command, s, cfg.verifyFormat)
+		return nil
+	}
+	if cfg.build != "" {
+		b, err := runBuild(cfg, txn, tree, stop)
+		ep.build = b
+		if err != nil || !b.OK {
+			return err
+		}
+		if s := pending(sigs); s != nil {
+			// The build had exited 0 when the signal came: the command never
+			// starts.
+			ep.v, _ = interruptedBeforeTheCommand(txn, "", cfg.command, s, cfg.verifyFormat)
+			return nil
+		}
+	}
+	v, err := runTry(txn, tree, cfg.command, cfg.verifyLines, cfg.verifyFormat, stop)
+	ep.v = v
+	return err
+}
+
+// runBuildCommand runs --build once, from the root, under the run's timeout
+// and signals. A timeout is 124 in Status, as --try's is.
+func runBuildCommand(cfg eachConfig, tree *Tree, stop Stop) (*Verify, error) {
+	b, err := RunVerify(cfg.build, tree.Root(), cfg.verifyLines, stop)
+	if err != nil {
+		return nil, err
+	}
+	if b.TimedOut > 0 {
+		b.Status = exitTimedOut
+	}
+	return b, nil
+}
+
+// runBuild is --build with one patch on disk. A build that exits 0 leaves the
+// batch for the command; any other end puts it back, since the command will
+// not run. One that cannot start puts it back too, and is exit 5 through the
+// error, as a command that cannot start is.
+func runBuild(cfg eachConfig, txn *Txn, tree *Tree, stop Stop) (*Verify, error) {
+	b, err := runBuildCommand(cfg, tree, stop)
+	if err != nil {
+		b = &Verify{Command: cfg.build, Applied: txn.Applied()}
+		return b, cannotStart("the --build command", "put back", err, b, txn, cfg.verifyFormat)
+	}
+	b.Applied = txn.Applied()
+	if !b.OK {
+		b.RolledBack, b.NotRestored, b.Gone, b.Left = txn.Rollback(cfg.verifyFormat)
+	}
+	return b, nil
+}
+
+// baselineFailure is why a build on the tree as it is refused the run.
+func baselineFailure(b *Verify) string {
+	what := fmt.Sprintf("exited %d", b.Status)
+	if b.TimedOut > 0 {
+		what = "timed out after " + shortDuration(b.TimedOut)
+	}
+	return "the build " + what + " with no patch applied, so every patch would read as not built; nothing was tried"
+}
+
+// eachBaselineRefused reports a run refused before its first patch by the
+// build on the tree as it is: the reason, and the build's output where it
+// ran, which is what the caller fixes the build command or the tree from.
+func eachBaselineRefused(cfg eachConfig, patches []*eachPatch, b *Verify, why string, code int, stdout, stderr io.Writer) int {
+	if cfg.asJSON {
+		return eachJSON(cfg, patches, b, code, why, stdout, stderr)
+	}
+	fmt.Fprintf(stderr, "hunk: %s\n", why)
+	if b != nil {
+		writeCommandOutput(stderr, b)
+	}
 	return code
 }
 
 // eachOutcome is how the loop ended, for the exit and the summary.
 type eachOutcome struct {
 	tried, zeros, timeouts int
+	notBuilt               int   // patches whose --build failed, their command not run
 	stopAt                 int   // index of the patch the run stopped at, -1 for none
 	stopErr                error // a mid-run refusal or I/O failure
 	sig                    os.Signal
@@ -310,15 +434,16 @@ type eachOutcome struct {
 // eachExit is §4.3's exit: the run's own, never a command's.
 func eachExit(patches []*eachPatch, o eachOutcome) int {
 	switch {
-	case o.stopAt >= 0 && patches[o.stopAt].v != nil && len(patches[o.stopAt].v.NotRestored) > 0:
+	case o.stopAt >= 0 && patches[o.stopAt].outcome() != nil && len(patches[o.stopAt].outcome().NotRestored) > 0:
 		return exitRollbackFailed
 	case o.sig != nil:
 		return signalExit(o.sig)
 	case o.stopErr != nil:
 		return ExitCode(o.stopErr)
-	case o.zeros > 0 || o.timeouts > 0:
+	case o.zeros > 0 || o.timeouts > 0 || o.notBuilt > 0:
 		// As a verify that went against the caller exits: the tree is back in
-		// place, and the verdict is the news (§4.3).
+		// place, and the verdict is the news (§4.3). A patch that did not
+		// build was shown nothing, so it is not a catch either.
 		return exitVerifyFailed
 	}
 	return exitOK
@@ -367,17 +492,23 @@ func writeEachEnd(cfg eachConfig, patches []*eachPatch, o eachOutcome, code int,
 		fmt.Fprintln(w)
 	default:
 		fmt.Fprintf(w, "tried %s and put back every file; %s (%.1fs)\n",
-			patchCount(o.tried), eachVerdict(o.tried, o.zeros, o.timeouts), o.seconds)
+			patchCount(o.tried), eachVerdict(o.tried, o.zeros, o.timeouts, o.notBuilt), o.seconds)
 	}
 }
 
 // writeEachLine is one patch's line, to stderr the moment it finished, plus
-// the command's output where it is the thing to read: a command that exited 0
-// or timed out is the one to investigate, and under --quiet those lines are
-// all that print.
+// the output where it is the thing to read: a command that exited 0 or timed
+// out is the one to investigate, a build that failed is the compile error the
+// patch's author fixes, and under --quiet those lines are all that print.
 func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
-	v := ep.v
-	actionable := v.Signal != nil || v.TimedOut > 0 || (v.Ran && v.Status == 0) ||
+	v, what := ep.v, "command"
+	if v == nil {
+		v, what = ep.build, "build"
+	}
+	// notBuilt is a build that ended by itself or by --timeout, not by a
+	// signal and not for want of a shell.
+	notBuilt := what == "build" && v.Ran && v.Signal == nil
+	actionable := v.Signal != nil || v.TimedOut > 0 || (v.Ran && v.Status == 0) || notBuilt ||
 		len(v.NotRestored) > 0 || len(v.Gone) > 0 || len(v.Left) > 0 || !v.Ran
 	if cfg.quiet && !actionable {
 		return
@@ -387,9 +518,13 @@ func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 	case v.Signal != nil && !v.Ran:
 		fmt.Fprintf(w, "interrupted by %s before the command ran", signalName(v.Signal))
 	case v.Signal != nil:
-		fmt.Fprintf(w, "interrupted by %s, the command was ended (%.1fs)", signalName(v.Signal), v.Seconds)
+		fmt.Fprintf(w, "interrupted by %s, the %s was ended (%.1fs)", signalName(v.Signal), what, v.Seconds)
 	case !v.Ran:
-		fmt.Fprint(w, "the command could not start")
+		fmt.Fprintf(w, "the %s could not start", what)
+	case notBuilt && v.TimedOut > 0:
+		fmt.Fprintf(w, "did not build: the build timed out after %s", shortDuration(v.TimedOut))
+	case notBuilt:
+		fmt.Fprintf(w, "did not build: the build exited %d (%.1fs)", v.Status, v.Seconds)
 	case v.TimedOut > 0:
 		fmt.Fprintf(w, "the command timed out after %s", shortDuration(v.TimedOut))
 	default:
@@ -399,7 +534,7 @@ func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 		fmt.Fprintf(w, "; %s left alone", count(len(v.NotRestored), "file"))
 	}
 	fmt.Fprintln(w)
-	if v.Ran && (v.TimedOut > 0 || v.Status == 0) {
+	if notBuilt || (v.Ran && (v.TimedOut > 0 || v.Status == 0)) {
 		writeCommandOutput(w, v)
 	}
 	writeAftermath(w, v)
@@ -411,12 +546,12 @@ func eachStopClause(patches []*eachPatch, stopAt int, sig os.Signal, stopErr err
 	ep := patches[stopAt]
 	name := showControls(ep.name)
 	switch {
-	case ep.v != nil && len(ep.v.NotRestored) > 0:
-		if n := len(ep.v.NotRestored); n > 1 {
+	case ep.outcome() != nil && len(ep.outcome().NotRestored) > 0:
+		if n := len(ep.outcome().NotRestored); n > 1 {
 			return fmt.Sprintf("stopped at %s: %d files were not restored", name, n)
 		}
 		return fmt.Sprintf("stopped at %s: 1 file was not restored", name)
-	case sig != nil && ep.v == nil:
+	case sig != nil && ep.outcome() == nil:
 		return "interrupted by " + signalName(sig)
 	case sig != nil:
 		return fmt.Sprintf("interrupted by %s during %s", signalName(sig), name)
@@ -441,13 +576,14 @@ func eachStopReason(patches []*eachPatch, stopAt int, sig os.Signal, stopErr err
 	return eachStopClause(patches, stopAt, sig, stopErr)
 }
 
-// eachVerdict is the summary's middle: what the commands said.
-func eachVerdict(tried, zeros, timeouts int) string {
-	if zeros == 0 && timeouts == 0 {
+// eachVerdict is the summary's middle: what the commands said, and how many
+// patches never reached theirs because the build failed.
+func eachVerdict(tried, zeros, timeouts, notBuilt int) string {
+	if zeros == 0 && timeouts == 0 && notBuilt == 0 {
 		return "every command exited nonzero"
 	}
-	parts := make([]string, 0, 3)
-	if n := tried - zeros - timeouts; n > 0 {
+	parts := make([]string, 0, 4)
+	if n := tried - zeros - timeouts - notBuilt; n > 0 {
 		parts = append(parts, fmt.Sprintf("%d exited nonzero", n))
 	}
 	if zeros > 0 {
@@ -455,6 +591,9 @@ func eachVerdict(tried, zeros, timeouts int) string {
 	}
 	if timeouts > 0 {
 		parts = append(parts, fmt.Sprintf("%d timed out", timeouts))
+	}
+	if notBuilt > 0 {
+		parts = append(parts, fmt.Sprintf("%d did not build", notBuilt))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -464,7 +603,7 @@ func eachVerdict(tried, zeros, timeouts int) string {
 func eachNotTried(patches []*eachPatch) []string {
 	var names []string
 	for _, ep := range patches {
-		if ep.v == nil && len(ep.failures) == 0 && ep.loadErr == nil {
+		if ep.outcome() == nil && len(ep.failures) == 0 && ep.loadErr == nil {
 			names = append(names, showControls(ep.name))
 		}
 	}
@@ -483,10 +622,14 @@ func eachNameWidth(patches []*eachPatch) int {
 
 // eachJSON is the whole run as one object, alone on stdout: the command and
 // one entry per patch, with the preflight's failures carrying each patch's
-// name. The streamed per-patch lines were stderr's.
-func eachJSON(cfg eachConfig, patches []*eachPatch, code int, stopReason string, stdout, stderr io.Writer) int {
+// name, and the build on the tree as it is where --build ran one. The
+// streamed per-patch lines were stderr's.
+func eachJSON(cfg eachConfig, patches []*eachPatch, baseline *Verify, code int, stopReason string, stdout, stderr io.Writer) int {
 	out := jsonReport{OK: code == exitOK, Exit: code, DryRun: cfg.dryRun}
-	je := &jsonEach{Command: cfg.command}
+	je := &jsonEach{Command: cfg.command, Build: cfg.build}
+	if baseline != nil {
+		je.Baseline = eachBuildJSON(baseline)
+	}
 	if stopReason != "" {
 		out.Error = stopReason
 	}
@@ -504,18 +647,25 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, code int, stopReason string,
 		case cfg.dryRun && ep.res != nil:
 			added, removed := ep.res.Added(), ep.res.Removed()
 			jp.Hunks, jp.Added, jp.Removed = ep.res.Hunks, &added, &removed
-		case ep.v != nil:
-			v := ep.v
-			status := v.Status
-			jp.Ran, jp.Status, jp.Seconds = v.Ran, &status, v.Seconds
-			jp.RolledBack, jp.Gone = v.RolledBack, v.Gone
-			jp.Left = jsonLefts(v.Left)
-			jp.jsonEnded = endedJSON(v)
-			if v.Ran && (v.TimedOut > 0 || v.Status == 0) {
-				jp.Output = v.Tail
+		case ep.outcome() != nil:
+			if ep.build != nil {
+				jp.Build = eachBuildJSON(ep.build)
 			}
-			for _, n := range v.NotRestored {
+			// What putting the files back did is the last run's, the
+			// build's when the command never ran.
+			back := ep.outcome()
+			jp.RolledBack, jp.Gone = back.RolledBack, back.Gone
+			jp.Left = jsonLefts(back.Left)
+			for _, n := range back.NotRestored {
 				jp.NotRestored = append(jp.NotRestored, jsonRestore{n.Path, n.Resolved, n.Reason})
+			}
+			if v := ep.v; v != nil {
+				status := v.Status
+				jp.Ran, jp.Status, jp.Seconds = v.Ran, &status, v.Seconds
+				jp.jsonEnded = endedJSON(v)
+				if v.Ran && (v.TimedOut > 0 || v.Status == 0) {
+					jp.Output = v.Tail
+				}
 			}
 		}
 		je.Patches = append(je.Patches, jp)
@@ -530,4 +680,14 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, code int, stopReason string,
 		return exitIO
 	}
 	return code
+}
+
+// eachBuildJSON is one --build run for --json: its output where it did not
+// exit 0 by itself, which is where the text shows it.
+func eachBuildJSON(b *Verify) *jsonEachBuild {
+	jb := &jsonEachBuild{Ran: b.Ran, OK: b.OK, Status: b.Status, Seconds: b.Seconds, jsonEnded: endedJSON(b)}
+	if b.Ran && !b.OK && b.Signal == nil {
+		jb.Output = b.Tail
+	}
+	return jb
 }

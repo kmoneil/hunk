@@ -446,6 +446,50 @@ func TestHelpCarriesWhatTheSpecCommitsItTo(t *testing.T) {
 	}
 }
 
+// TestEveryFlagHasAHelpEntry ties the flags invoke defines to --help's
+// entries, both ways. specFlags is §4's table and stops there, so until
+// 2026-10-15 a flag added later could ship with no entry and nothing would
+// fail: --build was written before its entry, and the suite was green. The
+// flags are read from main.go's source, since invoke builds its FlagSet
+// inline and no test can reach it.
+func TestEveryFlagHasAHelpEntry(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	var defined []string
+	for _, m := range reFlagDefinition.FindAllStringSubmatch(string(src), -1) {
+		switch name := m[1]; {
+		case name == "help" || name == "h":
+			// --help is the page itself.
+		case len(name) == 1:
+			defined = append(defined, "-"+name)
+		default:
+			defined = append(defined, "--"+name)
+		}
+	}
+	// Eighteen when this was written; fewer means the pattern stopped
+	// reading the definitions, and every check below would pass.
+	if len(defined) < 18 {
+		t.Fatalf("read %d flag definitions from main.go: %q", len(defined), defined)
+	}
+	listed := helpFlags(usage)
+	for _, f := range defined {
+		if !slices.Contains(listed, f) {
+			t.Errorf("main.go defines %s and --help has no entry for it", f)
+		}
+	}
+	for _, f := range listed {
+		if !slices.Contains(defined, f) {
+			t.Errorf("--help has an entry for %s, which main.go does not define", f)
+		}
+	}
+}
+
+// reFlagDefinition is a flag defined on invoke's FlagSet: fs.String("try",
+// ...), fs.Var(&patchFile, "f", ...).
+var reFlagDefinition = regexp.MustCompile(`\bfs\.(?:String|Bool|Int|Var)\((?:&\w+, )?"([a-z][a-z-]*)"`)
+
 // specFlags is §4's flag table: every flag the spec commits --help to.
 var specFlags = []string{
 	"--verify", "--verify-may-format", "--verify-lines", "--keep-on-fail", "--try",
