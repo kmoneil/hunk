@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -326,50 +327,8 @@ func (s *Stats) session(path, project string) error {
 		return err
 	}
 	defer f.Close()
-
-	var calls []call
-	results := map[string]string{}
-	returned := map[string]time.Time{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if !strings.Contains(string(line), "tool_") {
-			continue
-		}
-		var rec struct {
-			Timestamp string `json:"timestamp"`
-			Cwd       string `json:"cwd"`
-			Message   struct {
-				Content []struct {
-					Type      string          `json:"type"`
-					Name      string          `json:"name"`
-					ID        string          `json:"id"`
-					ToolUseID string          `json:"tool_use_id"`
-					Input     json.RawMessage `json:"input"`
-					Content   json.RawMessage `json:"content"`
-				} `json:"content"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal(line, &rec); err != nil {
-			continue // a record shape this tool does not know is not an error
-		}
-		at, _ := time.Parse(time.RFC3339Nano, rec.Timestamp) // zero when absent
-		for _, c := range rec.Message.Content {
-			switch c.Type {
-			case "tool_use":
-				var in struct {
-					Command string `json:"command"`
-				}
-				_ = json.Unmarshal(c.Input, &in)
-				calls = append(calls, call{id: c.ID, name: c.Name, command: in.Command, start: at, cwd: rec.Cwd})
-			case "tool_result":
-				results[c.ToolUseID] += resultText(c.Content)
-				returned[c.ToolUseID] = at
-			}
-		}
-	}
-	if err := sc.Err(); err != nil {
+	calls, results, returned, err := readSession(f)
+	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 
@@ -496,6 +455,63 @@ func (s *Stats) session(path, project string) error {
 		}
 	}
 	return nil
+}
+
+// readSession is one transcript as the calls it made, in order, with each
+// call's result text and the moment it came back, by tool_use id.
+//
+// A call is read from its assistant record and a result from its user record,
+// and nothing else is. A transcript is the conversation and more: since
+// 2026-10-14 an api-request-blob record carries the request as sent, with
+// copies of calls and results under the same ids, and until 2026-10-15 the
+// walk read them too and counted each copied call twice, every exit 2 then
+// followed by its own copy. Reading the two record types the conversation is
+// made of, rather than refusing the one type seen so far, leaves out the next
+// record that copies content as well.
+func readSession(r io.Reader) (calls []call, results map[string]string, returned map[string]time.Time, err error) {
+	results = map[string]string{}
+	returned = map[string]time.Time{}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if !strings.Contains(string(line), "tool_") {
+			continue
+		}
+		var rec struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Cwd       string `json:"cwd"`
+			Message   struct {
+				Content []struct {
+					Type      string          `json:"type"`
+					Name      string          `json:"name"`
+					ID        string          `json:"id"`
+					ToolUseID string          `json:"tool_use_id"`
+					Input     json.RawMessage `json:"input"`
+					Content   json.RawMessage `json:"content"`
+				} `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue // a record shape this tool does not know is not an error
+		}
+		at, _ := time.Parse(time.RFC3339Nano, rec.Timestamp) // zero when absent
+		for _, c := range rec.Message.Content {
+			switch {
+			case c.Type == "tool_use" && rec.Type == "assistant":
+				var in struct {
+					Command string `json:"command"`
+				}
+				_ = json.Unmarshal(c.Input, &in)
+				calls = append(calls, call{id: c.ID, name: c.Name, command: in.Command, start: at, cwd: rec.Cwd})
+			case c.Type == "tool_result" && rec.Type == "user":
+				results[c.ToolUseID] += resultText(c.Content)
+				returned[c.ToolUseID] = at
+			}
+		}
+	}
+	return calls, results, returned, sc.Err()
 }
 
 // resultText is a tool_result's content as the text an agent saw. The field is
