@@ -1,0 +1,19 @@
+tried breaks/01-shadow-reach.hunk        the command exited 1 (41.2s)
+tried breaks/04-depth-unused.hunk        did not build: the build exited 1 (1.6s)
+
+$ zig build
+src/faults.zig:88:17: error: unused function parameter
+fn reach(self: *Faults, depth: u32) u32 {
+                        ^~~~~
+(last 3 of 3 lines)
+tried breaks/06-texture-not-hashed.hunk  the command exited 0 (41.2s)
+
+$ zig build test
+All 212 tests passed.
+(last 1 of 1 lines)
+tried breaks/11-cache-loops.hunk         did not build: the build timed out after 2m50s
+
+$ zig build
+[3/9] compile src/cache.zig
+(last 1 of 1 lines)
+tried 4 patches and put back every file; 1 exited nonzero, 1 exited 0, 2 did not build (256.0s)

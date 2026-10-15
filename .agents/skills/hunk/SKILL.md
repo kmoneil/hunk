@@ -417,6 +417,18 @@ or timed out (read the lines), 4 means it stopped with a file not restored.
 `--timeout` applies to each command separately. A script should read `--json`'s
 `each.patches`.
 
+**In a compiled language, add `--build CMD`.** A break that does not compile
+makes the test command exit nonzero, so `--each` alone scores it as caught: Zig
+and Go exit 1 for a compile error as for a failing test, and deleting one line
+easily leaves an unused parameter behind. `--build` runs once on the tree as it
+is (a failure there refuses the run, exit 1, nothing tried), then after each
+patch and before the command; a patch whose build fails gets its own line,
+`did not build`, with the compile error under it to fix the patch from, its
+command is not run, and the exit is 3. Use a build that compiles the test files
+too: `go vet ./...` or `go test -run '^$' ./...`, `zig test --test-no-exec
+FILE`, `cargo test --no-run`; `go build ./...` and `cargo build` leave them
+out.
+
 **Pass `--timeout` whenever the command could run long**, below your tool's own
 limit for the call: `--timeout 90s` under a two-minute limit. It ends the
 command and everything it started, then rolls back (exit 3) or, under `--try`,

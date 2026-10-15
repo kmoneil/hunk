@@ -1,0 +1,6 @@
+hunk: the build exited 2 with no patch applied, so every patch would read as not built; nothing was tried
+
+$ zig build
+error: no step named 'biuld'
+  access the help menu with 'zig build -h'
+(last 2 of 2 lines)

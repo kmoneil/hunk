@@ -423,6 +423,38 @@ func TestHunkExit(t *testing.T) {
 			"--each refused: a patch could not be checked", "hunk --try x --each a.hunk b.hunk",
 			"hunk: 1 of 2 patches could not be checked; nothing was tried\n\na.hunk: open a.txt: permission denied\n", 5,
 		},
+		// --build (§4.3), from 2026-10-15: a patch whose build failed is a
+		// line and a count, and the summary's "did not build" is 3; the
+		// build's own "exited 1" under it never reads as the run's exit. A
+		// build that fails before the first patch refuses the run at 1.
+		{
+			"--each --build, a patch did not build", "hunk --try x --build y --each a.hunk b.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\ntried b.hunk  did not build: the build exited 1 (0.1s)\n\n$ y\na.zig:1:18: error: unused function parameter\n(last 1 of 1 lines)\ntried 2 patches and put back every file; 1 exited nonzero, 1 did not build (0.2s)\n", 3,
+		},
+		{
+			"--each --build, a build timed out", "hunk --try x --build y --timeout 90s --each a.hunk",
+			"tried a.hunk  did not build: the build timed out after 90s\n\n$ y\ntried 1 patch and put back every file; 1 did not build (90.0s)\n", 3,
+		},
+		{
+			"--each --build, every patch built and was caught", "hunk --try x --build y --each a.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\ntried 1 patch and put back every file; every command exited nonzero (0.2s)\n", 0,
+		},
+		{
+			"--each --build refused: the build fails with no patch applied", "hunk --try x --build y --each a.hunk",
+			"hunk: the build exited 2 with no patch applied, so every patch would read as not built; nothing was tried\n\n$ y\nerror: no step named 'tst'\n(last 1 of 1 lines)\n", 1,
+		},
+		{
+			"--each --build refused: the build times out with no patch applied", "hunk --try x --build y --timeout 90s --each a.hunk",
+			"hunk: the build timed out after 90s with no patch applied, so every patch would read as not built; nothing was tried\n\n$ y\n", 1,
+		},
+		{
+			"--each --build refused: the build could not start", "hunk --try x --build y --each a.hunk",
+			"hunk: could not run the --build command: fork/exec /bin/sh: exec format error; nothing was tried\n", 5,
+		},
+		{
+			"--each --build stopped, a patch's build could not start", "hunk --try x --build y --each a.hunk b.hunk",
+			"tried a.hunk  the build could not start\nhunk: at a.hunk: could not run the --build command: exec format error; the batch was put back\nnot tried: b.hunk\ntried 0 of 2 patches; stopped at a.hunk; 1 patch not tried\n", 5,
+		},
 		{
 			"--each dry run", "hunk --dry-run --try x --each a.hunk b.hunk",
 			"a.hunk  1 hunk, +1 -1\nb.hunk  2 hunks, +3 -2\n2 patches would apply, 3 hunks, +4 -3 (dry run: nothing written, command not run)\n", 0,
@@ -590,6 +622,9 @@ var reportGoldens = map[string]int{
 	"report-each-dry-run":                             0,
 	"report-each-json":                                3,
 	"report-each-refused-json":                        1,
+	"report-each-not-built":                           3,
+	"report-each-baseline":                            1,
+	"report-each-build-json":                          3,
 	"cli-rollback-incomplete":                         4,
 	"cli-rollback-left-a-directory":                   3,
 	"cli-rollback-left-a-directory-json":              3,

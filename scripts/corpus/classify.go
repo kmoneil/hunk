@@ -160,12 +160,16 @@ var (
 	reEachDrift       = regexp.MustCompile(`(?m)^hunk: .* no longer applies; the preflight matched every patch`)
 	reEachRefused     = regexp.MustCompile(`(?m)^hunk: (?:\d+ of )?\d+ patch(?:es)? (could not be read|would not apply|could not be checked); nothing was tried`)
 	reEachDryRun      = regexp.MustCompile(`(?m)^\d+ patch(?:es)? would apply, `)
+	// --build's refusal, from 2026-10-15: a build that fails on the tree as
+	// it is, before the first patch, is exit 1, nothing tried. A patch whose
+	// build fails is a line, and the summary's "did not build" is 3.
+	reEachBaseline = regexp.MustCompile(`(?m)^hunk: the build (?:exited \d+|timed out after \S+) with no patch applied`)
 
 	// A --verify or --try command that could not start, which is 5 whether it
 	// was refused before writing (no sh) or rolled back after (an sh that
 	// would not run). Since 2026-09-22 both leave the tree as it was. Under
 	// --each the same sentence follows the stopping patch's name.
-	reExitCannotStart  = regexp.MustCompile(`(?m)^hunk: (?:at .*: )?(?:could not run the (?:verify|--try) command|--(?:verify|try) runs its command with sh, which was not found)`)
+	reExitCannotStart  = regexp.MustCompile(`(?m)^hunk: (?:at .*: )?(?:could not run the (?:verify|--try|--build) command|--(?:verify|try) runs its command with sh, which was not found)`)
 	reExitVerifyFailed = regexp.MustCompile(`(?m)^hunk: applied .*verify (?:failed|timed out)`)
 	// A signal to hunk while its command ran, from 2026-10-06: the batch went
 	// back and hunk died of the signal, which a shell reports as 128 plus it.
@@ -399,10 +403,13 @@ func HunkExit(cmd, result string) int {
 		return 5
 	}
 	if m := reEachVerdict.FindStringSubmatch(result); m != nil {
-		if strings.Contains(m[1], "exited 0") || strings.Contains(m[1], "timed out") {
+		if strings.Contains(m[1], "exited 0") || strings.Contains(m[1], "timed out") || strings.Contains(m[1], "did not build") {
 			return 3
 		}
 		return ExitOK
+	}
+	if reEachBaseline.MatchString(result) {
+		return 1
 	}
 	if m := reEachRefused.FindStringSubmatch(result); m != nil {
 		switch m[1] {

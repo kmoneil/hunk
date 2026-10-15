@@ -47,8 +47,17 @@ FLAGS
                         back. The exit is the run's, never a command's: 0 when
                         every command exited nonzero, 3 when one exited 0 or
                         timed out, which in a deliberate-break run means the
-                        suite missed a break or hung on it. --timeout applies
-                        to each command separately.
+                        suite missed a break or hung on it, or a patch did not
+                        build under --build. --timeout applies to each command
+                        separately.
+  --build CMD           With --try --each: run CMD once on the tree as it is,
+                        then after each patch is applied and before the --try
+                        command. A break that does not compile exits nonzero
+                        like a caught one; a patch whose build exits nonzero
+                        or times out is reported as "did not build", its
+                        output shown and its --try command not run, and the
+                        exit is 3. A build that fails with no patch applied
+                        refuses the run, exit 1.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put
@@ -89,8 +98,8 @@ fix is usually a paste rather than a re-read.
 Under --try the exit is the command's own status, 124 for a --timeout. Under
 --try --each it is the run's, and a command's status never passes through: 0
 when every patch was tried and put back and every command exited nonzero, 3
-when a command exited 0 or timed out, and the table's own codes where the run
-refused or stopped.
+when a command exited 0 or timed out or a patch did not build, and the table's
+own codes where the run refused or stopped.
 
 SIGINT, SIGTERM or SIGHUP while the --verify or --try command runs ends the
 command and everything it started, puts the batch back, and then ends hunk by
