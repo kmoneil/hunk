@@ -609,19 +609,23 @@ func endedJSON(v *Verify) jsonEnded {
 
 // jsonEach is --each's run (§4.3): the command and one entry per patch, in
 // the order they were given. build is --build's command, and baseline its run
-// on the tree as it was before the first patch.
+// on the tree as it was before the first patch; try_baseline is the
+// command's run there, after the build's (#90). baseline kept its name from
+// v0.3.13, where it was the only one.
 type jsonEach struct {
-	Command  string          `json:"command"`
-	Build    string          `json:"build,omitempty"`
-	Baseline *jsonEachBuild  `json:"baseline,omitempty"`
-	Patches  []jsonEachPatch `json:"patches"`
+	Command     string          `json:"command"`
+	Build       string          `json:"build,omitempty"`
+	Baseline    *jsonEachRun    `json:"baseline,omitempty"`
+	TryBaseline *jsonEachRun    `json:"try_baseline,omitempty"`
+	Patches     []jsonEachPatch `json:"patches"`
 }
 
-// jsonEachBuild is one --build run. ok is false for a build that exited
-// nonzero, timed out (status 124), was interrupted or could not start (ran
-// false); output is there when it ended by itself or by the timeout, since
-// that is the compile error the patch's author reads.
-type jsonEachBuild struct {
+// jsonEachRun is one --build run, or the command's run on the tree as it is.
+// ok is false for a run that exited nonzero, timed out (status 124), was
+// interrupted or could not start (ran false). A build's output is there when
+// it ended by itself or by the timeout, since that is the compile error the
+// patch's author reads; the command's is there always.
+type jsonEachRun struct {
 	Ran     bool     `json:"ran"`
 	OK      bool     `json:"ok"`
 	Status  int      `json:"status"`
@@ -634,26 +638,26 @@ type jsonEachBuild struct {
 // did; a patch a stop left untried has ran false and nothing else. status is
 // a pointer because 0 is the most meaningful answer there is, a break the
 // suite let through, and no answer at all for a patch never tried. hunks,
-// added and removed are --dry-run's, where no command runs. output is there
-// where the text would show it: the command exited 0 or timed out. build is
+// added and removed are --dry-run's, where no command runs. output is the
+// command's tail whenever it ran, a caught patch's included (#89). build is
 // the patch's --build run; when its ok is false, ran is false, since the
 // command never ran, and rolled_back and the rest are what the build's own
 // putting back did.
 type jsonEachPatch struct {
-	Patch       string         `json:"patch"`
-	Ran         bool           `json:"ran"`
-	Status      *int           `json:"status,omitempty"`
-	Seconds     float64        `json:"seconds,omitempty"`
-	Build       *jsonEachBuild `json:"build,omitempty"`
-	Hunks       int            `json:"hunks,omitempty"`
-	Added       *int           `json:"added,omitempty"`
-	Removed     *int           `json:"removed,omitempty"`
-	Output      []string       `json:"output,omitempty"`
-	RolledBack  int            `json:"rolled_back,omitempty"`
-	NotRestored []jsonRestore  `json:"not_restored,omitempty"`
-	Gone        []string       `json:"already_gone,omitempty"`
-	Left        []jsonLeft     `json:"dirs_left,omitempty"`
-	Error       string         `json:"error,omitempty"`
+	Patch       string        `json:"patch"`
+	Ran         bool          `json:"ran"`
+	Status      *int          `json:"status,omitempty"`
+	Seconds     float64       `json:"seconds,omitempty"`
+	Build       *jsonEachRun  `json:"build,omitempty"`
+	Hunks       int           `json:"hunks,omitempty"`
+	Added       *int          `json:"added,omitempty"`
+	Removed     *int          `json:"removed,omitempty"`
+	Output      []string      `json:"output,omitempty"`
+	RolledBack  int           `json:"rolled_back,omitempty"`
+	NotRestored []jsonRestore `json:"not_restored,omitempty"`
+	Gone        []string      `json:"already_gone,omitempty"`
+	Left        []jsonLeft    `json:"dirs_left,omitempty"`
+	Error       string        `json:"error,omitempty"`
 	jsonEnded
 }
 

@@ -10,6 +10,15 @@
       "status": 0,
       "seconds": 1.4
     },
+    "try_baseline": {
+      "ran": true,
+      "ok": true,
+      "status": 0,
+      "seconds": 40.8,
+      "output": [
+        "All 212 tests passed."
+      ]
+    },
     "patches": [
       {
         "patch": "breaks/01-shadow-reach.hunk",

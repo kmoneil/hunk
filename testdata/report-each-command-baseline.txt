@@ -1,0 +1,5 @@
+hunk: the command exited 5 with no patch applied, so every patch would read as caught; nothing was tried
+
+$ pytest -q -k GoogleLoger tests/
+5 deselected in 0.31s
+(last 1 of 1 lines)

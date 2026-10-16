@@ -29,9 +29,9 @@ missed break or a hang, or, under `--build`, a patch did not build, which
 tested nothing; 4 when a file was not put back, and the run stopped there; 1,
 2 or 5 when the preflight refused ("could not be read", "would not apply",
 "could not be checked"), or a patch stopped applying mid-run (2, "no longer
-applies": the tree changed under the run); 1 when `--build` failed with no
-patch applied, before anything was tried. A command's own 124 never becomes
-the exit; a timed-out patch is a line and a `--json` entry.
+applies": the tree changed under the run); 1 when `--build` or the command
+failed with no patch applied, before anything was tried. A command's own 124
+never becomes the exit; a timed-out patch is a line and a `--json` entry.
 
 **What rollback leaves.** A symbolic link standing where `hunk` expected its own
 file is never removed or overwritten: the file is named and the exit is 4. A

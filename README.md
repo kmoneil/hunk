@@ -406,7 +406,12 @@ hunk --try 'zig build test' --timeout 170s --each breaks/*.hunk
 
 Every patch is read, parsed and validated before the first try, and one that
 fails refuses the lot, nothing tried, so the typo in patch 19 is found before
-the first command runs. Then each patch alone, in the order given: apply, run
+the first command runs. Then the command runs once on the tree as it is, with
+no patch applied, and has to pass: a command that fails there fails under
+every patch, and each would read as caught. A test filter that matches nothing
+(pytest exits 5), an exit taken from the wrong end of a pipe, a `cd` from the
+wrong directory: each is refused there, exit 1, nothing tried, with the
+command's output shown. Then each patch alone, in the order given: apply, run
 the command, put every file back, exactly as one `--try` does, with
 `--timeout` applying to each command separately. One line per patch goes to
 stderr as it finishes, so a run your harness kills still shows every patch
@@ -420,7 +425,11 @@ tried 3 patches and put back every file; 1 exited nonzero, 1 exited 0, 1 timed o
 ```
 
 The command's output is printed only under a patch whose command exited 0 or
-timed out, since those are the ones to investigate. The run stops at once
+timed out, since those are the ones to investigate. To see what caught the
+others, give `--verify-lines N`: then the last N lines of every patch's output
+print under its line, the caught ones too, and a suite whose last lines name
+the failing test says what caught each break. `--json` carries every patch's
+output, given or not. The run stops at once
 where carrying on would lie: a file not put back (exit 4, the block names
 it), a patch refused after the preflight passed (the tree changed under the
 run, by the command or by another writer), a command that cannot start, a
@@ -443,12 +452,13 @@ reached a test. `--build CMD` tells the two apart:
 hunk --try 'go test ./...' --build 'go vet ./...' --timeout 170s --each breaks/*.hunk
 ```
 
-The build runs once on the tree as it is, and a failure there refuses the
-run, exit 1, nothing tried: every patch would read as not built, true of each
-line and false about each patch. Then it runs after each patch is applied and
-before the command. A patch whose build exits nonzero or times out is put
-back without its command running, and its line says so, with the build's
-output under it, which is the compile error to fix the patch from:
+The build runs once on the tree as it is, before the command does, and a
+failure there refuses the run, exit 1, nothing tried: every patch would read
+as not built, true of each line and false about each patch. Then it runs after
+each patch is applied and before the command. A patch whose build exits
+nonzero or times out is put back without its command running, and its line
+says so, with the build's output under it, which is the compile error to fix
+the patch from:
 
 ```
 tried breaks/01-shadow-reach.hunk  the command exited 1 (41.2s)
@@ -520,7 +530,8 @@ signal during the command dies of that signal once the batch is back (130, 143,
 patch was tried and put back and every command exited nonzero, 3 when a
 command exited 0 or timed out or, under `--build`, a patch did not build, 4
 when a file was not put back, the table's codes when the run refused or
-stopped, 1 among them when the build failed before the first patch.
+stopped, 1 among them when the build or the command failed before the first
+patch.
 
 **Exit 2 is not an error condition to route around.** It is the tool working,
 and it is the one to expect routinely: fix the patch and resend. Exit 4 is the

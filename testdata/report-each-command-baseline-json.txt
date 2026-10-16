@@ -1,0 +1,27 @@
+{
+  "ok": false,
+  "exit": 1,
+  "each": {
+    "command": "pytest -q -k GoogleLoger tests/",
+    "try_baseline": {
+      "ran": true,
+      "ok": false,
+      "status": 5,
+      "seconds": 0.6,
+      "output": [
+        "5 deselected in 0.31s"
+      ]
+    },
+    "patches": [
+      {
+        "patch": "breaks/01-keep-in-payload.hunk",
+        "ran": false
+      },
+      {
+        "patch": "breaks/02-handler-wins.hunk",
+        "ran": false
+      }
+    ]
+  },
+  "error": "the command exited 5 with no patch applied, so every patch would read as caught; nothing was tried"
+}
