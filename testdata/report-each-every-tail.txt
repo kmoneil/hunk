@@ -1,0 +1,15 @@
+tried breaks/01-shadow-reach.hunk        the command exited 1 (41.2s)
+
+$ zig build test
+error: 'faults.test.a shadow ray stops at the first hit' failed:
+Build Summary: 3/5 steps succeeded (1 failed); 211/212 tests passed (1 failed)
+(last 2 of 14 lines)
+tried breaks/06-texture-not-hashed.hunk  the command exited 0 (41.2s)
+
+$ zig build test
+All 212 tests passed.
+(last 1 of 1 lines)
+tried breaks/19-loose.hunk               the command timed out after 2m50s
+
+$ zig build test
+tried 3 patches and put back every file; 1 exited nonzero, 1 exited 0, 1 timed out (249.2s)

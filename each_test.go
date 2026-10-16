@@ -33,6 +33,26 @@ func eachFixture(t *testing.T) (root string, patches []string) {
 	}
 }
 
+// catchesAll is a suite for eachFixture: it passes on the tree as it is and
+// fails under each of the three patches, each of which capitalises its file's
+// word. Since #90 the command runs once on the tree as it is first and a
+// command that fails there refuses the run, so every test's command is a
+// suite that passes before it is a probe; `exit 1`, which these tests used
+// until then, is refused now, which is the point.
+const catchesAll = "grep -q alpha a.txt && grep -q beta b.txt && grep -q gamma c.txt"
+
+// sayingSuite tests a.txt alone and says what it found: "FAIL: alpha" and
+// exit 1 under the alpha patch, "ok: alpha" and exit 0 on the tree as it is
+// and under the others. So a caught patch has output to show (#89), and the
+// beta patch is a break the suite lets through.
+const sayingSuite = "grep -q alpha a.txt || { echo 'FAIL: alpha'; exit 1; }; echo 'ok: alpha'"
+
+// counted is command with a line appended to mark first, so markerLines says
+// how often it ran, its run on the tree as it is included.
+func counted(mark, command string) string {
+	return fmt.Sprintf("echo ran >> '%s'; %s", mark, command)
+}
+
 func writePatch(t *testing.T, dir, name, body string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -60,15 +80,15 @@ func TestEachTriesEachPatchAlone(t *testing.T) {
 		mark := pidFile(t, "ran")
 		before := snapshot(t, root)
 		code, out, errOut := runCLI(t, root,
-			[]string{"--try", fmt.Sprintf("echo ran >> '%s'; exit 1", mark), "--each", patches[0], patches[1], patches[2]}, "")
+			[]string{"--try", counted(mark, catchesAll), "--each", patches[0], patches[1], patches[2]}, "")
 		if code != exitOK {
 			t.Fatalf("exit %d: %s%s", code, out, errOut)
 		}
 		if diff := snapshotDiff(before, snapshot(t, root)); len(diff) > 0 {
 			t.Errorf("tree changed: %v", diff)
 		}
-		if n := markerLines(t, mark); n != 3 {
-			t.Errorf("the command ran %d times, want 3", n)
+		if n := markerLines(t, mark); n != 4 {
+			t.Errorf("the command ran %d times, want 4: once on the tree as it is, once a patch", n)
 		}
 		if !strings.Contains(out, "tried 3 patches and put back every file; every command exited nonzero") {
 			t.Errorf("stdout = %q", out)
@@ -85,12 +105,13 @@ func TestEachTriesEachPatchAlone(t *testing.T) {
 		// is the run's 0, which is the whole point.
 	})
 
-	t.Run("a command exits 0: exit 3, its output shown, the others' not", func(t *testing.T) {
+	t.Run("a command exits 0: exit 3, its output shown, the caught one's not", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		before := snapshot(t, root)
-		// grep without -q: output on the hit, so the transcript rule shows.
+		// Output on both patches, so the transcript rule shows: the caught
+		// one's is not printed without --verify-lines (#89).
 		code, out, errOut := runCLI(t, root,
-			[]string{"--try", "grep BETA b.txt", "--each", patches[0], patches[1], patches[2]}, "")
+			[]string{"--try", sayingSuite, "--each", patches[0], patches[1]}, "")
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d, want 3: %s%s", code, out, errOut)
 		}
@@ -100,25 +121,27 @@ func TestEachTriesEachPatchAlone(t *testing.T) {
 		if out != "" {
 			t.Errorf("stdout = %q, want empty: the report is a failure's", out)
 		}
-		if !strings.Contains(errOut, "tried 3 patches and put back every file; 2 exited nonzero, 1 exited 0") {
+		if !strings.Contains(errOut, "tried 2 patches and put back every file; 1 exited nonzero, 1 exited 0") {
 			t.Errorf("stderr = %q", errOut)
 		}
-		if !strings.Contains(errOut, "$ grep BETA b.txt") || !strings.Contains(errOut, "BETA") {
+		if !strings.Contains(errOut, "$ "+sayingSuite) || !strings.Contains(errOut, "ok: alpha") {
 			t.Errorf("the passing command's output is not shown: %q", errOut)
 		}
-		if n := strings.Count(errOut, "$ grep"); n != 1 {
-			t.Errorf("%d transcripts, want 1, for the command that exited 0 alone", n)
+		if n := strings.Count(errOut, "$ "); n != 1 || strings.Contains(errOut, "\nFAIL: alpha\n") {
+			t.Errorf("%d transcripts, want 1, for the command that exited 0 alone: %q", n, errOut)
 		}
 	})
 
 	t.Run("a command times out: exit 3, the line says so", func(t *testing.T) {
 		root, patches := eachFixture(t)
+		// Two seconds, not a hundred milliseconds: the run on the tree as it
+		// is has to finish inside it, on Windows' sh too.
 		code, _, errOut := runCLI(t, root,
-			[]string{"--try", "sleep 5", "--timeout", "100ms", "--each", patches[0]}, "")
+			[]string{"--try", "if grep -q ALPHA a.txt; then sleep 30; fi", "--timeout", "2s", "--each", patches[0]}, "")
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d, want 3: %s", code, errOut)
 		}
-		if !strings.Contains(errOut, "the command timed out after 100ms") {
+		if !strings.Contains(errOut, "the command timed out after 2s") {
 			t.Errorf("stderr = %q", errOut)
 		}
 		if !strings.Contains(errOut, "tried 1 patch and put back every file; 1 timed out") {
@@ -129,7 +152,7 @@ func TestEachTriesEachPatchAlone(t *testing.T) {
 	t.Run("the lines come in the order the patches were given", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		_, _, errOut := runCLI(t, root,
-			[]string{"--try", "exit 1", "--each", patches[2], patches[0]}, "")
+			[]string{"--try", catchesAll, "--each", patches[2], patches[0]}, "")
 		if i, j := strings.Index(errOut, patches[2]), strings.Index(errOut, patches[0]); i < 0 || j < 0 || i > j {
 			t.Errorf("lines out of order: %q", errOut)
 		}
@@ -137,9 +160,11 @@ func TestEachTriesEachPatchAlone(t *testing.T) {
 
 	t.Run("each patch is tried alone: the command never sees two edits", func(t *testing.T) {
 		root, patches := eachFixture(t)
-		// The command fails if both edits are ever on disk at once.
+		// The command passes when a.txt and b.txt agree, as on the tree as it
+		// is and if both edits were ever on disk at once, and fails when one
+		// edit is there alone.
 		code, out, errOut := runCLI(t, root,
-			[]string{"--try", "grep -q ALPHA a.txt && grep -q BETA b.txt && exit 0; exit 1", "--each", patches[0], patches[1]}, "")
+			[]string{"--try", "grep -q alpha a.txt; a=$?; grep -q beta b.txt; b=$?; [ $a = $b ]", "--each", patches[0], patches[1]}, "")
 		if code != exitOK {
 			t.Fatalf("exit %d, want 0 (a patch leaked into another's try): %s%s", code, out, errOut)
 		}
@@ -148,7 +173,7 @@ func TestEachTriesEachPatchAlone(t *testing.T) {
 	t.Run("every report line starts tried, §4.1's word", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		_, out, errOut := runCLI(t, root,
-			[]string{"--try", "exit 1", "--each", patches[0], patches[1]}, "")
+			[]string{"--try", catchesAll, "--each", patches[0], patches[1]}, "")
 		for _, l := range strings.Split(strings.TrimRight(errOut+out, "\n"), "\n") {
 			if !strings.HasPrefix(l, "tried ") {
 				t.Errorf("a report line does not start tried: %q", l)
@@ -355,14 +380,14 @@ func TestEachStopsWhenAFileIsNotRestored(t *testing.T) {
 	mark := pidFile(t, "ran")
 	code, out, errOut := runCLI(t, root,
 		[]string{
-			"--try", fmt.Sprintf("echo ran >> '%s'; rm a.txt && mkdir a.txt", mark),
+			"--try", counted(mark, "grep -q alpha a.txt || { rm a.txt && mkdir a.txt; }"),
 			"--each", patches[0], patches[1], patches[2],
 		}, "")
 	if code != exitRollbackFailed {
 		t.Fatalf("exit %d, want 4: %s%s", code, out, errOut)
 	}
-	if n := markerLines(t, mark); n != 1 {
-		t.Errorf("the command ran %d times after a file was not restored, want 1", n)
+	if n := markerLines(t, mark); n != 2 {
+		t.Errorf("the command ran %d times, want 2: on the tree as it is, then the patch that stopped the run", n)
 	}
 	if fi, err := os.Stat(filepath.Join(root, "a.txt")); err != nil || !fi.IsDir() {
 		t.Errorf("the directory the command left should still be there: %v", err)
@@ -416,7 +441,7 @@ func TestEachQuiet(t *testing.T) {
 	t.Run("a clean run prints nothing", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		code, out, errOut := runCLI(t, root,
-			[]string{"--quiet", "--try", "exit 1", "--each", patches[0], patches[1]}, "")
+			[]string{"--quiet", "--try", catchesAll, "--each", patches[0], patches[1]}, "")
 		if code != exitOK {
 			t.Fatalf("exit %d: %s%s", code, out, errOut)
 		}
@@ -427,7 +452,7 @@ func TestEachQuiet(t *testing.T) {
 	t.Run("a command that exited 0 still prints, and the summary with it", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		code, out, errOut := runCLI(t, root,
-			[]string{"--quiet", "--try", "grep -q BETA b.txt", "--each", patches[0], patches[1]}, "")
+			[]string{"--quiet", "--try", sayingSuite, "--each", patches[0], patches[1]}, "")
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d: %s%s", code, out, errOut)
 		}
@@ -500,6 +525,7 @@ type eachJSONReport struct {
 			} `json:"not_restored"`
 			Error string `json:"error"`
 		} `json:"patches"`
+		TryBaseline *jsonBuildSeen `json:"try_baseline"`
 	} `json:"each"`
 	Failures []struct {
 		Patch string `json:"patch"`
@@ -524,7 +550,7 @@ func TestEachJSON(t *testing.T) {
 	t.Run("a run", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		code, out, errOut := runCLI(t, root,
-			[]string{"--json", "--try", "grep BETA b.txt", "--each", patches[0], patches[1]}, "")
+			[]string{"--json", "--try", sayingSuite, "--each", patches[0], patches[1]}, "")
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d: %s%s", code, out, errOut)
 		}
@@ -532,18 +558,22 @@ func TestEachJSON(t *testing.T) {
 		if r.OK || r.Exit != exitVerifyFailed || r.Each == nil {
 			t.Fatalf("ok %v exit %d each %v", r.OK, r.Exit, r.Each)
 		}
-		if r.Each.Command != "grep BETA b.txt" {
+		if r.Each.Command != sayingSuite {
 			t.Errorf("command = %q", r.Each.Command)
 		}
 		if len(r.Each.Patches) != 2 {
 			t.Fatalf("%d patches", len(r.Each.Patches))
 		}
 		p0, p1 := r.Each.Patches[0], r.Each.Patches[1]
-		if !p0.Ran || p0.Status == nil || *p0.Status != 1 || p0.RolledBack != 1 || len(p0.Output) != 0 {
+		// The caught patch carries its output, flag or no flag (#89).
+		if !p0.Ran || p0.Status == nil || *p0.Status != 1 || p0.RolledBack != 1 || len(p0.Output) != 1 || p0.Output[0] != "FAIL: alpha" {
 			t.Errorf("caught patch = %+v", p0)
 		}
-		if !p1.Ran || p1.Status == nil || *p1.Status != 0 || len(p1.Output) != 1 || p1.Output[0] != "BETA" {
+		if !p1.Ran || p1.Status == nil || *p1.Status != 0 || len(p1.Output) != 1 || p1.Output[0] != "ok: alpha" {
 			t.Errorf("passing patch = %+v", p1)
+		}
+		if b := r.Each.TryBaseline; b == nil || !b.Ran || !b.OK || b.Status != 0 || len(b.Output) != 1 || b.Output[0] != "ok: alpha" {
+			t.Errorf("try_baseline = %+v", b)
 		}
 		if !strings.Contains(errOut, "tried "+patches[0]) {
 			t.Errorf("the lines did not stream under --json: %q", errOut)
@@ -585,7 +615,7 @@ func TestEachJSON(t *testing.T) {
 	t.Run("a stop leaves the rest ran false, and says why at the top", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		code, out, _ := runCLI(t, root,
-			[]string{"--json", "--try", "rm a.txt && mkdir a.txt", "--each", patches[0], patches[1]}, "")
+			[]string{"--json", "--try", "grep -q alpha a.txt || { rm a.txt && mkdir a.txt; }", "--each", patches[0], patches[1]}, "")
 		if code != exitRollbackFailed {
 			t.Fatalf("exit %d: %s", code, out)
 		}
@@ -622,7 +652,7 @@ func TestEachJSON(t *testing.T) {
 	t.Run("a timeout is the patch's, not the run's", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		code, out, _ := runCLI(t, root,
-			[]string{"--json", "--try", "sleep 5", "--timeout", "100ms", "--each", patches[0]}, "")
+			[]string{"--json", "--try", "if grep -q ALPHA a.txt; then sleep 30; fi", "--timeout", "2s", "--each", patches[0]}, "")
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d, want 3, never 124: %s", code, out)
 		}
@@ -653,7 +683,7 @@ func TestEachInterrupted(t *testing.T) {
 		var out, errOut bytes.Buffer
 		var sig os.Signal
 		code := invoke([]string{
-			"--root", root, "--try", fmt.Sprintf("echo go > '%s'; sleep 30", started),
+			"--root", root, "--try", fmt.Sprintf("grep -q ALPHA a.txt || exit 0; echo go > '%s'; sleep 30", started),
 			"--each", patches[0], patches[1],
 		}, strings.NewReader(""), &out, &errOut, &sig)
 		if code != 143 {
@@ -677,15 +707,16 @@ func TestEachInterrupted(t *testing.T) {
 	})
 
 	t.Run("between the commit and the command", func(t *testing.T) {
+		// The handler's second installation is the first patch's commit; the
+		// first is before the run on the tree as it is.
 		orig := notifyInterrupts
 		t.Cleanup(func() { notifyInterrupts = orig })
-		fired := false
+		calls := 0
 		notifyInterrupts = func(c chan<- os.Signal) {
 			orig(c)
-			if fired {
+			if calls++; calls != 2 {
 				return
 			}
-			fired = true
 			signalSelf(t, syscall.SIGTERM)
 			for deadline := time.Now().Add(5 * time.Second); len(c) == 0; {
 				if time.Now().After(deadline) {
@@ -697,7 +728,7 @@ func TestEachInterrupted(t *testing.T) {
 		}
 		root, patches := eachFixture(t)
 		before := snapshot(t, root)
-		code, out, errOut := runCLI(t, root, []string{"--try", "exit 1", "--each", patches[0], patches[1]}, "")
+		code, out, errOut := runCLI(t, root, []string{"--try", catchesAll, "--each", patches[0], patches[1]}, "")
 		if code != 143 {
 			t.Fatalf("exit %d, want 143: %s%s", code, out, errOut)
 		}
@@ -725,6 +756,19 @@ func TestEachReportGoldens(t *testing.T) {
 		}
 		return out
 	}
+	// caughtSays is a caught patch's output: printed only with --verify-lines
+	// given (#89), and in --json always.
+	caughtSays := func(v *Verify) {
+		v.Tail, v.TotalLines = []string{
+			"error: 'faults.test.a shadow ray stops at the first hit' failed:",
+			"Build Summary: 3/5 steps succeeded (1 failed); 211/212 tests passed (1 failed)",
+		}, 14
+	}
+	// passing is the command's run on the tree as it is, before any patch.
+	passing := &Verify{
+		Ran: true, OK: true, Try: true, Command: "zig build test", Seconds: 40.8,
+		TotalLines: 1, Tail: []string{"All 212 tests passed."},
+	}
 	stream := func(cfg eachConfig, patches []*eachPatch, o eachOutcome) (string, int) {
 		var out, errOut bytes.Buffer
 		width := eachNameWidth(patches)
@@ -749,20 +793,65 @@ func TestEachReportGoldens(t *testing.T) {
 		golden(t, "report-each-clean", got)
 	})
 
-	t.Run("mixed", func(t *testing.T) {
-		got, code := stream(eachConfig{command: "zig build test"}, []*eachPatch{
-			{name: "breaks/01-shadow-reach.hunk", v: v(1)},
+	mixed := func() []*eachPatch {
+		return []*eachPatch{
+			{name: "breaks/01-shadow-reach.hunk", v: v(1, caughtSays)},
 			{name: "breaks/06-texture-not-hashed.hunk", v: v(0, func(v *Verify) {
 				v.Tail, v.TotalLines = []string{"All 212 tests passed."}, 1
 			})},
 			{name: "breaks/19-loose.hunk", v: v(exitTimedOut, func(v *Verify) {
 				v.TimedOut, v.Seconds = 170*time.Second, 170.0
 			})},
-		}, eachOutcome{tried: 3, zeros: 1, timeouts: 1, stopAt: -1, seconds: 249.2})
+		}
+	}
+
+	t.Run("mixed", func(t *testing.T) {
+		// The caught patch has output, and without --verify-lines given it
+		// does not print: this golden is unchanged by #89, on purpose.
+		got, code := stream(eachConfig{command: "zig build test"}, mixed(),
+			eachOutcome{tried: 3, zeros: 1, timeouts: 1, stopAt: -1, seconds: 249.2})
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d", code)
 		}
 		golden(t, "report-each-mixed", got)
+	})
+
+	t.Run("every tail, with --verify-lines given", func(t *testing.T) {
+		got, code := stream(eachConfig{command: "zig build test", everyTail: true}, mixed(),
+			eachOutcome{tried: 3, zeros: 1, timeouts: 1, stopAt: -1, seconds: 249.2})
+		if code != exitVerifyFailed {
+			t.Fatalf("exit %d", code)
+		}
+		golden(t, "report-each-every-tail", got)
+	})
+
+	t.Run("refused: the command fails with no patch applied", func(t *testing.T) {
+		var out, errOut bytes.Buffer
+		c := &Verify{
+			Ran: true, Try: true, Command: "pytest -q -k GoogleLoger tests/", Status: 5, Seconds: 0.6,
+			TotalLines: 1, Tail: []string{"5 deselected in 0.31s"},
+		}
+		code := eachBaselineRefused(eachConfig{command: c.Command}, mixed(), eachBaselines{command: c}, c,
+			baselineFailure("the command", c, "caught"), exitUsage, &out, &errOut)
+		if code != exitUsage {
+			t.Fatalf("exit %d", code)
+		}
+		golden(t, "report-each-command-baseline", errOut.String()+out.String())
+	})
+
+	t.Run("json, refused: the command fails with no patch applied", func(t *testing.T) {
+		var out, errOut bytes.Buffer
+		c := &Verify{
+			Ran: true, Try: true, Command: "pytest -q -k GoogleLoger tests/", Status: 5, Seconds: 0.6,
+			TotalLines: 1, Tail: []string{"5 deselected in 0.31s"},
+		}
+		patches := []*eachPatch{{name: "breaks/01-keep-in-payload.hunk"}, {name: "breaks/02-handler-wins.hunk"}}
+		code := eachBaselineRefused(eachConfig{command: c.Command, asJSON: true}, patches, eachBaselines{command: c}, c,
+			baselineFailure("the command", c, "caught"), exitUsage, &out, &errOut)
+		if code != exitUsage {
+			t.Fatalf("exit %d", code)
+		}
+		golden(t, "report-each-command-baseline-json", out.String())
 	})
 
 	t.Run("stopped, a file not restored", func(t *testing.T) {
@@ -855,17 +944,10 @@ func TestEachReportGoldens(t *testing.T) {
 	})
 
 	t.Run("json", func(t *testing.T) {
+		// The caught patch's output is there, and the command's run on the
+		// tree as it is: both #89's and #90's, read on 2026-10-16.
 		var out, errOut bytes.Buffer
-		patches := []*eachPatch{
-			{name: "breaks/01-shadow-reach.hunk", v: v(1)},
-			{name: "breaks/06-texture-not-hashed.hunk", v: v(0, func(v *Verify) {
-				v.Tail, v.TotalLines = []string{"All 212 tests passed."}, 1
-			})},
-			{name: "breaks/19-loose.hunk", v: v(exitTimedOut, func(v *Verify) {
-				v.TimedOut, v.Seconds = 170*time.Second, 170.0
-			})},
-		}
-		code := eachJSON(eachConfig{command: "zig build test", asJSON: true}, patches, nil, exitVerifyFailed, "", &out, &errOut)
+		code := eachJSON(eachConfig{command: "zig build test", asJSON: true}, mixed(), eachBaselines{command: passing}, exitVerifyFailed, "", &out, &errOut)
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d", code)
 		}
@@ -882,7 +964,7 @@ func TestEachReportGoldens(t *testing.T) {
 			}},
 			{name: "breaks/19-typo.hunk", loadErr: fmt.Errorf(`patch line 2: "@@ old" has no "@@ new"`)},
 		}
-		code := eachJSON(eachConfig{command: "zig build test", asJSON: true}, patches, nil, exitUsage, "", &out, &errOut)
+		code := eachJSON(eachConfig{command: "zig build test", asJSON: true}, patches, eachBaselines{}, exitUsage, "", &out, &errOut)
 		if code != exitUsage {
 			t.Fatalf("exit %d", code)
 		}
@@ -928,33 +1010,55 @@ func FuzzEachDryRunRefusesOrCounts(f *testing.F) {
 	})
 }
 
+// breakShellAtTheFirstCommit breaks the shell between the run on the tree as
+// it is, which needs it, and the first patch's command: the handler's second
+// installation, at the first patch's commit, is the seam.
+func breakShellAtTheFirstCommit(t *testing.T) {
+	t.Helper()
+	broken := brokenShell(t)
+	t.Setenv("PATH", os.Getenv("PATH"))
+	orig := notifyInterrupts
+	t.Cleanup(func() { notifyInterrupts = orig })
+	calls := 0
+	notifyInterrupts = func(c chan<- os.Signal) {
+		orig(c)
+		if calls++; calls == 2 {
+			must(t, os.Setenv("PATH", broken))
+		}
+	}
+}
+
 // TestEachStopsWhenTheCommandCannotStart: a shell that disappears mid-run
 // stops the run at 5 with the batch put back; later patches would only fail
 // the same way.
 func TestEachStopsWhenTheCommandCannotStart(t *testing.T) {
-	root, patches := eachFixture(t)
-	t.Setenv("PATH", brokenShell(t))
-	before := snapshot(t, root)
-	code, out, errOut := runCLI(t, root, []string{"--try", "true", "--each", patches[0], patches[1]}, "")
-	if code != exitIO {
-		t.Fatalf("exit %d, want 5: %s%s", code, out, errOut)
-	}
-	if diff := snapshotDiff(before, snapshot(t, root)); len(diff) > 0 {
-		t.Errorf("tree changed: %v", diff)
-	}
-	for _, want := range []string{
-		"tried " + patches[0] + "  the command could not start",
-		"hunk: at " + patches[0] + ": could not run the --try command",
-		"; the batch was put back",
-		"not tried: " + patches[1],
-		"tried 0 of 2 patches; stopped at " + patches[0] + "; 1 patch not tried",
-	} {
-		if !strings.Contains(errOut, want) {
-			t.Errorf("stderr lacks %q: %q", want, errOut)
+	t.Run("text", func(t *testing.T) {
+		root, patches := eachFixture(t)
+		breakShellAtTheFirstCommit(t)
+		before := snapshot(t, root)
+		code, out, errOut := runCLI(t, root, []string{"--try", "true", "--each", patches[0], patches[1]}, "")
+		if code != exitIO {
+			t.Fatalf("exit %d, want 5: %s%s", code, out, errOut)
 		}
-	}
+		if diff := snapshotDiff(before, snapshot(t, root)); len(diff) > 0 {
+			t.Errorf("tree changed: %v", diff)
+		}
+		for _, want := range []string{
+			"tried " + patches[0] + "  the command could not start",
+			"hunk: at " + patches[0] + ": could not run the --try command",
+			"; the batch was put back",
+			"not tried: " + patches[1],
+			"tried 0 of 2 patches; stopped at " + patches[0] + "; 1 patch not tried",
+		} {
+			if !strings.Contains(errOut, want) {
+				t.Errorf("stderr lacks %q: %q", want, errOut)
+			}
+		}
+	})
 
 	t.Run("json says why at the top", func(t *testing.T) {
+		root, patches := eachFixture(t)
+		breakShellAtTheFirstCommit(t)
 		code, out, _ := runCLI(t, root, []string{"--json", "--try", "true", "--each", patches[0], patches[1]}, "")
 		if code != exitIO {
 			t.Fatalf("exit %d: %s", code, out)
@@ -1008,7 +1112,7 @@ func TestEachInterruptedBetweenPatches(t *testing.T) {
 	var out, errOut bytes.Buffer
 	var sig os.Signal
 	code := invoke([]string{
-		"--root", root, "--try", fmt.Sprintf("echo go > '%s'; sleep 3 & exit 1", flag),
+		"--root", root, "--try", fmt.Sprintf("grep -q alpha a.txt && exit 0; echo go > '%s'; sleep 3 & exit 1", flag),
 		"--each", patches[0], patches[1],
 	}, strings.NewReader(""), &out, &errOut, &sig)
 	if code != 143 {
@@ -1094,7 +1198,7 @@ func TestEachJSONReportCannotBeWritten(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var errOut bytes.Buffer
-			code := eachJSON(eachConfig{command: "true", asJSON: true}, patches, nil, c.code, "", failingWriter{}, &errOut)
+			code := eachJSON(eachConfig{command: "true", asJSON: true}, patches, eachBaselines{}, c.code, "", failingWriter{}, &errOut)
 			if code != exitIO {
 				t.Errorf("exit %d, want 5", code)
 			}

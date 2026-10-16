@@ -579,7 +579,6 @@ func TestNamesFlagNeedsAWordOfItsOwn(t *testing.T) {
 // skillOmits is every flag --help lists that SKILL.md leaves out on purpose,
 // each with the reason.
 var skillOmits = map[string]string{
-	"--verify-lines":       "the 40-line tail is enough to act on, and the whole output is a rerun away",
 	"--quiet":              "an agent reads the success report, and printing nothing saves one line and loses the confirmation",
 	"--allow-outside-root": "it is the way out of §6.5's path safety, and the skill should not be where an agent learns it",
 	"--version":            "it describes the binary and edits nothing",

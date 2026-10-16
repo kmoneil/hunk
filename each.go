@@ -34,6 +34,17 @@ package main
 // between each patch and its command, and a patch whose build fails is its
 // own line and count, its command not run. It runs once on the tree as it is
 // first, so that "did not build" means the patch broke the build.
+//
+// The command runs once on the tree as it is too, from issue #90, and for the
+// same reason: a command that fails with no patch applied fails under every
+// patch, and every line would read as a catch at exit 0, the strongest result
+// this mode has, from a run that tested nothing. A test filter that matches no
+// test, an exit taken from the wrong end of a pipe, a cd from the wrong
+// directory: each is a careful caller's mistake, and each was in the field.
+//
+// A caught patch's output prints only when --verify-lines is given (#89): a
+// passing suite's forty lines under every catch would bury the misses, and
+// the caller who wants to know what caught each asks for the lines that say.
 
 import (
 	"errors"
@@ -56,6 +67,7 @@ type eachConfig struct {
 	opt          Options
 	timeout      time.Duration
 	verifyLines  int
+	everyTail    bool // --verify-lines given, not defaulted: every command's tail prints (#89)
 	verifyFormat bool
 	dryRun       bool
 	asJSON       bool
@@ -180,7 +192,7 @@ func countLoadErrs(patches []*eachPatch) int {
 // under its name, and nothing tried.
 func eachRefused(cfg eachConfig, patches []*eachPatch, what string, code int, stdout, stderr io.Writer) int {
 	if cfg.asJSON {
-		return eachJSON(cfg, patches, nil, code, "", stdout, stderr)
+		return eachJSON(cfg, patches, eachBaselines{}, code, "", stdout, stderr)
 	}
 	bad := 0
 	for _, ep := range patches {
@@ -209,7 +221,7 @@ func eachRefused(cfg eachConfig, patches []*eachPatch, what string, code int, st
 // --dry-run prints nothing but what would happen.
 func eachDryRun(cfg eachConfig, patches []*eachPatch, stdout io.Writer) int {
 	if cfg.asJSON {
-		return eachJSON(cfg, patches, nil, exitOK, "", stdout, io.Discard)
+		return eachJSON(cfg, patches, eachBaselines{}, exitOK, "", stdout, io.Discard)
 	}
 	if cfg.quiet {
 		return exitOK
@@ -250,25 +262,44 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 	var sig os.Signal // the signal that ended the run, re-raised by main
 	todo := patches
 
-	var baseline *Verify
+	// The handler goes in before anything runs: every command runs in its
+	// own process group, and would run on after a Ctrl-C that killed hunk.
+	notifyInterrupts(sigs)
+	var bases eachBaselines
 	if cfg.build != "" {
 		// The build on the tree as it is, before any patch: one that fails
 		// here fails under every patch, and "did not build" would be true of
-		// each line and false about each patch. The handler goes in first:
-		// the build runs in its own process group, and would run on after a
-		// Ctrl-C that killed hunk.
-		notifyInterrupts(sigs)
-		b, err := runBuildCommand(cfg, tree, stop)
+		// each line and false about each patch.
+		b, err := runOnTheTree(cfg.build, cfg, tree, stop)
 		if err != nil {
-			return eachBaselineRefused(cfg, patches, nil,
+			return eachBaselineRefused(cfg, patches, bases, nil,
 				fmt.Sprintf("could not run the --build command: %v; nothing was tried", err), exitIO, stdout, stderr)
 		}
-		baseline = b
+		bases.build = b
 		switch {
 		case b.Signal != nil:
 			sig, stopAt, todo = b.Signal, 0, nil
 		case !b.OK:
-			return eachBaselineRefused(cfg, patches, b, baselineFailure(b), exitUsage, stdout, stderr)
+			return eachBaselineRefused(cfg, patches, bases, b, baselineFailure("the build", b, "not built"), exitUsage, stdout, stderr)
+		}
+	}
+	if sig == nil {
+		// The command on the tree as it is, after the build's, which is the
+		// more precise refusal when the tree does not build: one that fails
+		// here, every patch would read as caught.
+		c, err := runOnTheTree(cfg.command, cfg, tree, stop)
+		if err != nil {
+			return eachBaselineRefused(cfg, patches, bases, nil,
+				fmt.Sprintf("could not run the --try command: %v; nothing was tried", err), exitIO, stdout, stderr)
+		}
+		bases.command = c
+		switch {
+		case c.Signal != nil:
+			sig, stopAt, todo = c.Signal, 0, nil
+		case c.TimedOut > 0:
+			return eachBaselineRefused(cfg, patches, bases, c, baselineFailure("the command", c, "timed out"), exitUsage, stdout, stderr)
+		case !c.OK:
+			return eachBaselineRefused(cfg, patches, bases, c, baselineFailure("the command", c, "caught"), exitUsage, stdout, stderr)
 		}
 	}
 
@@ -332,7 +363,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		*interrupted = sig
 	}
 	if cfg.asJSON {
-		return eachJSON(cfg, patches, baseline, code, eachStopReason(patches, stopAt, sig, stopErr), stdout, stderr)
+		return eachJSON(cfg, patches, bases, code, eachStopReason(patches, stopAt, sig, stopErr), stdout, stderr)
 	}
 	writeEachEnd(cfg, patches, o, code, stdout, stderr)
 	return code
@@ -368,10 +399,11 @@ func tryOne(cfg eachConfig, ep *eachPatch, txn *Txn, tree *Tree, sigs chan os.Si
 	return err
 }
 
-// runBuildCommand runs --build once, from the root, under the run's timeout
-// and signals. A timeout is 124 in Status, as --try's is.
-func runBuildCommand(cfg eachConfig, tree *Tree, stop Stop) (*Verify, error) {
-	b, err := RunVerify(cfg.build, tree.Root(), cfg.verifyLines, stop)
+// runOnTheTree runs command once, from the root, under the run's timeout and
+// signals: --build, or either baseline. A timeout is 124 in Status, as
+// --try's is.
+func runOnTheTree(command string, cfg eachConfig, tree *Tree, stop Stop) (*Verify, error) {
+	b, err := RunVerify(command, tree.Root(), cfg.verifyLines, stop)
 	if err != nil {
 		return nil, err
 	}
@@ -386,7 +418,7 @@ func runBuildCommand(cfg eachConfig, tree *Tree, stop Stop) (*Verify, error) {
 // not run. One that cannot start puts it back too, and is exit 5 through the
 // error, as a command that cannot start is.
 func runBuild(cfg eachConfig, txn *Txn, tree *Tree, stop Stop) (*Verify, error) {
-	b, err := runBuildCommand(cfg, tree, stop)
+	b, err := runOnTheTree(cfg.build, cfg, tree, stop)
 	if err != nil {
 		b = &Verify{Command: cfg.build, Applied: txn.Applied()}
 		return b, cannotStart("the --build command", "put back", err, b, txn, cfg.verifyFormat)
@@ -398,25 +430,33 @@ func runBuild(cfg eachConfig, txn *Txn, tree *Tree, stop Stop) (*Verify, error) 
 	return b, nil
 }
 
-// baselineFailure is why a build on the tree as it is refused the run.
-func baselineFailure(b *Verify) string {
+// eachBaselines is the runs on the tree as it is, before the first patch:
+// --build's where there is one, then the command's. Either is nil where it
+// did not run.
+type eachBaselines struct {
+	build, command *Verify
+}
+
+// baselineFailure is why a run on the tree as it is refused the run: who ran,
+// how it ended, and what every patch would have read as.
+func baselineFailure(who string, b *Verify, reads string) string {
 	what := fmt.Sprintf("exited %d", b.Status)
 	if b.TimedOut > 0 {
 		what = "timed out after " + shortDuration(b.TimedOut)
 	}
-	return "the build " + what + " with no patch applied, so every patch would read as not built; nothing was tried"
+	return who + " " + what + " with no patch applied, so every patch would read as " + reads + "; nothing was tried"
 }
 
-// eachBaselineRefused reports a run refused before its first patch by the
-// build on the tree as it is: the reason, and the build's output where it
-// ran, which is what the caller fixes the build command or the tree from.
-func eachBaselineRefused(cfg eachConfig, patches []*eachPatch, b *Verify, why string, code int, stdout, stderr io.Writer) int {
+// eachBaselineRefused reports a run refused before its first patch by a run
+// on the tree as it is: the reason, and the failed run's output where it ran,
+// which is what the caller fixes the command or the tree from.
+func eachBaselineRefused(cfg eachConfig, patches []*eachPatch, bases eachBaselines, failed *Verify, why string, code int, stdout, stderr io.Writer) int {
 	if cfg.asJSON {
-		return eachJSON(cfg, patches, b, code, why, stdout, stderr)
+		return eachJSON(cfg, patches, bases, code, why, stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "hunk: %s\n", why)
-	if b != nil {
-		writeCommandOutput(stderr, b)
+	if failed != nil {
+		writeCommandOutput(stderr, failed)
 	}
 	return code
 }
@@ -500,6 +540,9 @@ func writeEachEnd(cfg eachConfig, patches []*eachPatch, o eachOutcome, code int,
 // the output where it is the thing to read: a command that exited 0 or timed
 // out is the one to investigate, a build that failed is the compile error the
 // patch's author fixes, and under --quiet those lines are all that print.
+// With --verify-lines given, every command's tail prints, since a caught
+// patch's is what says what caught it (#89); --quiet still decides which
+// lines print at all.
 func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 	v, what := ep.v, "command"
 	if v == nil {
@@ -534,7 +577,7 @@ func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 		fmt.Fprintf(w, "; %s left alone", count(len(v.NotRestored), "file"))
 	}
 	fmt.Fprintln(w)
-	if notBuilt || (v.Ran && (v.TimedOut > 0 || v.Status == 0)) {
+	if notBuilt || (v.Ran && (v.TimedOut > 0 || v.Status == 0 || (cfg.everyTail && what == "command"))) {
 		writeCommandOutput(w, v)
 	}
 	writeAftermath(w, v)
@@ -622,13 +665,16 @@ func eachNameWidth(patches []*eachPatch) int {
 
 // eachJSON is the whole run as one object, alone on stdout: the command and
 // one entry per patch, with the preflight's failures carrying each patch's
-// name, and the build on the tree as it is where --build ran one. The
-// streamed per-patch lines were stderr's.
-func eachJSON(cfg eachConfig, patches []*eachPatch, baseline *Verify, code int, stopReason string, stdout, stderr io.Writer) int {
+// name, and the runs on the tree as it is where they ran. The streamed
+// per-patch lines were stderr's.
+func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code int, stopReason string, stdout, stderr io.Writer) int {
 	out := jsonReport{OK: code == exitOK, Exit: code, DryRun: cfg.dryRun}
 	je := &jsonEach{Command: cfg.command, Build: cfg.build}
-	if baseline != nil {
-		je.Baseline = eachBuildJSON(baseline)
+	if bases.build != nil {
+		je.Baseline = eachBuildJSON(bases.build)
+	}
+	if bases.command != nil {
+		je.TryBaseline = eachCommandJSON(bases.command)
 	}
 	if stopReason != "" {
 		out.Error = stopReason
@@ -663,7 +709,10 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, baseline *Verify, code int, 
 				status := v.Status
 				jp.Ran, jp.Status, jp.Seconds = v.Ran, &status, v.Seconds
 				jp.jsonEnded = endedJSON(v)
-				if v.Ran && (v.TimedOut > 0 || v.Status == 0) {
+				// Every run's output, the caught ones' included: there is
+				// nothing to bury in an object, and one --try's carries it
+				// (#89).
+				if v.Ran {
 					jp.Output = v.Tail
 				}
 			}
@@ -684,10 +733,16 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, baseline *Verify, code int, 
 
 // eachBuildJSON is one --build run for --json: its output where it did not
 // exit 0 by itself, which is where the text shows it.
-func eachBuildJSON(b *Verify) *jsonEachBuild {
-	jb := &jsonEachBuild{Ran: b.Ran, OK: b.OK, Status: b.Status, Seconds: b.Seconds, jsonEnded: endedJSON(b)}
+func eachBuildJSON(b *Verify) *jsonEachRun {
+	jb := &jsonEachRun{Ran: b.Ran, OK: b.OK, Status: b.Status, Seconds: b.Seconds, jsonEnded: endedJSON(b)}
 	if b.Ran && !b.OK && b.Signal == nil {
 		jb.Output = b.Tail
 	}
 	return jb
+}
+
+// eachCommandJSON is the command's run on the tree as it is for --json: its
+// output whatever the end, as every run of the command carries it.
+func eachCommandJSON(c *Verify) *jsonEachRun {
+	return &jsonEachRun{Ran: c.Ran, OK: c.OK, Status: c.Status, Seconds: c.Seconds, Output: c.Tail, jsonEnded: endedJSON(c)}
 }

@@ -466,6 +466,22 @@ func TestHunkExit(t *testing.T) {
 			"hunk: could not run the --build command: fork/exec /bin/sh: exec format error; nothing was tried\n", 5,
 		},
 		{
+			"--each refused: the command fails with no patch applied", "hunk --try 'pytest -k x' --each a.hunk",
+			"hunk: the command exited 5 with no patch applied, so every patch would read as caught; nothing was tried\n\n$ pytest -k x\n5 deselected in 0.31s\n(last 1 of 1 lines)\n", 1,
+		},
+		{
+			"--each refused: the command times out with no patch applied", "hunk --try x --timeout 90s --each a.hunk",
+			"hunk: the command timed out after 90s with no patch applied, so every patch would read as timed out; nothing was tried\n\n$ x\n", 1,
+		},
+		{
+			"--each refused: the command could not start with no patch applied", "hunk --try x --each a.hunk",
+			"hunk: could not run the --try command: fork/exec /bin/sh: exec format error; nothing was tried\n", 5,
+		},
+		{
+			"--each with --verify-lines, a caught patch's tail under its line", "hunk --try x --verify-lines 5 --each a.hunk b.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\n\n$ x\nerror: 'a.test.b' failed:\n(last 1 of 1 lines)\ntried b.hunk  the command exited 1 (0.1s)\n\n$ x\nok\n(last 1 of 1 lines)\ntried 2 patches and put back every file; every command exited nonzero (0.2s)\n", 0,
+		},
+		{
 			"--each --build stopped, a patch's build could not start", "hunk --try x --build y --each a.hunk b.hunk",
 			"tried a.hunk  the build could not start\nhunk: at a.hunk: could not run the --build command: exec format error; the batch was put back\nnot tried: b.hunk\ntried 0 of 2 patches; stopped at a.hunk; 1 patch not tried\n", 5,
 		},
@@ -639,6 +655,9 @@ var reportGoldens = map[string]int{
 	"report-each-not-built":                           3,
 	"report-each-baseline":                            1,
 	"report-each-build-json":                          3,
+	"report-each-every-tail":                          3,
+	"report-each-command-baseline":                    1,
+	"report-each-command-baseline-json":               1,
 	"cli-rollback-incomplete":                         4,
 	"cli-rollback-left-a-directory":                   3,
 	"cli-rollback-left-a-directory-json":              3,

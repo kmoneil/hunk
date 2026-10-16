@@ -3,12 +3,25 @@
   "exit": 3,
   "each": {
     "command": "zig build test",
+    "try_baseline": {
+      "ran": true,
+      "ok": true,
+      "status": 0,
+      "seconds": 40.8,
+      "output": [
+        "All 212 tests passed."
+      ]
+    },
     "patches": [
       {
         "patch": "breaks/01-shadow-reach.hunk",
         "ran": true,
         "status": 1,
         "seconds": 41.2,
+        "output": [
+          "error: 'faults.test.a shadow ray stops at the first hit' failed:",
+          "Build Summary: 3/5 steps succeeded (1 failed); 211/212 tests passed (1 failed)"
+        ],
         "rolled_back": 1
       },
       {

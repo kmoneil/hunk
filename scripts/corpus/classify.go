@@ -162,8 +162,10 @@ var (
 	reEachDryRun      = regexp.MustCompile(`(?m)^\d+ patch(?:es)? would apply, `)
 	// --build's refusal, from 2026-10-15: a build that fails on the tree as
 	// it is, before the first patch, is exit 1, nothing tried. A patch whose
-	// build fails is a line, and the summary's "did not build" is 3.
-	reEachBaseline = regexp.MustCompile(`(?m)^hunk: the build (?:exited \d+|timed out after \S+) with no patch applied`)
+	// build fails is a line, and the summary's "did not build" is 3. The
+	// command's run there, from 2026-10-16 (#90), refuses in the same words
+	// and at the same code.
+	reEachBaseline = regexp.MustCompile(`(?m)^hunk: the (?:build|command) (?:exited \d+|timed out after \S+) with no patch applied`)
 
 	// A --verify or --try command that could not start, which is 5 whether it
 	// was refused before writing (no sh) or rolled back after (an sh that

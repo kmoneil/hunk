@@ -417,6 +417,22 @@ or timed out (read the lines), 4 means it stopped with a file not restored.
 `--timeout` applies to each command separately. A script should read `--json`'s
 `each.patches`.
 
+**The command has to pass with no patch applied.** `--each` runs it once on the
+tree as it is first, and one that fails there refuses the run, exit 1, nothing
+tried, with its output: every patch would have read as caught. That is what
+catches a command whose exit is not the suite's: `exit ${pipestatus[1]}` is
+zsh's and the command runs under `sh`, a pipe's status is its last command's,
+and a test filter that matches nothing exits 5 under pytest. Read the output:
+the command, or the tree, is what to fix.
+
+**To see what caught each break, give `--verify-lines N`.** Without it a caught
+patch's output is not printed, only that of one that exited 0 or timed out.
+With it, the last N lines of every patch's command print under its line. A
+suite that names the failing test far from its end can be made to print it
+last, keeping its own status as the exit: `--try 'zig build test > /tmp/out
+2>&1; s=$?; grep -m3 "error: .*failed" /tmp/out; exit $s' --verify-lines 3`.
+`--json` carries every patch's output either way.
+
 **In a compiled language, add `--build CMD`.** A break that does not compile
 makes the test command exit nonzero, so `--each` alone scores it as caught: Zig
 and Go exit 1 for a compile error as for a failing test, and deleting one line

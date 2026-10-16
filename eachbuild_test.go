@@ -45,7 +45,7 @@ func TestEachBuild(t *testing.T) {
 		built, ran := pidFile(t, "built"), pidFile(t, "ran")
 		before := snapshot(t, root)
 		code, out, errOut := runCLI(t, root, []string{
-			"--try", fmt.Sprintf("echo ran >> '%s'; exit 1", ran),
+			"--try", counted(ran, catchesAll),
 			"--build", fmt.Sprintf("echo built >> '%s'", built),
 			"--each", patches[0], patches[1], patches[2],
 		}, "")
@@ -55,8 +55,8 @@ func TestEachBuild(t *testing.T) {
 		if n := markerLines(t, built); n != 4 {
 			t.Errorf("the build ran %d times, want 4: once on the tree as it is, once a patch", n)
 		}
-		if n := markerLines(t, ran); n != 3 {
-			t.Errorf("the command ran %d times, want 3", n)
+		if n := markerLines(t, ran); n != 4 {
+			t.Errorf("the command ran %d times, want 4: once on the tree as it is, once a patch", n)
 		}
 		if diff := snapshotDiff(before, snapshot(t, root)); len(diff) > 0 {
 			t.Errorf("tree changed: %v", diff)
@@ -75,15 +75,15 @@ func TestEachBuild(t *testing.T) {
 		build := failsOn(built, "b.txt", "BETA")
 		before := snapshot(t, root)
 		code, out, errOut := runCLI(t, root, []string{
-			"--try", fmt.Sprintf("echo ran >> '%s'; exit 1", ran),
+			"--try", counted(ran, catchesAll),
 			"--build", build,
 			"--each", patches[0], patches[1], patches[2],
 		}, "")
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d, want 3: %s%s", code, out, errOut)
 		}
-		if n := markerLines(t, ran); n != 2 {
-			t.Errorf("the command ran %d times, want 2: never for the patch that did not build", n)
+		if n := markerLines(t, ran); n != 3 {
+			t.Errorf("the command ran %d times, want 3: on the tree as it is and under the two that built, never for the patch that did not", n)
 		}
 		if n := markerLines(t, built); n != 4 {
 			t.Errorf("the build ran %d times, want 4", n)
@@ -120,7 +120,7 @@ func TestEachBuild(t *testing.T) {
 		// Two seconds, not a hundred milliseconds: the baseline and the first
 		// patch's build have to finish inside it, on Windows' sh too.
 		code, out, errOut := runCLI(t, root, []string{
-			"--try", fmt.Sprintf("echo ran >> '%s'; exit 1", ran),
+			"--try", counted(ran, catchesAll),
 			"--build", "grep -q BETA b.txt && sleep 30; exit 0",
 			"--timeout", "2s",
 			"--each", patches[0], patches[1],
@@ -128,8 +128,8 @@ func TestEachBuild(t *testing.T) {
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d, want 3: %s%s", code, out, errOut)
 		}
-		if n := markerLines(t, ran); n != 1 {
-			t.Errorf("the command ran %d times, want 1", n)
+		if n := markerLines(t, ran); n != 2 {
+			t.Errorf("the command ran %d times, want 2: on the tree as it is and under the patch that built", n)
 		}
 		if l := eachLine(errOut, patches[1]); l != "did not build: the build timed out after 2s" {
 			t.Errorf("the line = %q: %q", l, errOut)
@@ -150,7 +150,7 @@ func TestEachBuild(t *testing.T) {
 		root, patches := eachFixture(t)
 		buildSaw, commandSaw := pidFile(t, "build-saw"), pidFile(t, "command-saw")
 		code, out, errOut := runCLI(t, root, []string{
-			"--try", fmt.Sprintf("cat a.txt b.txt >> '%s'; exit 1", commandSaw),
+			"--try", fmt.Sprintf("cat a.txt b.txt >> '%s'; %s", commandSaw, catchesAll),
 			"--build", fmt.Sprintf("cat a.txt b.txt >> '%s'", buildSaw),
 			"--each", patches[0], patches[1],
 		}, "")
@@ -159,9 +159,9 @@ func TestEachBuild(t *testing.T) {
 		}
 		for path, want := range map[string]string{
 			// The tree as it is, then the first patch, then the second, the
-			// first put back in between.
+			// first put back in between: the command as the build, since #90.
 			buildSaw:   "alpha\nbeta\nALPHA\nbeta\nalpha\nBETA\n",
-			commandSaw: "ALPHA\nbeta\nalpha\nBETA\n",
+			commandSaw: "alpha\nbeta\nALPHA\nbeta\nalpha\nBETA\n",
 		} {
 			b, err := os.ReadFile(filepath.FromSlash(path))
 			must(t, err)
@@ -174,7 +174,7 @@ func TestEachBuild(t *testing.T) {
 	t.Run("every line starts tried, the did-not-build one too", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		_, _, errOut := runCLI(t, root, []string{
-			"--try", "exit 1", "--build", "grep -q BETA b.txt && exit 1; exit 0",
+			"--try", catchesAll, "--build", "grep -q BETA b.txt && exit 1; exit 0",
 			"--each", patches[0], patches[1],
 		}, "")
 		// The build printed nothing, so the transcript is the command and
@@ -247,7 +247,7 @@ func TestEachBuildBaseline(t *testing.T) {
 		built := pidFile(t, "built")
 		typo := writePatch(t, t.TempDir(), "typo.hunk", "@@ file a.txt\n@@ old\nalpha\n")
 		code, _, errOut := runCLI(t, root, []string{
-			"--try", "exit 1", "--build", fmt.Sprintf("echo built >> '%s'", built),
+			"--try", catchesAll, "--build", fmt.Sprintf("echo built >> '%s'", built),
 			"--each", patches[0], typo,
 		}, "")
 		if code != exitUsage || !strings.Contains(errOut, "1 of 2 patches could not be read") {
@@ -360,8 +360,8 @@ func TestEachBuildStops(t *testing.T) {
 		if code != exitRollbackFailed {
 			t.Fatalf("exit %d, want 4: %s%s", code, out, errOut)
 		}
-		if n := markerLines(t, ran); n != 0 {
-			t.Errorf("the command ran %d times", n)
+		if n := markerLines(t, ran); n != 1 {
+			t.Errorf("the command ran %d times, want 1: on the tree as it is alone", n)
 		}
 		for _, want := range []string{
 			"tried " + patches[0] + "  did not build: the build exited 1 (",
@@ -465,8 +465,8 @@ func TestEachBuildInterrupted(t *testing.T) {
 		if diff := snapshotDiff(before, snapshot(t, root)); len(diff) > 0 {
 			t.Errorf("tree changed: %v", diff)
 		}
-		if n := markerLines(t, ran); n != 0 {
-			t.Errorf("the command ran %d times", n)
+		if n := markerLines(t, ran); n != 1 {
+			t.Errorf("the command ran %d times, want 1: on the tree as it is alone", n)
 		}
 		for _, want := range []string{
 			"tried " + patches[0] + "  interrupted by SIGTERM, the build was ended",
@@ -485,7 +485,7 @@ func TestEachBuildInterrupted(t *testing.T) {
 		signalWhen(t, started, 0)
 		before := snapshot(t, root)
 		errOut := run(t, root, []string{
-			"--try", "exit 1", "--build", fmt.Sprintf("echo go > '%s'; sleep 30", started),
+			"--try", catchesAll, "--build", fmt.Sprintf("echo go > '%s'; sleep 30", started),
 			"--each", patches[0], patches[1],
 		})
 		if diff := snapshotDiff(before, snapshot(t, root)); len(diff) > 0 {
@@ -517,8 +517,8 @@ func TestEachBuildInterrupted(t *testing.T) {
 		if diff := snapshotDiff(before, snapshot(t, root)); len(diff) > 0 {
 			t.Errorf("tree changed: %v", diff)
 		}
-		if n := markerLines(t, ran); n != 0 {
-			t.Errorf("the command ran %d times after the signal", n)
+		if n := markerLines(t, ran); n != 1 {
+			t.Errorf("the command ran %d times, want 1: on the tree as it is, and not after the signal", n)
 		}
 		if !strings.Contains(errOut, "tried "+patches[0]+"  interrupted by SIGTERM before the command ran") {
 			t.Errorf("stderr = %q", errOut)
@@ -532,7 +532,7 @@ func TestEachBuildQuietAndDryRun(t *testing.T) {
 	t.Run("quiet keeps the patch that did not build", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		code, out, errOut := runCLI(t, root, []string{
-			"--quiet", "--try", "exit 1", "--build", "grep -q BETA b.txt && { echo 'error: unused'; exit 1; }; exit 0",
+			"--quiet", "--try", catchesAll, "--build", "grep -q BETA b.txt && { echo 'error: unused'; exit 1; }; exit 0",
 			"--each", patches[0], patches[1],
 		}, "")
 		if code != exitVerifyFailed {
@@ -553,7 +553,7 @@ func TestEachBuildQuietAndDryRun(t *testing.T) {
 
 	t.Run("quiet and clean prints nothing", func(t *testing.T) {
 		root, patches := eachFixture(t)
-		code, out, errOut := runCLI(t, root, []string{"--quiet", "--try", "exit 1", "--build", "true", "--each", patches[0]}, "")
+		code, out, errOut := runCLI(t, root, []string{"--quiet", "--try", catchesAll, "--build", "true", "--each", patches[0]}, "")
 		if code != exitOK || out != "" || errOut != "" {
 			t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
 		}
@@ -627,7 +627,7 @@ func TestEachBuildJSON(t *testing.T) {
 	t.Run("a run", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		code, out, _ := runCLI(t, root, []string{
-			"--json", "--try", "exit 1", "--build", "grep -q BETA b.txt && { echo 'b.txt:1: error: unused'; exit 1; }; exit 0",
+			"--json", "--try", catchesAll, "--build", "grep -q BETA b.txt && { echo 'b.txt:1: error: unused'; exit 1; }; exit 0",
 			"--each", patches[0], patches[1],
 		}, "")
 		if code != exitVerifyFailed {
@@ -650,7 +650,7 @@ func TestEachBuildJSON(t *testing.T) {
 	t.Run("a build that timed out is 124 with its timeout", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		code, out, _ := runCLI(t, root, []string{
-			"--json", "--try", "exit 1", "--build", "grep -q ALPHA a.txt && sleep 30; exit 0", "--timeout", "2s",
+			"--json", "--try", catchesAll, "--build", "grep -q ALPHA a.txt && sleep 30; exit 0", "--timeout", "2s",
 			"--each", patches[0],
 		}, "")
 		if code != exitVerifyFailed {
@@ -664,7 +664,10 @@ func TestEachBuildJSON(t *testing.T) {
 
 	t.Run("without --build there is no build in it", func(t *testing.T) {
 		root, patches := eachFixture(t)
-		_, out, _ := runCLI(t, root, []string{"--json", "--try", "exit 1", "--each", patches[0]}, "")
+		code, out, _ := runCLI(t, root, []string{"--json", "--try", catchesAll, "--each", patches[0]}, "")
+		if code != exitOK {
+			t.Fatalf("exit %d: %s", code, out)
+		}
 		if strings.Contains(out, `"build"`) || strings.Contains(out, `"baseline"`) {
 			t.Errorf("a run without --build mentions one: %s", out)
 		}
@@ -733,7 +736,7 @@ func TestEachBuildReportGoldens(t *testing.T) {
 			Ran: true, Command: "zig build", Status: 2, Seconds: 0.4, TotalLines: 2,
 			Tail: []string{"error: no step named 'biuld'", "  access the help menu with 'zig build -h'"},
 		}
-		code := eachBaselineRefused(cfg, patches(), b, baselineFailure(b), exitUsage, &out, &errOut)
+		code := eachBaselineRefused(cfg, patches(), eachBaselines{build: b}, b, baselineFailure("the build", b, "not built"), exitUsage, &out, &errOut)
 		if code != exitUsage {
 			t.Fatalf("exit %d", code)
 		}
@@ -744,7 +747,8 @@ func TestEachBuildReportGoldens(t *testing.T) {
 		var out, errOut bytes.Buffer
 		cfg := cfg
 		cfg.asJSON = true
-		code := eachJSON(cfg, patches(), built(), exitVerifyFailed, "", &out, &errOut)
+		tested := &Verify{Ran: true, OK: true, Try: true, Command: "zig build test", Seconds: 40.8, TotalLines: 1, Tail: []string{"All 212 tests passed."}}
+		code := eachJSON(cfg, patches(), eachBaselines{build: built(), command: tested}, exitVerifyFailed, "", &out, &errOut)
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d", code)
 		}

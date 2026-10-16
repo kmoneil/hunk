@@ -131,6 +131,10 @@ FLAGS
                         it, you are asserting nothing else writes the tree
                         during the verify.
   --verify-lines N      Tail of the --verify or --try output to print. (40)
+                        Under --each, given, it prints under every patch's
+                        line, a caught one's too, to say what caught it; not
+                        given, only under a command that exited 0 or timed
+                        out.
   --keep-on-fail        Leave the applied changes in place when verify fails,
                         for inspection. Still exits 3.
   --try CMD             Apply, run CMD as --verify would, then put every file
@@ -141,14 +145,16 @@ FLAGS
                         at a time, the patches as arguments after the flags.
                         Every patch is parsed and validated before the first
                         try, so none is ever scored by an exit that was really
-                        hunk's; a line per patch goes to stderr as it
-                        finishes; the run stops at once if a file is not put
-                        back. The exit is the run's, never a command's: 0 when
-                        every command exited nonzero, 3 when one exited 0 or
-                        timed out, which in a deliberate-break run means the
-                        suite missed a break or hung on it, or a patch did not
-                        build under --build. --timeout applies to each command
-                        separately.
+                        hunk's, and the command runs once with no patch
+                        applied, so none is scored by a command that fails
+                        anyway: one that fails there refuses the run, exit 1.
+                        A line per patch goes to stderr as it finishes; the
+                        run stops at once if a file is not put back. The exit
+                        is the run's, never a command's: 0 when every command
+                        exited nonzero, 3 when one exited 0 or timed out,
+                        which in a deliberate-break run means the suite missed
+                        a break or hung on it, or a patch did not build under
+                        --build. --timeout applies to each command separately.
   --build CMD           With --try --each: run CMD once on the tree as it is,
                         then after each patch is applied and before the --try
                         command. A break that does not compile exits nonzero
@@ -457,9 +463,17 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	}
 
 	if *each {
+		// --verify-lines given, rather than defaulted, asks --each for every
+		// command's tail, the caught ones' too (#89).
+		linesGiven := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "verify-lines" {
+				linesGiven = true
+			}
+		})
 		return runEach(eachConfig{
 			names: fs.Args(), command: *try, build: *build, marker: *marker, opt: opt,
-			timeout: timeout, verifyLines: *verifyLines, verifyFormat: *verifyFormat,
+			timeout: timeout, verifyLines: *verifyLines, everyTail: linesGiven, verifyFormat: *verifyFormat,
 			dryRun: *dryRun, asJSON: *asJSON, quiet: *quiet,
 		}, tree, stdout, stderr, interrupted)
 	}
