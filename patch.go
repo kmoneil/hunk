@@ -78,6 +78,10 @@ type Hunk struct {
 type Patch struct {
 	Hunks []Hunk
 	CRLF  bool
+	// Strays are the payload lines that look like a mistyped heredoc
+	// delimiter, in patch order (#92, delimiter.go). The patch applies as
+	// written, and the report names each.
+	Strays []Stray
 }
 
 // ParseError is every failure this file can produce, and all of them are
@@ -113,6 +117,12 @@ func shownLine(line []byte) string {
 	if s == "" {
 		return "a blank line"
 	}
+	return quoteCut(s)
+}
+
+// quoteCut is a line quoted and cut as shownLine shows it, for a caller that
+// has already decided what the line's ending is.
+func quoteCut(s string) string {
 	const most = 60
 	n := 0
 	for i := range s {
@@ -409,6 +419,7 @@ loop:
 			}
 			cur, curLine = path, ln
 			body, next := collectPayload(lines, i, marker)
+			p.noteStrays(lines, i, next, path, nil)
 			i = next
 			op := OpCreate
 			switch word {
@@ -437,7 +448,9 @@ loop:
 			if err != nil {
 				return nil, err
 			}
+			oldStart := i
 			old, next := collectPayload(lines, i, marker)
+			oldEnd := next
 			i = next
 
 			// An empty old matches at every position rather than at one:
@@ -477,6 +490,7 @@ loop:
 			}
 			i++
 			replacement, next := collectPayload(lines, i, marker)
+			p.noteStrays(lines, i, next, cur, lines[oldStart:oldEnd])
 			i = next
 			p.Hunks = append(p.Hunks, Hunk{
 				Op: OpReplace, Path: cur, Line: ln,
@@ -580,7 +594,10 @@ payload line that is exactly the heredoc's delimiter (HUNK in the example
 below) ends the heredoc there. hunk gets the lines above it, which may still be
 a patch that applies, and the shell runs the rest as commands. Pick a delimiter
 no payload line equals, or write the patch to a file and pass -f FILE, which no
-line can end.
+line can end. A closer the shell does not take for the delimiter, such as
+HUHUNK above the real one or an indented HUNK, is payload: the patch applies
+with it, and the report ends with a warning that names the patch line and the
+file.
 
 PATHS
 

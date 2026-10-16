@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "exit": 0,
+  "files": [
+    {
+      "path": "notes.txt",
+      "op": "modify",
+      "added": 2,
+      "removed": 1
+    }
+  ],
+  "hunks": 1,
+  "warnings": [
+    {
+      "patch_line": 6,
+      "path": "notes.txt",
+      "text": "HUHUNK",
+      "lines_after": 0,
+      "message": "patch line 6 is \"HUHUNK\", which looks like a mistyped heredoc delimiter; it is payload for notes.txt, so if it was meant to end the heredoc, remove it from notes.txt"
+    }
+  ]
+}

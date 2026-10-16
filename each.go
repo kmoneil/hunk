@@ -106,6 +106,10 @@ func (ep *eachPatch) outcome() *Verify {
 
 // runEach is the mode: preflight, then the loop, then one summary. It returns
 // the exit code and, through interrupted, the signal main should die of.
+//
+// A patch's lines that look like a mistyped delimiter (#92) are warned of
+// after all of it, whatever the run's end, each under its patch's name, and
+// always as lines to come out of the patch, since --each puts every file back.
 func runEach(cfg eachConfig, tree *Tree, stdout, stderr io.Writer, interrupted *os.Signal) int {
 	patches := make([]*eachPatch, len(cfg.names))
 	for i, name := range cfg.names {
@@ -122,6 +126,22 @@ func runEach(cfg eachConfig, tree *Tree, stdout, stderr io.Writer, interrupted *
 		}
 		patches[i].p = p
 	}
+	o, e := &tally{w: stdout}, &tally{w: stderr}
+	code := eachLoaded(cfg, patches, tree, o, e, interrupted)
+	if !cfg.asJSON {
+		gap := o.n+e.n > 0
+		for _, ep := range patches {
+			if ep.p != nil && len(ep.p.Strays) > 0 {
+				writeStrays(stderr, ep.name, ep.p.Strays, false, gap)
+				gap = false
+			}
+		}
+	}
+	return code
+}
+
+// eachLoaded is the run once every patch has been read and parsed.
+func eachLoaded(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io.Writer, interrupted *os.Signal) int {
 	if bad := countLoadErrs(patches); bad > 0 {
 		return eachRefused(cfg, patches, "could not be read", exitUsage, stdout, stderr)
 	}
@@ -718,6 +738,9 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code in
 			}
 		}
 		je.Patches = append(je.Patches, jp)
+		if ep.p != nil {
+			out.Warnings = append(out.Warnings, jsonWarnings(ep.name, ep.p.Strays, false)...)
+		}
 	}
 	out.Each = je
 	if err := encodeReport(stdout, out); err != nil {

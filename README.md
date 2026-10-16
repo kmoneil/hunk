@@ -233,6 +233,30 @@ ends. When the payload is text you have not read line by line, write the patch
 to a file and run `hunk -f FILE` instead: a file does not go through the shell,
 so no line in it can end anything.
 
+The opposite mistake is a closer the shell does not take for the delimiter.
+`HUHUNK` typed above the real `HUNK` is a payload line, and lands in the file.
+With no real closer, as with `HUNKK`, an indented `  HUNK` or `HUNK` followed
+by a space, the heredoc runs to the end of the command, and the rest of the
+command lands in the file too, never having run. No shell warns. `hunk`
+applies the patch as written, since a document about `hunk` may really hold
+such a line, and ends its report with a warning on stderr, under `--quiet`
+too:
+
+```
+warning: patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter; it is payload for notes.txt, so if it was meant to end the heredoc, remove it from notes.txt
+```
+
+A line is taken for one when, with the spaces and tabs around it removed, it
+is one word of letters and digits that holds `HUNK` or is one typo away from
+it, in `@@ new`, `@@ create`, `@@ append` or `@@ prepend`. The line `HUNK`
+itself is left alone, and so are a line of `@@ old` and a line that `@@ new`
+keeps from its `@@ old`. When lines follow it in its payload, the warning
+counts them and says they never ran as commands. Where the batch is not on
+disk, under `--dry-run`, `--try` or a refusal, it says to take the line out of
+the patch instead. `--json` carries each in `warnings`: the patch line, the
+path, the line, how many payload lines follow it, and the sentence. No exit
+code changes.
+
 `hunk format` prints the full grammar and a worked example that applies.
 
 ## Replacing a whole block: `hunk quote`

@@ -690,6 +690,13 @@ var reportGoldens = map[string]int{
 	"cli-quote-help":                           ExitProbe,
 	"cli-quote-refusal-reaches-the-apply":      1,
 	"cli-quote-refusal-reaches-the-apply-json": 1,
+	// #92: a report followed by a warning of a mistyped delimiter, which
+	// changes no exit.
+	"cli-mistyped-delimiter":                     0,
+	"cli-mistyped-delimiter-json":                0,
+	"cli-mistyped-delimiter-rest-of-the-command": 0,
+	"cli-mistyped-delimiter-verify-failed":       3,
+	"cli-each-mistyped-delimiter":                3,
 }
 
 // The classifier reads hunk's diagnostics, and SPEC §8.1 says "a reworded
