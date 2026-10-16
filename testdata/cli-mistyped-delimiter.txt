@@ -1,0 +1,4 @@
+M notes.txt +2 -1
+1 file, 1 hunk, +2 -1
+
+warning: patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter; it is payload for notes.txt, so if it was meant to end the heredoc, remove it from notes.txt

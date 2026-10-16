@@ -39,6 +39,7 @@ success.
 | exit 4, `was not restored` | Ignore it | The tree is inconsistent. Read which file and why, then repair it before doing anything else |
 | exit 5 | Assume the edit landed | Read the message. Unless it says otherwise, nothing was written, or it was put back. The cause is outside the patch: a missing shell, a name the filesystem refused, a full disk |
 | exit 6, `changed on disk` | Retry the same patch | Something else wrote the tree. Re-read the file and rebuild the patch against what is there now |
+| any exit, then `warning: patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter` | Assume the file is as you meant | Do what it says. The line is payload, and in the file it names if the batch was written. If it counts lines after it, they were the rest of your command: payload too, and never run |
 
 The near-miss report exists so that a failed match costs zero extra round trips.
 Using it is the whole point.
@@ -87,6 +88,14 @@ you send it:
   command. Before you send, check that no payload line is the delimiter, and if
   one is, pick another word for both ends (`<<'HUNK2'` and `HUNK2`). This file
   has such lines, and so does any document about `hunk`.
+
+The opposite slip is one you cannot see before you send: a closer the shell
+does not take for `HUNK`. `HUHUNK` above the real `HUNK` is a payload line.
+With no real closer, as with `HUNKK`, an indented `  HUNK` or `HUNK` and a
+trailing space, the heredoc runs to the end of your command, and the rest of
+the command is payload too and never runs. The patch applies as written, so
+`hunk` ends its report with a `warning:` that names the patch line and the
+file. Read it; `--json` carries it in `warnings`.
 
 When a payload is text you have not read line by line, write the patch to a
 file with your file-writing tool, outside the tree, and run `hunk -f FILE`. A

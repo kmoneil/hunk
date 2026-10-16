@@ -1,0 +1,7 @@
+tried p1.hunk  the command exited 1 (0.0s)
+tried p2.hunk  the command exited 0 (0.0s)
+
+$ grep -q "^two$" notes.txt
+tried 2 patches and put back every file; 1 exited nonzero, 1 exited 0 (0.0s)
+
+warning: p1.hunk line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter; it is payload for notes.txt, so if it was meant to end the heredoc, take it out of the patch

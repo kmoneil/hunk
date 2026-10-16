@@ -109,6 +109,9 @@ type Report struct {
 	// hunks did not match") and which Result cannot supply because there is no
 	// Result on a failure.
 	Hunks int
+	// Strays are the patch's lines that look like a mistyped heredoc
+	// delimiter (#92), warned of after the report whatever the outcome.
+	Strays []Stray
 }
 
 // count is the summary form: "1 file", "3 files". Distinct from plural, which
@@ -210,7 +213,18 @@ func (r *Report) changedTheTree() bool {
 // quiet suppresses the success report only (§4). A failure is never silent:
 // --quiet says "print nothing on success", and a caller who wanted no output at
 // all would not have run the tool.
+//
+// A line that looks like a mistyped delimiter is warned of last, on errOut,
+// under quiet too: it is a guess about what the caller meant rather than a
+// fact about what hunk did, it is something to act on, and a --try report has
+// to start "tried" (§4.1).
 func (r *Report) Text(out, errOut io.Writer, quiet bool) {
+	o, e := &tally{w: out}, &tally{w: errOut}
+	r.text(o, e, quiet)
+	writeStrays(errOut, "", r.Strays, r.changedTheTree(), o.n+e.n > 0)
+}
+
+func (r *Report) text(out, errOut io.Writer, quiet bool) {
 	// --try's report is its command's transcript, whatever the command said,
 	// since that is what the caller ran it for. On exit 0 it is a success
 	// report, on stdout and subject to --quiet; otherwise it goes to stderr.
@@ -404,6 +418,58 @@ func (r *Report) writeTry(w io.Writer) {
 	writeTranscript(w, v)
 }
 
+// writeStrays is the warning for each stray line, after a blank line when the
+// report printed anything. patchName is the patch file under --each, where
+// several patches share one report, and "" otherwise.
+func writeStrays(w io.Writer, patchName string, strays []Stray, onDisk, gap bool) {
+	for i, s := range strays {
+		if i == 0 && gap {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "warning: %s\n", strayMessage(patchName, s, onDisk))
+	}
+}
+
+// strayMessage is one stray line's warning, which --json carries as its
+// message. onDisk says the batch is applied, so the line is in the file to be
+// taken out of it; otherwise it is to come out of the patch.
+func strayMessage(patchName string, s Stray, onDisk bool) string {
+	where := fmt.Sprintf("patch line %d", s.Line)
+	if patchName != "" {
+		where = fmt.Sprintf("%s line %d", showControls(patchName), s.Line)
+	}
+	what, them, are := "it", "it", "is"
+	if s.After > 0 {
+		what, them, are = "it and the "+count(s.After, "line")+" after it", "them", "are"
+	}
+	path := showControls(s.Path)
+	fix := "take " + them + " out of the patch"
+	if onDisk {
+		fix = "remove " + them + " from " + path
+	}
+	// Quoted as it is: a CR left in Text is a byte of the line, in a patch
+	// that is not CRLF, and shownLine would take it for the line's ending.
+	msg := fmt.Sprintf("%s is %s, which looks like a mistyped heredoc delimiter; %s %s payload for %s, so if it was meant to end the heredoc, %s",
+		where, quoteCut(string(s.Text)), what, are, path, fix)
+	if s.After > 0 {
+		msg += " and run any command they held, which the shell never did"
+	}
+	return msg
+}
+
+// tally is a writer that counts what passes through it, so that a block can
+// tell whether anything came before it.
+type tally struct {
+	w io.Writer
+	n int
+}
+
+func (t *tally) Write(b []byte) (int, error) {
+	n, err := t.w.Write(b)
+	t.n += n
+	return n, err
+}
+
 // verifyEnded is how a failed verify ended, for the report's first line.
 func verifyEnded(v *Verify) string {
 	switch {
@@ -554,6 +620,34 @@ type jsonReport struct {
 	// NotRestored is what a commit that failed part-way could not put back.
 	// The verify's own list is inside Verify.
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
+	// Warnings are the lines that look like a mistyped heredoc delimiter
+	// (#92), whatever the outcome.
+	Warnings []jsonWarning `json:"warnings,omitempty"`
+}
+
+// jsonWarning is one stray line: where it is in the patch, the file its
+// payload is for, the line, how many payload lines follow it, and the text
+// report's sentence. Patch names the patch file under --each alone, as a
+// failure's does.
+type jsonWarning struct {
+	Patch      string `json:"patch,omitempty"`
+	PatchLine  int    `json:"patch_line"`
+	Path       string `json:"path"`
+	Text       string `json:"text"`
+	LinesAfter int    `json:"lines_after"`
+	Message    string `json:"message"`
+}
+
+// jsonWarnings is strays as --json carries them.
+func jsonWarnings(patchName string, strays []Stray, onDisk bool) []jsonWarning {
+	var out []jsonWarning
+	for _, s := range strays {
+		out = append(out, jsonWarning{
+			Patch: patchName, PatchLine: s.Line, Path: s.Path, Text: string(s.Text),
+			LinesAfter: s.After, Message: strayMessage(patchName, s, onDisk),
+		})
+	}
+	return out
 }
 
 type jsonFile struct {
@@ -774,6 +868,7 @@ func (r *Report) JSON(w io.Writer) error {
 			}
 		}
 	}
+	out.Warnings = jsonWarnings("", r.Strays, r.changedTheTree())
 	return encodeReport(w, out)
 }
 

@@ -524,6 +524,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	}
 
 	rep := NewReport(res, err, v, *dryRun, len(p.Hunks))
+	rep.Strays = p.Strays
 	if *asJSON {
 		// --json wins over --quiet: a caller that asked for machine output
 		// asked for it on every path. It is alone on stdout.

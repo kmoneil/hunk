@@ -516,6 +516,7 @@ func FuzzParse(f *testing.F) {
 	f.Add("@@ delete a.go\n@@ end refused by hunk quote: x\x1b[2J\n")
 	f.Add("@@\x0bdelete a\n")
 	f.Add("@@ file a\n@@ old x2\nx\n\n@@ new\n\n@@ end\n")
+	f.Add("@@ file a\n@@ old\n  HUNK\n@@ new\n  HUNK\nHUHUNK\n\nls\n\n@@ create b\nHUN\n")
 
 	f.Fuzz(func(t *testing.T, s string) {
 		// Total: every input is either a Patch or a *ParseError, never a panic.
@@ -548,6 +549,20 @@ func FuzzParse(f *testing.F) {
 					t.Errorf("replace at line %d has an old that --eol auto reads as empty: %q", h.Line, h.Old)
 				}
 			}
+			// Every stray (#92) is a line of the patch that the rule takes,
+			// and the lines it counts after it are there.
+			lines := splitLines([]byte(s))
+			for _, st := range p.Strays {
+				if st.Line < 1 || st.Line+st.After > len(lines) {
+					t.Fatalf("stray at line %d with %d after it, in a patch of %d lines", st.Line, st.After, len(lines))
+				}
+				if raw := lines[st.Line-1]; !bytes.Equal(p.lineText(raw), st.Text) || !looksLikeDelimiter(raw, p.CRLF) {
+					t.Errorf("stray at line %d is %q, the line is %q", st.Line, st.Text, raw)
+				}
+				if _, _, ok := directive(lines[st.Line-1], DefaultMarker); ok || st.Path == "" {
+					t.Errorf("stray at line %d is a directive, or for no file: %+v", st.Line, st)
+				}
+			}
 		}
 
 		// A CRLF patch is the same patch. Every \n made \r\n changes no
@@ -577,6 +592,16 @@ func FuzzParse(f *testing.F) {
 		}
 		if len(q.Hunks) != len(p.Hunks) {
 			t.Fatalf("LF has %d hunks, CRLF %d", len(p.Hunks), len(q.Hunks))
+		}
+		// The same strays, at the same lines, counting the same lines after,
+		// since the CR that ends each line is no part of it.
+		if len(q.Strays) != len(p.Strays) {
+			t.Fatalf("LF has %d strays, CRLF %d", len(p.Strays), len(q.Strays))
+		}
+		for i, a := range p.Strays {
+			if !strayEqual(a, q.Strays[i]) {
+				t.Errorf("stray %d: LF %+v, CRLF %+v", i+1, a, q.Strays[i])
+			}
 		}
 		for i, a := range p.Hunks {
 			b := q.Hunks[i]
