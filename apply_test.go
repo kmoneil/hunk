@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -1552,6 +1553,14 @@ func FuzzASpellingThroughALinkIsTheSameFile(f *testing.F) {
 		"@@ file sub/b.go\n@@ old\nalpha\n@@ new\nALPHA\n@@ append d/b.go\ngamma\n\n",
 		"@@ create d/x\n@@ create sub/x/y\n",
 		"@@ file d/b.go\n@@ old\nbeta\n@@ new\nBETA\n",
+		// From the nightly sweep (#94). The space after the CR puts the CR
+		// inside the path, so both spellings refuse it. A respelling that
+		// dropped the space made it the line's ending in one of them. The
+		// two after it are a CRLF patch and a stray through d/, which the
+		// check on the respelling needs to see.
+		"@@ append d/b.go\r ",
+		"@@ append d/b.go\r\ngamma\r\n\r\n",
+		"@@ append d/b.go\nHUNKK\n",
 	} {
 		f.Add(s)
 	}
@@ -1564,6 +1573,12 @@ func FuzzASpellingThroughALinkIsTheSameFile(f *testing.F) {
 		q, err := Parse([]byte(respelled), DefaultMarker)
 		if err != nil {
 			t.Fatalf("respelling made the patch unparseable: %v\n%q", err, respelled)
+		}
+		// The property is about spellings, so the respelling may change the
+		// paths and nothing else. Until 2026-10-17 it could change more, and
+		// the difference it made was reported as two spellings differing.
+		if want := throughSub(p); !reflect.DeepEqual(q, want) {
+			t.Fatalf("respelling changed more than the paths\n%q\n%q", patch, respelled)
 		}
 		for _, absolute := range []bool{false, true} {
 			linkExit, linkTree, linkRes := applyToLinkedTree(t, p, absolute)
@@ -1605,10 +1620,38 @@ func respellThroughSub(patch string) string {
 		}
 		switch word {
 		case "file", "create", "delete", "append", "prepend":
-			lines[i] = DefaultMarker + " " + word + " sub/" + strings.TrimPrefix(arg, "d/")
+			// Only the d/ changes, where it stands. Until 2026-10-17 the line
+			// was rebuilt from arg, without the blanks directive trims from
+			// around it, and "@@ append d/b.go\r " became "@@ append
+			// sub/b.go\r", whose CR is the line's ending and not a byte of the
+			// path (#94).
+			afterWord := strings.TrimLeft(line[len(DefaultMarker):], " \t")[len(word):]
+			at := len(line) - len(strings.TrimLeft(afterWord, " \t"))
+			lines[i] = line[:at] + "sub/" + line[at+len("d/"):]
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// throughSub is p as respellThroughSub has to leave it: every path that starts
+// with d/ starting with sub/ instead, and nothing else different.
+func throughSub(p *Patch) *Patch {
+	q := *p
+	q.Hunks = slices.Clone(p.Hunks)
+	q.Strays = slices.Clone(p.Strays)
+	respell := func(s string) string {
+		if rest, ok := strings.CutPrefix(s, "d/"); ok {
+			return "sub/" + rest
+		}
+		return s
+	}
+	for i := range q.Hunks {
+		q.Hunks[i].Path = respell(q.Hunks[i].Path)
+	}
+	for i := range q.Strays {
+		q.Strays[i].Path = respell(q.Strays[i].Path)
+	}
+	return &q
 }
 
 // fileNamed is the file a success row names: where its path led, or, where
