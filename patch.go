@@ -701,9 +701,10 @@ below) ends the heredoc there. hunk gets the lines above it, which may still be
 a patch that applies, and the shell runs the rest as commands. Pick a delimiter
 no payload line equals, or write the patch to a file and pass -f FILE, which no
 line can end. A closer the shell does not take for the delimiter, such as
-HUHUNK above the real one or an indented HUNK, is payload: the patch applies
-with it, and the report ends with a warning that names the patch line and the
-file.
+HUHUNK above the real one or an indented HUNK, would be payload, so such a
+patch is refused, exit 1, nothing written, every such line named.
+--allow-mistyped-delimiter applies a patch that means one, and the report then
+ends with a warning that names the patch line and the file.
 
 PATHS
 

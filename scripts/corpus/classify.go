@@ -186,8 +186,11 @@ var (
 	reExitChanged            = regexp.MustCompile(`changed on disk between being read and being written`)
 	// Exit 1 is enumerable: a parse error carries its patch line, and the usage
 	// errors are fixed strings in main.go. Exit 5 is not enumerable, because
-	// its text is whatever the OS said, so it is never guessed at.
-	reExitUsage = regexp.MustCompile(`(?m)^hunk: (?:patch line \d+:|--[a-z-]+ |unexpected argument|format (?:takes no arguments|is a subcommand))`)
+	// its text is whatever the OS said, so it is never guessed at. Since #97 a
+	// line that looks like a mistyped delimiter is refused at 1 too, in its own
+	// words; under --allow-mistyped-delimiter its warning starts "warning:",
+	// and says nothing of the exit.
+	reExitUsage = regexp.MustCompile(`(?m)^hunk: (?:patch line \d+:|patch line \d+ is .*, which looks like a mistyped heredoc delimiter; |--[a-z-]+ |unexpected argument|format (?:takes no arguments|is a subcommand))`)
 
 	// The note hunk printed on a trivial success through v0.2.4, and the only
 	// line it printed that a caller was routinely right to ignore. Anchored to

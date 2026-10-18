@@ -84,6 +84,14 @@ FLAGS
                         to every path in the batch, and opens each by name
                         rather than through the root, so a symlink on any of
                         them is followed wherever it leads.
+  --allow-mistyped-delimiter
+                        Apply a patch holding a line that looks like a
+                        mistyped heredoc delimiter, such as HUHUNK above the
+                        real HUNK, and warn of each after the report. Without
+                        it such a patch is refused, exit 1, nothing written,
+                        every such line named: in the field the line was a
+                        typo every time. For a document about hunk, which may
+                        really hold one.
   --version             Print the version and exit.
 
 EXIT CODES

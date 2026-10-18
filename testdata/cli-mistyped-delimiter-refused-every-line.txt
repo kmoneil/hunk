@@ -1,0 +1,2 @@
+hunk: patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter; it would be payload for notes.txt, so nothing was written. If it was meant to end the heredoc, take it out of the patch; if it is text, pass --allow-mistyped-delimiter
+hunk: patch line 11 is "HUNKK", which looks like a mistyped heredoc delimiter; it and the 1 line after it would be payload for notes.txt, so nothing was written. If it was meant to end the heredoc, take them out of the patch and run any command they held, which the shell never did; if they are text, pass --allow-mistyped-delimiter
