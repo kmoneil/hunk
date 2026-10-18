@@ -39,7 +39,7 @@ success.
 | exit 4, `was not restored` | Ignore it | The tree is inconsistent. Read which file and why, then repair it before doing anything else |
 | exit 5 | Assume the edit landed | Read the message. Unless it says otherwise, nothing was written, or it was put back. The cause is outside the patch: a missing shell, a name the filesystem refused, a full disk |
 | exit 6, `changed on disk` | Retry the same patch | Something else wrote the tree. Re-read the file and rebuild the patch against what is there now |
-| any exit, then `warning: patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter` | Assume the file is as you meant | Do what it says. The line is payload, and in the file it names if the batch was written. If it counts lines after it, they were the rest of your command: payload too, and never run |
+| exit 1, `patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter` | Pass `--allow-mistyped-delimiter` to get it past | Take the line out of the patch and send it again: nothing was written. If it counts lines after it, they were the rest of your command: take them out too and run them yourself. The flag is for a line you mean as text, as in a document about `hunk`; under it the patch applies and a `warning:` names the line |
 
 The near-miss report exists so that a failed match costs zero extra round trips.
 Using it is the whole point.
@@ -93,9 +93,12 @@ The opposite slip is one you cannot see before you send: a closer the shell
 does not take for `HUNK`. `HUHUNK` above the real `HUNK` is a payload line.
 With no real closer, as with `HUNKK`, an indented `  HUNK` or `HUNK` and a
 trailing space, the heredoc runs to the end of your command, and the rest of
-the command is payload too and never runs. The patch applies as written, so
-`hunk` ends its report with a `warning:` that names the patch line and the
-file. Read it; `--json` carries it in `warnings`.
+the command is payload too and never runs. `hunk` refuses such a patch, exit
+1, with nothing written, and names every such line. It is the commonest slip
+there is, about one heredoc in sixty: resend the patch without the line.
+`--allow-mistyped-delimiter` applies a patch that means one, as a document
+about `hunk` may, and warns of it instead; `--json` carries each line in
+`warnings` either way.
 
 When a payload is text you have not read line by line, write the patch to a
 file with your file-writing tool, outside the tree, and run `hunk -f FILE`. A

@@ -134,6 +134,10 @@ func ExitCode(err error) int {
 	if errors.As(err, &pe) {
 		return exitUsage
 	}
+	var md *MistypedDelimiters
+	if errors.As(err, &md) {
+		return exitUsage
+	}
 	var ve *ValidationError
 	if errors.As(err, &ve) {
 		return exitNoMatch
@@ -430,14 +434,19 @@ func writeStrays(w io.Writer, patchName string, strays []Stray, onDisk, gap bool
 	}
 }
 
+// strayWhere is where a stray line is, as its warning and its refusal name it.
+func strayWhere(patchName string, s Stray) string {
+	if patchName != "" {
+		return fmt.Sprintf("%s line %d", showControls(patchName), s.Line)
+	}
+	return fmt.Sprintf("patch line %d", s.Line)
+}
+
 // strayMessage is one stray line's warning, which --json carries as its
 // message. onDisk says the batch is applied, so the line is in the file to be
 // taken out of it; otherwise it is to come out of the patch.
 func strayMessage(patchName string, s Stray, onDisk bool) string {
-	where := fmt.Sprintf("patch line %d", s.Line)
-	if patchName != "" {
-		where = fmt.Sprintf("%s line %d", showControls(patchName), s.Line)
-	}
+	where := strayWhere(patchName, s)
 	what, them, are := "it", "it", "is"
 	if s.After > 0 {
 		what, them, are = "it and the "+count(s.After, "line")+" after it", "them", "are"
@@ -455,6 +464,46 @@ func strayMessage(patchName string, s Stray, onDisk bool) string {
 		msg += " and run any command they held, which the shell never did"
 	}
 	return msg
+}
+
+// allowMistypedFlag is the flag that applies a patch with stray lines, and
+// warns of them, as every patch did in v0.3.15 and v0.3.16.
+const allowMistypedFlag = "--allow-mistyped-delimiter"
+
+// strayRefusal is one stray line's refusal (#97): the warning's sentence for a
+// batch that was never applied, and the flag that applies it.
+func strayRefusal(patchName string, s Stray) string {
+	what, them, they := "it", "it", "it is"
+	if s.After > 0 {
+		what, them, they = "it and the "+count(s.After, "line")+" after it", "them", "they are"
+	}
+	msg := fmt.Sprintf("%s is %s, which looks like a mistyped heredoc delimiter; %s would be payload for %s, so nothing was written. If it was meant to end the heredoc, take %s out of the patch",
+		strayWhere(patchName, s), quoteCut(string(s.Text)), what, showControls(s.Path), them)
+	if s.After > 0 {
+		msg += " and run any command they held, which the shell never did"
+	}
+	return msg + "; if " + they + " text, pass " + allowMistypedFlag
+}
+
+// MistypedDelimiters refuses a patch with lines that look like a mistyped
+// heredoc delimiter (#97), every one of them, before anything is read: exit
+// 1, as a patch that does not parse. Until 2026-10-18 the patch applied and a
+// warning followed the report, which was after the line was in the file: in
+// the field, sixteen times in 935 HUNK heredocs over three days, always the
+// closer stuttered on the line above itself, and every one fixed by a second
+// command. allowMistypedFlag applies it and warns, as before.
+type MistypedDelimiters struct {
+	Strays []Stray
+}
+
+// Error is one refusal a line, which the text report prefixes each with
+// "hunk: " and --each shows under the patch's name.
+func (e *MistypedDelimiters) Error() string {
+	lines := make([]string, len(e.Strays))
+	for i, s := range e.Strays {
+		lines[i] = strayRefusal("", s)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // tally is a writer that counts what passes through it, so that a block can
@@ -638,13 +687,18 @@ type jsonWarning struct {
 	Message    string `json:"message"`
 }
 
-// jsonWarnings is strays as --json carries them.
-func jsonWarnings(patchName string, strays []Stray, onDisk bool) []jsonWarning {
+// jsonWarnings is strays as --json carries them. refused says the patch was
+// refused for them (#97), and each message is then its refusal.
+func jsonWarnings(patchName string, strays []Stray, onDisk, refused bool) []jsonWarning {
 	var out []jsonWarning
 	for _, s := range strays {
+		msg := strayMessage(patchName, s, onDisk)
+		if refused {
+			msg = strayRefusal(patchName, s)
+		}
 		out = append(out, jsonWarning{
 			Patch: patchName, PatchLine: s.Line, Path: s.Path, Text: string(s.Text),
-			LinesAfter: s.After, Message: strayMessage(patchName, s, onDisk),
+			LinesAfter: s.After, Message: msg,
 		})
 	}
 	return out
@@ -868,7 +922,8 @@ func (r *Report) JSON(w io.Writer) error {
 			}
 		}
 	}
-	out.Warnings = jsonWarnings("", r.Strays, r.changedTheTree())
+	var md *MistypedDelimiters
+	out.Warnings = jsonWarnings("", r.Strays, r.changedTheTree(), errors.As(r.Err, &md))
 	return encodeReport(w, out)
 }
 

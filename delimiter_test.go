@@ -325,6 +325,15 @@ const (
 		"it is payload for notes.txt, so if it was meant to end the heredoc, take it out of the patch\n"
 )
 
+// warnCLI is runCLI under --allow-mistyped-delimiter, where a patch with stray
+// lines applies and they are warned of, as every patch did before #97 made
+// them a refusal. The warning tests below run through it unchanged, and their
+// goldens are the v0.3.15 bytes.
+func warnCLI(t *testing.T, root string, args []string, stdin string) (code int, stdout, stderr string) {
+	t.Helper()
+	return runCLI(t, root, append([]string{allowMistypedFlag}, args...), stdin)
+}
+
 // One case per outcome: the exit and the report are the clean patch's, and
 // the warning follows the report on stderr, in the tense of whether the batch
 // is on disk.
@@ -354,9 +363,9 @@ func TestAMistypedDelimiterIsWarnedOf(t *testing.T) {
 				patch = strings.ReplaceAll(patch, "@@ ", "%% ")
 				clean = strings.ReplaceAll(clean, "@@ ", "%% ")
 			}
-			wantCode, wantOut, wantErr := runCLI(t, cliTree(t, notes), c.args, clean)
+			wantCode, wantOut, wantErr := warnCLI(t, cliTree(t, notes), c.args, clean)
 			root := cliTree(t, notes)
-			code, out, errOut := runCLI(t, root, c.args, patch)
+			code, out, errOut := warnCLI(t, root, c.args, patch)
 
 			if code != c.exit || wantCode != c.exit {
 				t.Fatalf("exit %d, the clean patch's %d, want %d\n%s%s", code, wantCode, c.exit, out, errOut)
@@ -390,7 +399,7 @@ func TestAMistypedDelimiterIsWarnedOf(t *testing.T) {
 	}
 
 	t.Run("under --quiet it is all that prints, with no blank line before it", func(t *testing.T) {
-		code, out, errOut := runCLI(t, cliTree(t, notes), []string{"--quiet"}, strayPatch)
+		code, out, errOut := warnCLI(t, cliTree(t, notes), []string{"--quiet"}, strayPatch)
 		if code != exitOK || out != "" || errOut != strayApplied {
 			t.Errorf("exit %d\nstdout %q\nstderr %q", code, out, errOut)
 		}
@@ -399,7 +408,7 @@ func TestAMistypedDelimiterIsWarnedOf(t *testing.T) {
 	t.Run("from -f, which a heredoc may have written", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "p.hunk")
 		must(t, os.WriteFile(p, []byte(strayPatch), 0o644))
-		code, _, errOut := runCLI(t, cliTree(t, notes), []string{"-f", p}, "")
+		code, _, errOut := warnCLI(t, cliTree(t, notes), []string{"-f", p}, "")
 		if code != exitOK || !strings.HasSuffix(errOut, strayApplied) {
 			t.Errorf("exit %d\nstderr %q", code, errOut)
 		}
@@ -407,7 +416,7 @@ func TestAMistypedDelimiterIsWarnedOf(t *testing.T) {
 
 	t.Run("the rest of the command, which never ran", func(t *testing.T) {
 		patch := "@@ file notes.txt\n@@ old\ntwo\n@@ new\ntwo, edited\nHUNKK\nmake test\ncat notes.txt\n"
-		code, out, errOut := runCLI(t, cliTree(t, notes), nil, patch)
+		code, out, errOut := warnCLI(t, cliTree(t, notes), nil, patch)
 		if code != exitOK {
 			t.Fatalf("exit %d: %s", code, errOut)
 		}
@@ -422,7 +431,7 @@ func TestAMistypedDelimiterIsWarnedOf(t *testing.T) {
 
 	t.Run("one line after it is a line", func(t *testing.T) {
 		patch := "@@ file notes.txt\n@@ old\ntwo\n@@ new\nHUNKK\nls\n"
-		_, _, errOut := runCLI(t, cliTree(t, notes), []string{"--dry-run"}, patch)
+		_, _, errOut := warnCLI(t, cliTree(t, notes), []string{"--dry-run"}, patch)
 		if !strings.Contains(errOut, "it and the 1 line after it are payload for notes.txt") ||
 			!strings.Contains(errOut, "take them out of the patch and run any command") {
 			t.Errorf("stderr %q", errOut)
@@ -430,14 +439,14 @@ func TestAMistypedDelimiterIsWarnedOf(t *testing.T) {
 	})
 
 	t.Run("a CR that is a byte of the line is shown", func(t *testing.T) {
-		_, _, errOut := runCLI(t, cliTree(t, notes), []string{"--dry-run"}, "@@ create n.txt\nHUNK\r\n")
+		_, _, errOut := warnCLI(t, cliTree(t, notes), []string{"--dry-run"}, "@@ create n.txt\nHUNK\r\n")
 		if !strings.Contains(errOut, `patch line 2 is "HUNK\r", which looks like`) {
 			t.Errorf("stderr %q", errOut)
 		}
 	})
 
 	t.Run("a path is shown as a report shows one", func(t *testing.T) {
-		_, _, errOut := runCLI(t, cliTree(t, nil), []string{"--dry-run"}, "@@ create n\x1b[2J.txt\nHUHUNK\n")
+		_, _, errOut := warnCLI(t, cliTree(t, nil), []string{"--dry-run"}, "@@ create n\x1b[2J.txt\nHUHUNK\n")
 		if strings.Contains(errOut, "\x1b") || !strings.Contains(errOut, "payload for n<U+001B>[2J.txt") {
 			t.Errorf("stderr %q", errOut)
 		}
@@ -445,7 +454,7 @@ func TestAMistypedDelimiterIsWarnedOf(t *testing.T) {
 
 	t.Run("two are two lines, and a blank line comes once", func(t *testing.T) {
 		patch := "@@ create a.md\nHUHUNK\n\n@@ create b.md\n  HUNK\n\n"
-		_, _, errOut := runCLI(t, cliTree(t, nil), nil, patch)
+		_, _, errOut := warnCLI(t, cliTree(t, nil), nil, patch)
 		lines := strings.Split(strings.TrimSuffix(errOut, "\n"), "\n")
 		if len(lines) != 3 || lines[0] != "" ||
 			!strings.HasPrefix(lines[1], `warning: patch line 2 is "HUHUNK"`) || !strings.Contains(lines[1], "payload for a.md") ||
@@ -455,12 +464,12 @@ func TestAMistypedDelimiterIsWarnedOf(t *testing.T) {
 	})
 
 	t.Run("the issue's repro, golden", func(t *testing.T) {
-		_, out, errOut := runCLI(t, cliTree(t, notes), nil, strayPatch)
+		_, out, errOut := warnCLI(t, cliTree(t, notes), nil, strayPatch)
 		golden(t, "cli-mistyped-delimiter", out+errOut)
 	})
 
 	t.Run("a verify that fails, golden", func(t *testing.T) {
-		code, _, errOut := runCLI(t, cliTree(t, notes), []string{"--verify", "echo FAIL; false"}, strayPatch)
+		code, _, errOut := warnCLI(t, cliTree(t, notes), []string{"--verify", "echo FAIL; false"}, strayPatch)
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d", code)
 		}
@@ -489,7 +498,7 @@ func TestAMistypedDelimiterInJSON(t *testing.T) {
 		{"a verify that fails", []string{"--json", "--verify", "false"}, exitVerifyFailed, "take it out of the patch"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			code, out, errOut := runCLI(t, cliTree(t, notes), c.args, strayPatch)
+			code, out, errOut := warnCLI(t, cliTree(t, notes), c.args, strayPatch)
 			if code != c.exit || errOut != "" {
 				t.Fatalf("exit %d, stderr %q", code, errOut)
 			}
@@ -512,19 +521,19 @@ func TestAMistypedDelimiterInJSON(t *testing.T) {
 	}
 
 	t.Run("golden", func(t *testing.T) {
-		_, out, _ := runCLI(t, cliTree(t, notes), []string{"--json"}, strayPatch)
+		_, out, _ := warnCLI(t, cliTree(t, notes), []string{"--json"}, strayPatch)
 		golden(t, "cli-mistyped-delimiter-json", out)
 	})
 
 	t.Run("lines_after is there when it is 0, and counts", func(t *testing.T) {
-		_, out, _ := runCLI(t, cliTree(t, notes), []string{"--json", "--dry-run"}, "@@ create n.txt\nHUNKK\nls\n")
+		_, out, _ := warnCLI(t, cliTree(t, notes), []string{"--json", "--dry-run"}, "@@ create n.txt\nHUNKK\nls\n")
 		if !strings.Contains(out, `"lines_after": 1,`) {
 			t.Errorf("%s", out)
 		}
 	})
 
 	t.Run("no warnings key when there is none", func(t *testing.T) {
-		_, out, _ := runCLI(t, cliTree(t, notes), []string{"--json"}, cleanPatch)
+		_, out, _ := warnCLI(t, cliTree(t, notes), []string{"--json"}, cleanPatch)
 		if strings.Contains(out, "warnings") {
 			t.Errorf("%s", out)
 		}
@@ -614,7 +623,7 @@ func TestEachWarnsOfAMistypedDelimiter(t *testing.T) {
 	t.Run("a run", func(t *testing.T) {
 		root, p1, p2 := setup(t)
 		before := snapshot(t, root)
-		code, out, errOut := runCLI(t, root, []string{"--try", try, "--each", p1, p2}, "")
+		code, out, errOut := warnCLI(t, root, []string{"--try", try, "--each", p1, p2}, "")
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d\n%s%s", code, errOut, out)
 		}
@@ -629,7 +638,7 @@ func TestEachWarnsOfAMistypedDelimiter(t *testing.T) {
 
 	t.Run("a clean run under --quiet prints the warning alone", func(t *testing.T) {
 		root, p1, _ := setup(t)
-		code, out, errOut := runCLI(t, root, []string{"--quiet", "--try", try, "--each", p1}, "")
+		code, out, errOut := warnCLI(t, root, []string{"--quiet", "--try", try, "--each", p1}, "")
 		if code != exitOK || out != "" || errOut != warnFor(p1) {
 			t.Errorf("exit %d\nstdout %q\nstderr %q", code, out, errOut)
 		}
@@ -637,7 +646,7 @@ func TestEachWarnsOfAMistypedDelimiter(t *testing.T) {
 
 	t.Run("a dry run", func(t *testing.T) {
 		root, p1, p2 := setup(t)
-		code, out, errOut := runCLI(t, root, []string{"--dry-run", "--try", try, "--each", p1, p2}, "")
+		code, out, errOut := warnCLI(t, root, []string{"--dry-run", "--try", try, "--each", p1, p2}, "")
 		if code != exitOK || !strings.HasPrefix(out, p1) || errOut != "\n"+warnFor(p1) {
 			t.Errorf("exit %d\nstdout %q\nstderr %q", code, out, errOut)
 		}
@@ -646,7 +655,7 @@ func TestEachWarnsOfAMistypedDelimiter(t *testing.T) {
 	t.Run("a run refused because another patch does not parse", func(t *testing.T) {
 		root, p1, p2 := setup(t)
 		must(t, os.WriteFile(p2, []byte("not a patch\n"), 0o644))
-		code, _, errOut := runCLI(t, root, []string{"--try", try, "--each", p1, p2}, "")
+		code, _, errOut := warnCLI(t, root, []string{"--try", try, "--each", p1, p2}, "")
 		if code != exitUsage || !strings.HasPrefix(errOut, "hunk: 1 of 2 patches could not be read") ||
 			!strings.HasSuffix(errOut, "\n"+warnFor(p1)) {
 			t.Errorf("exit %d\nstderr %s", code, errOut)
@@ -655,7 +664,7 @@ func TestEachWarnsOfAMistypedDelimiter(t *testing.T) {
 
 	t.Run("a run refused because the command fails with no patch", func(t *testing.T) {
 		root, p1, _ := setup(t)
-		code, _, errOut := runCLI(t, root, []string{"--try", "false", "--each", p1}, "")
+		code, _, errOut := warnCLI(t, root, []string{"--try", "false", "--each", p1}, "")
 		if code != exitUsage || !strings.HasSuffix(errOut, "\n"+warnFor(p1)) {
 			t.Errorf("exit %d\nstderr %s", code, errOut)
 		}
@@ -663,7 +672,7 @@ func TestEachWarnsOfAMistypedDelimiter(t *testing.T) {
 
 	t.Run("--json", func(t *testing.T) {
 		root, p1, p2 := setup(t)
-		code, out, _ := runCLI(t, root, []string{"--json", "--try", try, "--each", p1, p2}, "")
+		code, out, _ := warnCLI(t, root, []string{"--json", "--try", try, "--each", p1, p2}, "")
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d", code)
 		}

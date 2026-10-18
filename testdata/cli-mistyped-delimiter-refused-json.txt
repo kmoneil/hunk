@@ -1,0 +1,14 @@
+{
+  "ok": false,
+  "exit": 1,
+  "error": "patch line 6 is \"HUHUNK\", which looks like a mistyped heredoc delimiter; it would be payload for notes.txt, so nothing was written. If it was meant to end the heredoc, take it out of the patch; if it is text, pass --allow-mistyped-delimiter",
+  "warnings": [
+    {
+      "patch_line": 6,
+      "path": "notes.txt",
+      "text": "HUHUNK",
+      "lines_after": 0,
+      "message": "patch line 6 is \"HUHUNK\", which looks like a mistyped heredoc delimiter; it would be payload for notes.txt, so nothing was written. If it was meant to end the heredoc, take it out of the patch; if it is text, pass --allow-mistyped-delimiter"
+    }
+  ]
+}

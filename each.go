@@ -72,6 +72,7 @@ type eachConfig struct {
 	dryRun       bool
 	asJSON       bool
 	quiet        bool
+	allowStrays  bool // --allow-mistyped-delimiter: warn of strays (#92) rather than refuse (#97)
 }
 
 // eachPatch is one patch of the run: the file as the caller spelled it, its
@@ -107,9 +108,11 @@ func (ep *eachPatch) outcome() *Verify {
 // runEach is the mode: preflight, then the loop, then one summary. It returns
 // the exit code and, through interrupted, the signal main should die of.
 //
-// A patch's lines that look like a mistyped delimiter (#92) are warned of
-// after all of it, whatever the run's end, each under its patch's name, and
-// always as lines to come out of the patch, since --each puts every file back.
+// A patch with lines that look like a mistyped delimiter is refused with the
+// patches that do not parse (#97), so nothing is tried. Under
+// --allow-mistyped-delimiter they are warned of (#92) after all of it,
+// whatever the run's end, each under its patch's name, and always as lines to
+// come out of the patch, since --each puts every file back.
 func runEach(cfg eachConfig, tree *Tree, stdout, stderr io.Writer, interrupted *os.Signal) int {
 	patches := make([]*eachPatch, len(cfg.names))
 	for i, name := range cfg.names {
@@ -122,6 +125,10 @@ func runEach(cfg eachConfig, tree *Tree, stdout, stderr io.Writer, interrupted *
 		p, err := Parse(src, cfg.marker)
 		if err != nil {
 			patches[i].loadErr = err
+			continue
+		}
+		if len(p.Strays) > 0 && !cfg.allowStrays {
+			patches[i].loadErr = &MistypedDelimiters{Strays: p.Strays}
 			continue
 		}
 		patches[i].p = p
@@ -738,8 +745,12 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code in
 			}
 		}
 		je.Patches = append(je.Patches, jp)
-		if ep.p != nil {
-			out.Warnings = append(out.Warnings, jsonWarnings(ep.name, ep.p.Strays, false)...)
+		var md *MistypedDelimiters
+		switch {
+		case ep.p != nil:
+			out.Warnings = append(out.Warnings, jsonWarnings(ep.name, ep.p.Strays, false, false)...)
+		case errors.As(ep.loadErr, &md):
+			out.Warnings = append(out.Warnings, jsonWarnings(ep.name, md.Strays, false, true)...)
 		}
 	}
 	out.Each = je

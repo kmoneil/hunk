@@ -183,6 +183,14 @@ FLAGS
                         to every path in the batch, and opens each by name
                         rather than through the root, so a symlink on any of
                         them is followed wherever it leads.
+  --allow-mistyped-delimiter
+                        Apply a patch holding a line that looks like a
+                        mistyped heredoc delimiter, such as HUHUNK above the
+                        real HUNK, and warn of each after the report. Without
+                        it such a patch is refused, exit 1, nothing written,
+                        every such line named: in the field the line was a
+                        typo every time. For a document about hunk, which may
+                        really hold one.
   --version             Print the version and exit.
 
 EXIT CODES
@@ -280,6 +288,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		context      = fs.Int("context", DefaultContext, "")
 		eol          = fs.String("eol", "auto", "")
 		allowOutside = fs.Bool("allow-outside-root", false, "")
+		allowStrays  = fs.Bool("allow-mistyped-delimiter", false, "") // allowMistypedFlag
 		timeoutFlag  = fs.String("timeout", "", "")
 		help         = fs.Bool("help", false, "")
 		h            = fs.Bool("h", false, "")
@@ -293,9 +302,23 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	// paths printed one. The text is what they printed before, byte for byte.
 	wantsJSON := jsonRequested(args)
 	fail := func(code int, err error, hint string) int {
+		// A refusal of mistyped delimiters (#97) carries its lines into
+		// --json's warnings, and is a hunk: line each in the text.
+		var md *MistypedDelimiters
+		refused := errors.As(err, &md)
 		if wantsJSON {
-			if werr := (&Report{Exit: code, Err: err}).JSON(stdout); werr != nil {
+			rep := &Report{Exit: code, Err: err}
+			if refused {
+				rep.Strays = md.Strays
+			}
+			if werr := rep.JSON(stdout); werr != nil {
 				fmt.Fprintf(stderr, "hunk: %v\nhunk: the --json report could not be written: %v\n", err, werr)
+			}
+			return code
+		}
+		if refused {
+			for _, line := range strings.Split(md.Error(), "\n") {
+				fmt.Fprintf(stderr, "hunk: %s\n", line)
 			}
 			return code
 		}
@@ -437,6 +460,12 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		if parseErr != nil {
 			return fail(exitUsage, parseErr, heredocHint(parseErr, patchFile.path == ""))
 		}
+		// A line that looks like a mistyped heredoc delimiter is refused
+		// before anything is read (#97), every one named, unless the caller
+		// says the patch means it. The warning #92 gave came after the write.
+		if len(p.Strays) > 0 && !*allowStrays {
+			return fail(exitUsage, &MistypedDelimiters{Strays: p.Strays}, "")
+		}
 	}
 
 	dir := *root
@@ -472,7 +501,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 			}
 		})
 		return runEach(eachConfig{
-			names: fs.Args(), command: *try, build: *build, marker: *marker, opt: opt,
+			names: fs.Args(), command: *try, build: *build, marker: *marker, opt: opt, allowStrays: *allowStrays,
 			timeout: timeout, verifyLines: *verifyLines, everyTail: linesGiven, verifyFormat: *verifyFormat,
 			dryRun: *dryRun, asJSON: *asJSON, quiet: *quiet,
 		}, tree, stdout, stderr, interrupted)
