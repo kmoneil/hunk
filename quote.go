@@ -415,6 +415,8 @@ func refuseDirectives(payload []byte, name string, first int, marker string) *qu
 			what = "which a patch reads as a directive and not as text"
 		} else if _, ok := nearDirective(bytes.TrimSuffix(line, cr), marker); ok {
 			what = "which a patch refuses as a directive with a control character in it"
+		} else if _, ok := separatorFault(line, marker); ok {
+			what = "which a patch refuses as a directive missing its space, or with one that is not ASCII"
 		}
 		if what == "" {
 			continue

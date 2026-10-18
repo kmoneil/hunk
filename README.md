@@ -209,9 +209,13 @@ Three rules worth knowing before the first patch:
 3. **A line is a directive only if** it starts with `@@` at column 0, the next
    character is a space or tab, and the first word is one of the directive
    names. Everything else is payload, so a Markdown file full of `@@` passes
-   through untouched, and so does a unified diff pasted into a payload. If your
-   payload really does contain a line like `@@ old`, `--marker` picks a
-   different prefix for the whole patch.
+   through untouched, and so does a unified diff pasted into a payload. The
+   exception is a line that would be a directive but for that space:
+   `@@file b.go`, or a no-break space in its place, is refused with exit 1
+   wherever it is, since as payload the directive it was meant to be would not
+   happen, and the hunks after it would apply to the file before it. If your
+   payload really does contain a line like `@@ old` or `@@file`, `--marker`
+   picks a different prefix for the whole patch.
 
 A patch may end its lines with CRLF, as PowerShell does when it pipes text: one
 carriage return at the end of a directive line is the line's ending, not part

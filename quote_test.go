@@ -162,11 +162,19 @@ func TestQuoteLines(t *testing.T) {
 		},
 		{
 			// Rule 3 of §3.2: none of these is a directive, so none is refused.
+			// "@@old" was among them until 2026-10-18, when the parser began to
+			// refuse a directive missing its space (#96).
 			name: "lines that only look like directives are text",
-			file: "@@ -1,3 +1,4 @@\n@@old\n @@ old\n@@ older\n@@\n", start: 1, end: 5,
-			repl: "@@ -1 +1 @@\n@@new\n", hasNew: true,
-			want:  "@@ file f.txt\n@@ old\n@@ -1,3 +1,4 @@\n@@old\n @@ old\n@@ older\n@@\n@@ new\n@@ -1 +1 @@\n@@new\n",
+			file: "@@ -1,3 +1,4 @@\n@@olds\n @@ old\n@@ older\n@@\n", start: 1, end: 5,
+			repl: "@@ -1 +1 @@\n@@newer\n", hasNew: true,
+			want:  "@@ file f.txt\n@@ old\n@@ -1,3 +1,4 @@\n@@olds\n @@ old\n@@ older\n@@\n@@ new\n@@ -1 +1 @@\n@@newer\n",
 			first: "@@ -1,3 +1,4 @@", last: "@@",
+		},
+		{
+			name: "under another marker, a directive missing its space under the default is text",
+			file: "@@old\n@@file b.txt\n", start: 1, end: 2, repl: "@@new\n", hasNew: true, marker: "%%",
+			want:  "%% file f.txt\n%% old\n@@old\n@@file b.txt\n%% new\n@@new\n",
+			first: "@@old", last: "@@file b.txt",
 		},
 		{
 			name: "under another marker the default one is text",
@@ -298,6 +306,32 @@ func TestQuoteLinesRefuses(t *testing.T) {
 			name: "the same in the replacement",
 			file: "a\n", start: 1, end: 1, repl: "@@\x0bdelete a\n", hasNew: true, code: exitNoMatch,
 			want: []string{"new.txt line 1 is", "control character"},
+		},
+		{
+			// And so does a directive missing its space (#96).
+			name: "a directive missing its space",
+			file: "a\n@@old\n", start: 1, end: 2, code: exitNoMatch,
+			want: []string{`f.txt line 2 is "@@old"`, "missing its space", "--marker"},
+		},
+		{
+			name: "the same in the replacement",
+			file: "a\n", start: 1, end: 1, repl: "x\n@@file b.txt\n", hasNew: true, code: exitNoMatch,
+			want: []string{`new.txt line 2 is "@@file b.txt"`, "missing its space"},
+		},
+		{
+			name: "a no-break space for the separator",
+			file: "a\n@@\u00a0end\n", start: 1, end: 2, code: exitNoMatch,
+			want: []string{"f.txt line 2 is", "one that is not ASCII"},
+		},
+		{
+			name: "one ending in a CR",
+			file: "a\r\n@@end\r\n", start: 1, end: 2, code: exitNoMatch,
+			want: []string{`f.txt line 2 is "@@end"`, "missing its space"},
+		},
+		{
+			name: "under another marker, that marker's",
+			file: "a\n%%old\n", start: 1, end: 2, marker: "%%", code: exitNoMatch,
+			want: []string{`f.txt line 2 is "%%old"`, "missing its space"},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {

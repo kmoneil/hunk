@@ -110,10 +110,14 @@ func TestParse(t *testing.T) {
 			in:   "@@ file a.md\n@@ old\n@@@@\n@@ new\nz\n",
 			want: []Hunk{rep("a.md", 2, 1, "@@@@", "z")},
 		},
+		// "@@old is payload: no separator" stood here until 2026-10-18: a
+		// directive missing its space is refused now, wherever it is (#96),
+		// and its rows are in TestParseErrors. Glued to a word that is not a
+		// directive, it is still payload.
 		{
-			name: "@@old is payload: no separator",
-			in:   "@@ file a.go\n@@ old\n@@old\n@@ new\nz\n",
-			want: []Hunk{rep("a.go", 2, 1, "@@old", "z")},
+			name: "@@olds is payload: no separator, and not a keyword",
+			in:   "@@ file a.go\n@@ old\n@@olds\n@@ new\n@@filename\n@@file:\n@@fileb.go\n",
+			want: []Hunk{rep("a.go", 2, 1, "@@olds", "@@filename\n@@file:\n@@fileb.go")},
 		},
 		{
 			name: "@@ oldx is payload: not a keyword",
@@ -249,6 +253,32 @@ func TestParse(t *testing.T) {
 			in:     "%% create a.txt\n@@ end\f\n",
 			want:   []Hunk{body(OpCreate, "a.txt", 1, "@@ end\f")},
 		},
+		{
+			name:   "and one missing its space, or with a no-break space for one",
+			marker: "%%",
+			in:     "%% create a.txt\n@@file b.go\n@@\u00a0end\n",
+			want:   []Hunk{body(OpCreate, "a.txt", 1, "@@file b.go\n@@\u00a0end")},
+		},
+		{
+			// Two faults, which neither rule takes: the space, and a second CR,
+			// which is a byte of the line. Fuzzing found the parser refusing it
+			// for its space, having taken off both CRs.
+			name: "a directive missing its space, with a second CR, is payload",
+			in:   "@@ create a.txt\n@@old\r\r\n",
+			want: []Hunk{body(OpCreate, "a.txt", 1, "@@old\r\r")},
+		},
+		{
+			// A path is not a separator, so a no-break space in one is a byte
+			// of the name, as it always was.
+			name: "a no-break space inside a path is the path's",
+			in:   "@@ create a\u00a0b.txt\nx\n@@ file c\u00a0d.txt\n@@ old\ny\n@@ new\nz\n",
+			want: []Hunk{body(OpCreate, "a\u00a0b.txt", 1, "x"), rep("c\u00a0d.txt", 4, 1, "y", "z")},
+		},
+		{
+			name: "a payload line with a no-break space that would make no directive is text",
+			in:   "@@ create a.txt\n@@\u00a0fiel x\n@@\u00a0\n\u00a0@@ end\n@@\u200bend\n",
+			want: []Hunk{body(OpCreate, "a.txt", 1, "@@\u00a0fiel x\n@@\u00a0\n\u00a0@@ end\n@@\u200bend")},
+		},
 	}
 
 	for _, c := range cases {
@@ -338,6 +368,42 @@ func TestParseErrors(t *testing.T) {
 		{"a second CR is not a line ending", "", "@@ delete a.go\n@@ end\r\r\n", 2, `"@@ end" but for U+000D`},
 		{"a lone C1 byte after the word, which is not UTF-8", "", "@@ delete a.go\n@@ end\x9b\n", 2, `"@@ end" but for 0x9B`},
 		{"the message says what to do", "", "@@ delete a.go\n@@ end\f\n", 2, "remove it, or if the line is payload text, choose another directive prefix with --marker"},
+
+		// A directive missing its space, or with a space that is not ASCII
+		// for one, was payload until 2026-10-18 (#96): the directive did not
+		// happen, and the hunks after it applied to the file before it.
+		// Refused wherever it is, as one with a control character is.
+		{"@@file inside a new payload, the issue's", "", "@@ file a.go\n@@ old\nx\n@@ new\ny\n@@file b.go\n", 6, `the line would be the directive "@@ file" but for the space missing after "@@"; put one in, or if the line is payload text, choose another directive prefix with --marker`},
+		{"at line 1, refused for its reason now", "", "@@file a.go\n@@ old\nx\n@@ new\ny\n", 1, `"@@ file" but for the space missing`},
+		{"where a directive has to stand", "", "@@ file a.go\n@@old\nx\n@@ new\ny\n", 2, `"@@ old" but for the space missing`},
+		{"inside an old payload", "", "@@ file a.go\n@@ old\n@@old\n@@ new\nz\n", 3, `"@@ old" but for the space missing`},
+		{"inside a create payload", "", "@@ create a.go\nx\n@@delete b.go\n", 3, `"@@ delete" but for the space missing`},
+		{"inside an append payload", "", "@@ append a.go\nx\n@@create b.go\n", 3, `"@@ create" but for the space missing`},
+		{"inside a prepend payload", "", "@@ prepend a.go\nx\n@@append b.go\n", 3, `"@@ append" but for the space missing`},
+		{"@@prepend", "", "@@ create a.go\n@@prepend b.go\n", 2, `"@@ prepend" but for the space missing`},
+		{"@@new", "", "@@ create a.go\n@@new\n", 2, `"@@ new" but for the space missing`},
+		{"@@end, the last line", "", "@@ create a.go\nx\n@@end\n", 3, `"@@ end" but for the space missing`},
+		{"with a count", "", "@@ create a.go\n@@old x2\n", 2, `"@@ old" but for the space missing`},
+		{"with a tab after the word", "", "@@ create a.go\n@@file\tb.go\n", 2, `"@@ file" but for the space missing`},
+		{"in a CRLF patch", "", "@@ create a.go\r\nx\r\n@@end\r\n", 3, `"@@ end" but for the space missing`},
+		{"before a second @@ old, named rather than the @@ new after it", "", "@@ file a.go\n@@ old\np\n@@ new\nq\n@@old\nr\n@@ new\ns\n", 6, `"@@ old" but for the space missing`},
+		{"as the @@ new, named rather than the directive after it", "", "@@ file a.go\n@@ old\np\n@@new\nq\n@@ file b.go\n@@ old\nr\n@@ new\ns\n", 4, `"@@ new" but for the space missing`},
+		{"the first of two is named", "", "@@ create a.go\n@@end\n@@file b\n", 2, `"@@ end"`},
+		{"under another marker, that marker's", "%%", "%% create a.go\n@@file b\n%%file c\n", 3, `the line would be the directive "%% file" but for the space missing after "%%"`},
+
+		{"a no-break space after the marker", "", "@@ create a.go\nx\n@@\u00a0end\n", 3, `the line would be the directive "@@ end" but for U+00A0 in it, a space that is not ASCII; make it an ASCII space, or if the line is payload text, choose another directive prefix with --marker`},
+		{"an ideographic space", "", "@@ create a.go\n@@\u3000file b\n", 2, `"@@ file" but for U+3000 in it`},
+		{"a thin space", "", "@@ create a.go\n@@\u2009file b\n", 2, `"@@ file" but for U+2009 in it`},
+		{"with an ASCII space beside it", "", "@@ create a.go\n@@ \u00a0file b\n", 2, `"@@ file" but for U+00A0 in it`},
+		{"after the word", "", "@@ create a.go\n@@ old\u00a0x2\n", 2, `"@@ old" but for U+00A0 in it`},
+		{"ending @@ end", "", "@@ create a.go\n@@ end\u00a0\n", 2, `"@@ end" but for U+00A0 in it`},
+		{"the first is named", "", "@@ create a.go\n@@\u3000end\u00a0\n", 2, `but for U+3000 in it`},
+		{"and both", "", "@@ create a.go\n@@file\u00a0b.go\n", 2, `the line would be the directive "@@ file" but for U+00A0, a space that is not ASCII, and the space missing after "@@"; make that an ASCII space and put one after "@@", or if the line is payload text`},
+		{"a no-break space in the path is no fault of the separator", "", "@@ create a.go\n@@file b\u00a0c.go\n", 2, `"@@ file" but for the space missing after "@@"; put one in`},
+		// A control character the same reading makes a directive keeps its
+		// own message, which is asked first.
+		{"a form feed for the separator is a control character still", "", "@@ create a.go\n@@\ffile b\n", 2, `"@@ file" but for U+000C in it, a control character`},
+		{"and so is NEL, a space and a C1 control", "", "@@ create a.go\n@@\u0085file b\n", 2, `"@@ file" but for U+0085 in it, a control character`},
 
 		{"an empty marker", "%%%", "", 0, "marker"},
 	}
@@ -465,8 +531,10 @@ func TestParserHasNoFileAccess(t *testing.T) {
 		t.Fatalf("parse patch.go: %v", err)
 	}
 	// unicode/utf8 joined on 2026-10-06, to tell a lone C1 byte from a byte of
-	// another character; it decodes bytes in memory and opens nothing.
-	allowed := map[string]bool{"bytes": true, "fmt": true, "strconv": true, "strings": true, "unicode/utf8": true}
+	// another character; it decodes bytes in memory and opens nothing. So
+	// does unicode, which joined on 2026-10-18 to know a no-break space for a
+	// space (#96): it is tables.
+	allowed := map[string]bool{"bytes": true, "fmt": true, "strconv": true, "strings": true, "unicode": true, "unicode/utf8": true}
 	for _, im := range f.Imports {
 		path, err := strconv.Unquote(im.Path.Value)
 		if err != nil {
@@ -517,6 +585,8 @@ func FuzzParse(f *testing.F) {
 	f.Add("@@\x0bdelete a\n")
 	f.Add("@@ file a\n@@ old x2\nx\n\n@@ new\n\n@@ end\n")
 	f.Add("@@ file a\n@@ old\n  HUNK\n@@ new\n  HUNK\nHUHUNK\n\nls\n\n@@ create b\nHUN\n")
+	f.Add("@@ file a\n@@ old\nx\n@@ new\ny\n@@file b\n@@ old\nx\n@@ new\nz\n")
+	f.Add("@@ create a\n@@files\n@@\u00a0end\n")
 
 	f.Fuzz(func(t *testing.T, s string) {
 		// Total: every input is either a Patch or a *ParseError, never a panic.
@@ -529,6 +599,16 @@ func FuzzParse(f *testing.F) {
 			// A parse error names a control character; it never prints one.
 			if name, ok := firstControl(pe.Error()); ok {
 				t.Fatalf("%q prints %s raw", pe.Error(), name)
+			}
+			// A line refused for its separator (#96) is one the rule takes.
+			if strings.Contains(pe.Msg, "the space missing after") || strings.Contains(pe.Msg, "a space that is not ASCII") {
+				lines := splitLines([]byte(s))
+				if pe.Line < 1 || pe.Line > len(lines) {
+					t.Fatalf("%v names a line the patch does not have", pe)
+				}
+				if _, ok := separatorFault(lines[pe.Line-1], DefaultMarker); !ok {
+					t.Errorf("%v: line %q is not one separatorFault takes", pe, lines[pe.Line-1])
+				}
 			}
 		} else {
 			if len(p.Hunks) == 0 {
@@ -552,6 +632,13 @@ func FuzzParse(f *testing.F) {
 			// Every stray (#92) is a line of the patch that the rule takes,
 			// and the lines it counts after it are there.
 			lines := splitLines([]byte(s))
+			// And no line of a patch that parses is a directive but for its
+			// separator (#96): every one of them is refused.
+			for i, l := range lines {
+				if _, ok := separatorFault(l, DefaultMarker); ok {
+					t.Errorf("line %d, %q, is a directive but for its separator, and the patch parsed", i+1, l)
+				}
+			}
 			for _, st := range p.Strays {
 				if st.Line < 1 || st.Line+st.After > len(lines) {
 					t.Fatalf("stray at line %d with %d after it, in a patch of %d lines", st.Line, st.After, len(lines))

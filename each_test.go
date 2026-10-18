@@ -202,6 +202,13 @@ func TestEachPreflightRefusesTheLot(t *testing.T) {
 			detail: `"@@ old" has no "@@ new"`,
 		},
 		{
+			name:   "and so does one with a directive missing its space (#96)",
+			patch:  "@@ file a.txt\n@@ old\nalpha\n@@ new\nALPHA\n@@file b.txt\n",
+			code:   exitUsage,
+			header: "1 of 2 patches could not be read; nothing was tried",
+			detail: `patch line 6: the line would be the directive "@@ file" but for the space missing after "@@"`,
+		},
+		{
 			name:    "a patch file that does not exist is exit 1",
 			badFile: "missing.hunk",
 			code:    exitUsage,
