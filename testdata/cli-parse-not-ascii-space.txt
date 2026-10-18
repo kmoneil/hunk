@@ -1,0 +1,1 @@
+hunk: patch line 3: the line would be the directive "@@ end" but for U+00A0 in it, a space that is not ASCII; make it an ASCII space, or if the line is payload text, choose another directive prefix with --marker

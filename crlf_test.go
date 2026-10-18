@@ -321,6 +321,13 @@ func TestTheControlCharacterMessagesAreGolden(t *testing.T) {
 		{"cli-path-control-character", "@@ create x\x1b[31mred.txt\nhi\n", nil, exitNoMatch},
 		{"cli-path-refused-nul", "@@ create a\x00b.txt\nhi\n", nil, exitNoMatch},
 		{"cli-parse-control-character", "@@ create a.txt\nhi\n@@ end\f\n", nil, exitUsage},
+		// #96's repro, and a no-break space for the separator.
+		{
+			"cli-parse-missing-space", "@@ file repro.txt\n@@ old\na\n@@ new\nA\n@@file other.txt\n",
+			map[string]string{"repro.txt": "a\nb\n"},
+			exitUsage,
+		},
+		{"cli-parse-not-ascii-space", "@@ create a.txt\nhi\n@@ end\u00a0\n", nil, exitUsage},
 		{
 			"cli-crlf-payload-on-an-lf-file", "@@ file f.txt\n@@ old\nalpha\r\n@@ new\nX\n",
 			map[string]string{"f.txt": "alpha\nbeta\n"},

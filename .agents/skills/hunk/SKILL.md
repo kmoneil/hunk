@@ -106,7 +106,10 @@ from PowerShell does. A carriage return at the end of a directive line is its
 ending; under the default `--eol auto`, a patch whose every line ends in CRLF
 reads its payloads the same way, and `--eol strict` keeps every payload byte. A
 control character anywhere else in a directive line is refused and named: in a
-path with exit 2, stuck to a directive word with exit 1.
+path with exit 2, stuck to a directive word with exit 1. So is a directive
+missing its space, `@@file b.go`, or with a no-break space for one, wherever
+the line is, with exit 1: as payload it would have sent every hunk after it to
+the file before it. `--marker` writes such a line as text.
 
 ## The five directives
 

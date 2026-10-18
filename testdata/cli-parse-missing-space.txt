@@ -1,0 +1,1 @@
+hunk: patch line 6: the line would be the directive "@@ file" but for the space missing after "@@"; put one in, or if the line is payload text, choose another directive prefix with --marker

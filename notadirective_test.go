@@ -58,7 +58,9 @@ func TestALineThatIsNotADirectiveIsShown(t *testing.T) {
 		{"the same from -f", "import json\nprint(1)\n", true, "1", `"import json"`, false},
 		{"a blank first line", "\n@@ file f.txt\n@@ old\na\n@@ new\nb\n", false, "1", "a blank line", true},
 		{"a unified diff", "--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-a\n+b\n", false, "1", `"--- a/f.txt"`, true},
-		{"no space after the marker", "@@file f.txt\n", false, "1", `"@@file f.txt"`, true},
+		// "@@file f.txt" stood here until 2026-10-18; a directive missing its
+		// space is refused for that reason now (#96, separator_test.go).
+		{"no space after the marker, and no directive word", "@@files f.txt\n", false, "1", `"@@files f.txt"`, true},
 		{"a word that is not a directive", "@@ fiel f.txt\n", false, "1", `"@@ fiel f.txt"`, true},
 		{"a byte-order mark", "\ufeff@@ file f.txt\n@@ old\na\n@@ new\nb\n", false, "1", `"\ufeff@@ file f.txt"`, true},
 		{"an indented directive", "  @@ file f.txt\n", false, "1", `"  @@ file f.txt"`, true},

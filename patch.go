@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -258,6 +259,97 @@ func nearDirective(line []byte, marker string) (string, bool) {
 	return "", false
 }
 
+// A badSeparator is what keeps a line from being a directive under
+// separatorFault: the space missing after the marker, or the first space that
+// is not ASCII where a separator stands, or both.
+type badSeparator struct {
+	word    string // the directive word the line would have
+	missing bool   // the marker is glued to the word, as in "@@file b.go"
+	space   rune   // the first separator that is a space but not ASCII, or 0
+}
+
+// separatorFault reports the directive line would have been but for a
+// separator (#96): the marker glued to the word, "@@file b.go", or a space
+// that is not ASCII after the marker or after the word, a no-break space in
+// "@@ old x2" or after "@@ end", or both. Until 2026-10-18 such a line was
+// payload, so the directive it was meant to be did not happen: the line went
+// into the file before it, and every hunk after it applied to that file too,
+// or missed there and the report named the wrong file. A path is not a
+// separator, so a no-break space inside one is a byte of the name, as it is
+// in a directive. One trailing CR is the line's ending, as directive reads it.
+//
+// A line that would be a directive but for a control character is
+// nearDirective's, and never this function's: a control character is no
+// separator here, and nearDirective's reading leaves every other byte as it
+// is. FuzzSeparatorFault asserts it, so the order the callers ask the two in
+// does not show.
+func separatorFault(line []byte, marker string) (badSeparator, bool) {
+	line = bytes.TrimSuffix(line, cr)
+	if !bytes.HasPrefix(line, []byte(marker)) {
+		return badSeparator{}, false
+	}
+	if _, _, ok := directive(line, marker); ok {
+		return badSeparator{}, false
+	}
+	var bad badSeparator
+	// sep reads the separator at s[i:], if there is one: a space, a tab, or a
+	// space that is not ASCII, which it records.
+	sep := func(s []byte, i int) (int, bool) {
+		if s[i] == ' ' || s[i] == '\t' {
+			return 1, true
+		}
+		r, w := utf8.DecodeRune(s[i:])
+		if r < utf8.RuneSelf || !unicode.IsSpace(r) || isControl(r) {
+			return 0, false
+		}
+		if bad.space == 0 {
+			bad.space = r
+		}
+		return w, true
+	}
+	rest := line[len(marker):]
+	i := 0
+	for i < len(rest) {
+		w, ok := sep(rest, i)
+		if !ok {
+			break
+		}
+		i += w
+	}
+	bad.missing = i == 0
+	start := i
+	for i < len(rest) {
+		if _, ok := sep(rest, i); ok {
+			break
+		}
+		i++
+	}
+	bad.word = string(rest[start:i])
+	// The line is not a directive, so if its word is one, one of the two
+	// faults is what kept it from being one.
+	if !directiveWords[bad.word] {
+		return badSeparator{}, false
+	}
+	return bad, true
+}
+
+// separatorMessage is the refusal of a line separatorFault took.
+func separatorMessage(bad badSeparator, marker string) string {
+	but := fmt.Sprintf("the space missing after %q", marker)
+	fix := "put one in"
+	switch {
+	case bad.space != 0 && bad.missing:
+		but = codePoint(bad.space) + ", a space that is not ASCII, and " + but
+		fix = fmt.Sprintf("make that an ASCII space and put one after %q", marker)
+	case bad.space != 0:
+		but = codePoint(bad.space) + " in it, a space that is not ASCII"
+		fix = "make it an ASCII space"
+	}
+	return fmt.Sprintf(
+		"the line would be the directive %q but for %s; %s, or if the line is payload text, choose another directive prefix with --marker",
+		marker+" "+bad.word, but, fix)
+}
+
 // splitLines splits on \n. A final \n terminates the last line rather than
 // starting a new one (§3.3), so "a\nb\n" and "a\nb" are both two lines. That
 // is what every heredoc and every editor produces, so the agent never has to
@@ -354,6 +446,15 @@ func Parse(src []byte, marker string) (*Patch, error) {
 			return nil, &ParseError{i + 1, fmt.Sprintf(
 				"the line would be the directive %q but for %s in it, a control character; remove it, or if the line is payload text, choose another directive prefix with --marker",
 				marker+" "+word, name)}
+		}
+		// The same for a directive missing its space, "@@file b.go", or with
+		// a no-break space for one (#96). As payload it was written into the
+		// file before it, and the hunks after it went there too. Given the
+		// line as it is, since it takes off the CR that ends it: given bare,
+		// it took a second one, and "@@old" with two CRs was refused for its
+		// space, which fuzzing found before it was committed.
+		if bad, ok := separatorFault(line, marker); ok {
+			return nil, &ParseError{i + 1, separatorMessage(bad, marker)}
 		}
 	}
 
@@ -587,7 +688,12 @@ same. Under --eol auto, a patch whose every line ends in CRLF has its payload
 read the same way; --eol strict keeps every payload byte. A control character
 anywhere else in a directive line is refused and named, never written: in a
 path with exit 2, and stuck to a directive word, as in "@@ end" followed by a
-form feed, with exit 1.
+form feed, with exit 1. A directive missing its space, as "@@file b.go" for
+"@@ file b.go", or with a space that is not ASCII for one, such as a
+no-break space, is refused at exit 1 too, wherever the line is, payload
+included: as payload, the directive it was meant to be would not happen, and
+the hunks after it would apply to the file before it. --marker writes such a
+line as text.
 
 The heredoc around a patch has a rule of its own, which is the shell's: a
 payload line that is exactly the heredoc's delimiter (HUNK in the example
