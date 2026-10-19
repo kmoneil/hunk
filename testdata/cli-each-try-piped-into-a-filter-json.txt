@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "exit": 1,
+  "error": "--try cannot see the command piped into tail fail under --each: a pipeline's exit status is its last command's, and that is tail, so every patch would read as missed; drop the pipe, since --verify-lines N prints the last N lines of each patch's output under its line, or set -o pipefail in the command"
+}

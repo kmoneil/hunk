@@ -1,0 +1,1 @@
+hunk: --build cannot see the build piped into tail fail: a pipeline's exit status is its last command's, and that is tail, so a patch that does not build would be tried and read as caught; drop the pipe, since hunk prints a failing build's last lines, --verify-lines (40) of them, or set -o pipefail in the command

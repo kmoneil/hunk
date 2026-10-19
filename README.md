@@ -378,11 +378,17 @@ failing, and a verify written that way cannot fail. `hunk` refuses one at exit
 `tail`, `head`, `tee` or `cat`. Drop the pipe. The command's output is printed
 only when the verify fails, and then only its last 40 lines, which
 `--verify-lines N` changes. A pipeline that ends in `grep` is left alone,
-because `grep`'s status depends on what it read, and so is `--try`, whose tree
-goes back whatever its command says. The check reads plain pipelines and nothing
-cleverer: a command with a subshell, a command substitution or a here-document
-runs as written, and so does one that says `set -o pipefail`, which is how to
-keep a pipe and still have the verify fail.
+because `grep`'s status depends on what it read, and so is a single `--try`,
+whose tree goes back whatever its command says. Under `--try --each` the exit
+is the result, so its command and `--build`'s are refused the same way. The
+check reads plain pipelines and nothing cleverer: a command with a subshell, a
+command substitution or a here-document runs as written, and so does one that
+says `set -o pipefail`, which is how to keep a pipe and still have the verify
+fail.
+
+A `--verify`, `--try` or `--build` given an empty command, as `"$CMD"` is when
+`CMD` is unset, is refused at exit 1 rather than read as left out. Read as left
+out, `--try ''` would apply the batch and keep it.
 
 One subtlety, because it is the one behaviour that could make the tool
 dangerous. If your verify command rewrites files (`gofmt -w`, `prettier
@@ -458,7 +464,10 @@ timed out, since those are the ones to investigate. To see what caught the
 others, give `--verify-lines N`: then the last N lines of every patch's output
 print under its line, the caught ones too, and a suite whose last lines name
 the failing test says what caught each break. `--json` carries every patch's
-output, given or not. The run stops at once
+output, given or not. That is the way to shorten it: a command or a `--build`
+whose last pipeline ends in `tail`, `head`, `tee` or `cat` is refused under
+`--each`, exit 1, nothing tried, since the exit scored would be the filter's.
+The run stops at once
 where carrying on would lie: a file not put back (exit 4, the block names
 it), a patch refused after the preflight passed (the tree changed under the
 run, by the command or by another writer), a command that cannot start, a

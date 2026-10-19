@@ -1,0 +1,1 @@
+hunk: --build was given an empty command, so every patch would be tried unbuilt; if it came from a variable, that variable is empty

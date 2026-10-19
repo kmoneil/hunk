@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "exit": 1,
+  "error": "--try was given an empty command, so the batch would be applied and kept, where --try puts every file back; if it came from a variable, that variable is empty"
+}

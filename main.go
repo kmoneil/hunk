@@ -148,6 +148,9 @@ FLAGS
                         hunk's, and the command runs once with no patch
                         applied, so none is scored by a command that fails
                         anyway: one that fails there refuses the run, exit 1.
+                        A command whose last pipeline ends in tail, head, tee
+                        or cat is refused too, as under --verify, since the
+                        exit it scores would be the filter's.
                         A line per patch goes to stderr as it finishes; the
                         run stops at once if a file is not put back. The exit
                         is the run's, never a command's: 0 when every command
@@ -162,7 +165,9 @@ FLAGS
                         or times out is reported as "did not build", its
                         output shown and its --try command not run, and the
                         exit is 3. A build that fails with no patch applied
-                        refuses the run, exit 1.
+                        refuses the run, exit 1, and so does one whose last
+                        pipeline ends in tail, head, tee or cat: a patch that
+                        does not build would read as caught.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put
@@ -344,6 +349,19 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		fmt.Fprintf(stdout, "hunk %s\n", versionString(bi))
 		return exitOK
 	}
+	// A command flag given an empty command is refused, not read as unset.
+	// Until 2026-10-19 it was read that way, each at exit 0: --try '' applied
+	// the batch and kept it, where --try promises to put it back; --build ''
+	// tried every patch unbuilt; --verify '' kept the batch unchecked. "$CMD"
+	// with CMD unset is how one gets written.
+	if name := emptyCommand(fs); name != "" {
+		why := commandFlags[name]
+		if name == "try" && *each {
+			why = "there is no command to try each patch with"
+		}
+		return fail(exitUsage, fmt.Errorf("--%s was given an empty command, so %s; "+
+			"if it came from a variable, that variable is empty", name, why), "")
+	}
 	switch {
 	case *each:
 		// --each's patches are the positional arguments, so its refusals
@@ -419,13 +437,32 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	// form. It is refused here, before the patch is read, and under --dry-run
 	// too, so that a dry run that passes is not followed by a refusal. The fix
 	// is in the error rather than in a hint, because --json carries only the
-	// error. --try is not read: its tree goes back whatever the command says,
-	// and a filter on its output is how it is used.
+	// error. A single --try is not read: its tree goes back whatever the
+	// command says, and a filter on its output is how it is used.
 	if filter, ok := maskingFilter(*verify); ok {
 		return fail(exitUsage, fmt.Errorf("--verify cannot see the command piped into %[1]s fail: "+
 			"a pipeline's exit status is its last command's, and that is %[1]s; "+
 			"drop the pipe, since hunk prints the output only when the verify fails, "+
 			"cut to its last lines by --verify-lines (%[2]d), or set -o pipefail in the command", filter, *verifyLines), "")
+	}
+	// Under --each the run is scored by exits, the command's and the build's,
+	// so the reason a single --try is not read does not hold (#101). A command
+	// piped into a filter scores every patch as missed; a build piped into one
+	// passes a patch that does not build on to the command, which fails on it,
+	// and the patch is scored as caught.
+	if *each {
+		if filter, ok := maskingFilter(*try); ok {
+			return fail(exitUsage, fmt.Errorf("--try cannot see the command piped into %[1]s fail under --each: "+
+				"a pipeline's exit status is its last command's, and that is %[1]s, so every patch would read as missed; "+
+				"drop the pipe, since --verify-lines N prints the last N lines of each patch's output under its line, "+
+				"or set -o pipefail in the command", filter), "")
+		}
+		if filter, ok := maskingFilter(*build); ok {
+			return fail(exitUsage, fmt.Errorf("--build cannot see the build piped into %[1]s fail: "+
+				"a pipeline's exit status is its last command's, and that is %[1]s, so a patch that does not build would be tried and read as caught; "+
+				"drop the pipe, since hunk prints a failing build's last lines, --verify-lines (%[2]d) of them, "+
+				"or set -o pipefail in the command", filter, *verifyLines), "")
+		}
 	}
 	timeout, err := parseTimeout(*timeoutFlag, *verify != "" || *try != "")
 	if err != nil {
@@ -688,6 +725,29 @@ func parseTimeout(s string, hasCommand bool) (time.Duration, error) {
 		return 0, errors.New("--timeout does nothing without --verify or --try")
 	}
 	return d, nil
+}
+
+// commandFlags is every flag that takes a shell command, each with what it
+// would do given an empty one. TestEveryCommandFlagHasEveryGuard reads the
+// flags that --help spells with CMD and requires each to be here, and to have
+// a row in its table for every guard on a command, refused or let through
+// with a reason: a guard written at one flag is how #101 came about, and a
+// flag added after it had never been asked.
+var commandFlags = map[string]string{
+	"verify": "the batch would be kept with nothing run to check it",
+	"try":    "the batch would be applied and kept, where --try puts every file back",
+	"build":  "every patch would be tried unbuilt",
+}
+
+// emptyCommand names the command flag that was given, but given an empty or
+// blank command, if one was. A flag left out is not given.
+func emptyCommand(fs *flag.FlagSet) (name string) {
+	fs.Visit(func(f *flag.Flag) {
+		if _, ok := commandFlags[f.Name]; ok && name == "" && strings.TrimSpace(f.Value.String()) == "" {
+			name = f.Name
+		}
+	})
+	return name
 }
 
 // commandFlag names the flag whose command the batch will run, if either.
