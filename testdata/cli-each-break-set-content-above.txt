@@ -1,0 +1,3 @@
+hunk: 1 of 2 patches could not be read; nothing was tried
+
+bad.hunk: patch line 6: "@@ patch m02" follows content that belongs to no patch; a break set begins with its first heading, so put one above that content or take the headings out

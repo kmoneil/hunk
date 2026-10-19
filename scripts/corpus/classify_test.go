@@ -714,6 +714,16 @@ var reportGoldens = map[string]int{
 	"cli-mistyped-delimiter-rest-of-the-command": 0,
 	"cli-mistyped-delimiter-verify-failed":       3,
 	"cli-each-mistyped-delimiter":                3,
+	// #100: a break set, one file of several patches under "@@ patch"
+	// headings. A heading fault refuses the run at 1, and a heading outside
+	// --each is a parse error.
+	"cli-each-break-set-no-name":        1,
+	"cli-each-break-set-no-name-json":   1,
+	"cli-each-break-set-one-name-twice": 1,
+	"cli-each-break-set-content-above":  1,
+	"cli-each-break-set-nothing-in-it":  1,
+	"cli-parse-patch-heading":           1,
+	"cli-parse-patch-heading-json":      1,
 }
 
 // The classifier reads hunk's diagnostics, and SPEC §8.1 says "a reworded

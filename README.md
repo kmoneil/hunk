@@ -115,7 +115,7 @@ anywhere**: no JSON strings, no backslash-n, no shell quoting of the text. That
 is the property that makes a heredoc work, and it is why an agent can emit a
 patch without a serialisation step that can itself be wrong.
 
-Six directives:
+Seven directives:
 
 | directive | does |
 | --- | --- |
@@ -125,6 +125,7 @@ Six directives:
 | `@@ delete PATH` | delete a file |
 | `@@ append PATH` | append the payload |
 | `@@ prepend PATH` | prepend the payload |
+| `@@ patch NAME` | heads one patch of a break set, which only `--try CMD --each` reads; see that section |
 
 `@@ delete` removes the whole file. To remove a block of lines, replace it with
 an empty `@@ new`, which with rule 1 below takes the block's last newline with
@@ -459,6 +460,15 @@ tried breaks/19-loose.hunk          the command timed out after 170s
 tried 3 patches and put back every file; 1 exited nonzero, 1 exited 0, 1 timed out (249.2s)
 ```
 
+The set can be one file, a heading per break: `@@ patch NAME` begins a patch,
+and the lines from there to the next heading are its text. Each is tried
+alone and reported as `FILE:NAME`; files with and without headings mix
+freely. Every fault in the headings refuses the lot before the first try,
+named by the combined file's line: a heading with no name, two patches with
+one name, content above the first heading, a heading with nothing under it.
+Only `--each` reads the heading, and a plain apply of a file holding one is
+refused, exit 1, so a break set is never applied whole by accident.
+
 The command's output is printed only under a patch whose command exited 0 or
 timed out, since those are the ones to investigate. To see what caught the
 others, give `--verify-lines N`: then the last N lines of every patch's output
@@ -762,7 +772,7 @@ deliberate change to a contract, not a test that needs regenerating.
 
 ## Status
 
-All six directives work, with fifteen flags.
+All seven directives work, with fifteen flags.
 
 Linux, macOS and Windows are tested. CI runs the suite on all three and a merge
 is blocked unless it passes on every one, along with the dependency, network,
