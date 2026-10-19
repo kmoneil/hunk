@@ -1,6 +1,16 @@
 ---
 name: hunk
-description: Edit files with `hunk`, a transactional multi-file editor whose refusals are the point. Use it instead of writing a Python or shell heredoc that reads a file, replaces text and writes it back - that shape, `python3 - <<'PY'` with a read/write pair, is what this tool exists to replace. Use it whenever an edit spans more than one replacement or more than one file, whenever an edit needs a build or test run after it that must undo the edit if it fails, and whenever the same text might occur more than once and hitting the wrong one would be silent. Read this before the first `hunk` invocation: exit 2 is the tool working, and treating it as an obstacle to route around is how you produce a broken tree.
+description: >-
+  Edit files with `hunk`, a transactional multi-file editor whose refusals
+  are the point. Use it instead of writing a Python or shell heredoc that
+  reads a file, replaces text and writes it back - that shape, `python3 -
+  <<'PY'` with a read/write pair, is what this tool exists to replace. Use
+  it whenever an edit spans more than one replacement or more than one file,
+  whenever an edit needs a build or test run after it that must undo the
+  edit if it fails, and whenever the same text might occur more than once
+  and hitting the wrong one would be silent. Read this before the first
+  `hunk` invocation: exit 2 is the tool working, and treating it as an
+  obstacle to route around is how you produce a broken tree.
 ---
 
 # hunk
