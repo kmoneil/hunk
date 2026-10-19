@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "exit": 1,
+  "error": "patch line 1: \"@@ patch\" heads one patch of a break set, which only --try --each reads one at a time; a single run would apply the whole set as one batch, so it is refused. Give the file to hunk --try CMD --each, or if the line is payload text, choose another directive prefix with --marker"
+}

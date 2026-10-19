@@ -440,7 +440,12 @@ on against a broken tree. The exit is the run's, never a command's: 0 means
 every command exited nonzero (every break caught), 3 means a command exited 0
 or timed out (read the lines), 4 means it stopped with a file not restored.
 `--timeout` applies to each command separately. A script should read `--json`'s
-`each.patches`.
+`each.patches`. The set can be one file, an `@@ patch NAME` heading per break:
+each is tried alone and reported as `FILE:NAME`, and a heading fault (no name,
+two breaks with one name, content above the first heading, a heading with
+nothing under it) refuses the lot before the first try. Only `--each` reads
+the heading; a plain apply of a file holding one is refused, so a break set is
+never applied whole.
 
 **The command has to pass with no patch applied.** `--each` runs it once on the
 tree as it is first, and one that fails there refuses the run, exit 1, nothing

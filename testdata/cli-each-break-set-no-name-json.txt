@@ -1,0 +1,18 @@
+{
+  "ok": false,
+  "exit": 1,
+  "each": {
+    "command": "grep -q alpha a.txt && grep -q beta b.txt && grep -q gamma c.txt",
+    "patches": [
+      {
+        "patch": "bad.hunk",
+        "ran": false,
+        "error": "patch line 1: \"@@ patch\" needs a name; every patch of the set is tried and reported by it"
+      },
+      {
+        "patch": "plain.hunk",
+        "ran": false
+      }
+    ]
+  }
+}

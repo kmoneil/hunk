@@ -108,30 +108,43 @@ func (ep *eachPatch) outcome() *Verify {
 // runEach is the mode: preflight, then the loop, then one summary. It returns
 // the exit code and, through interrupted, the signal main should die of.
 //
+// A file may hold several patches, a "@@ patch NAME" heading each (#100).
+// Each is its own patch of the run, named file:NAME, and a fault in the
+// headings refuses the lot as a patch that does not parse does, named by the
+// combined file's own line.
+//
 // A patch with lines that look like a mistyped delimiter is refused with the
 // patches that do not parse (#97), so nothing is tried. Under
 // --allow-mistyped-delimiter they are warned of (#92) after all of it,
 // whatever the run's end, each under its patch's name, and always as lines to
 // come out of the patch, since --each puts every file back.
 func runEach(cfg eachConfig, tree *Tree, stdout, stderr io.Writer, interrupted *os.Signal) int {
-	patches := make([]*eachPatch, len(cfg.names))
-	for i, name := range cfg.names {
-		patches[i] = &eachPatch{name: name}
+	var patches []*eachPatch
+	for _, name := range cfg.names {
 		src, err := os.ReadFile(name)
 		if err != nil {
-			patches[i].loadErr = err
+			patches = append(patches, &eachPatch{name: name, loadErr: err})
 			continue
 		}
-		p, err := Parse(src, cfg.marker)
+		secs, err := splitPatchSet(src, cfg.marker)
 		if err != nil {
-			patches[i].loadErr = err
+			patches = append(patches, &eachPatch{name: name, loadErr: err})
 			continue
 		}
-		if len(p.Strays) > 0 && !cfg.allowStrays {
-			patches[i].loadErr = &MistypedDelimiters{Strays: p.Strays}
-			continue
+		for _, sec := range secs {
+			ep := &eachPatch{name: sec.shown(name)}
+			patches = append(patches, ep)
+			p, err := Parse(sec.src, cfg.marker)
+			if err = sec.renumber(p, err); err != nil {
+				ep.loadErr = err
+				continue
+			}
+			if len(p.Strays) > 0 && !cfg.allowStrays {
+				ep.loadErr = &MistypedDelimiters{Strays: p.Strays}
+				continue
+			}
+			ep.p = p
 		}
-		patches[i].p = p
 	}
 	o, e := &tally{w: stdout}, &tally{w: stderr}
 	code := eachLoaded(cfg, patches, tree, o, e, interrupted)

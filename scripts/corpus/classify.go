@@ -270,7 +270,8 @@ const hunkAnchor = `(?:^|[;&|(]|\n|\{\s)\s*` +
 // zero for an operation that shipped after it was written.
 var hunkDirectives = map[string]bool{
 	"file": true, "old": true, "new": true, "create": true,
-	"delete": true, "append": true, "prepend": true, "end": true,
+	"delete": true, "append": true, "prepend": true, "patch": true,
+	"end": true,
 }
 
 // Exit categories that are not exit codes. Negative, so they cannot collide

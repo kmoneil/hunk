@@ -138,10 +138,13 @@ func quoteCut(s string) string {
 // directiveWords is §3.2's rule 3, and it is the rule doing the real work. It
 // is why a unified diff pasted into a payload ("@@ -1,3 +1,4 @@", whose first
 // word is "-1,3") stays payload, and why a Markdown file full of "@@" does
-// not confuse the parser.
+// not confuse the parser. "patch" joined on 2026-10-19 (#100): it heads one
+// patch of a break set, which only --try --each reads (patchset.go), and
+// Parse refuses it, below, so a single run never applies a set whole.
 var directiveWords = map[string]bool{
 	"file": true, "old": true, "new": true, "create": true,
-	"delete": true, "append": true, "prepend": true, "end": true,
+	"delete": true, "append": true, "prepend": true, "patch": true,
+	"end": true,
 }
 
 // directive reports whether line is a directive, and if so its keyword and the
@@ -484,7 +487,7 @@ loop:
 		word, arg, ok := directive(lines[i], marker)
 		if !ok {
 			return nil, notADirective{&ParseError{ln, fmt.Sprintf(
-				"expected a directive, found %s; a directive is %q at column 0, then a space or tab, then one of file old new create delete append prepend end",
+				"expected a directive, found %s; a directive is %q at column 0, then a space or tab, then one of file old new create delete append prepend patch end",
 				shownLine(lines[i]), marker)}}
 		}
 		i++
@@ -602,6 +605,15 @@ loop:
 			return nil, &ParseError{ln, fmt.Sprintf(
 				"%q with no %q before it",
 				marker+" new", marker+" old")}
+
+		case "patch":
+			// A break set applied whole is never what was meant (#100):
+			// every break lands at once, and a --verify or --try scores the
+			// lot as one result. Only --each reads the heading, through
+			// splitPatchSet, which consumes it before this parse.
+			return nil, &ParseError{ln, fmt.Sprintf(
+				"%q heads one patch of a break set, which only --try --each reads one at a time; a single run would apply the whole set as one batch, so it is refused. Give the file to hunk --try CMD --each, or if the line is payload text, choose another directive prefix with --marker",
+				marker+" patch")}
 		}
 	}
 
@@ -676,11 +688,11 @@ GRAMMAR
 
 A line is a directive only when all three of these hold: it starts with "@@" at
 column 0, the next character is a space or tab, and the first word after that
-is one of file old new create delete append prepend end. Every other line is
-payload. So a Markdown file full of "@@" passes through untouched, and so does
-a unified diff pasted into a payload, whose "@@ -1,3 +1,4 @@" fails the third
-test. If a payload really does contain a line like "@@ old", --marker picks
-another prefix.
+is one of file old new create delete append prepend patch end. Every other
+line is payload. So a Markdown file full of "@@" passes through untouched, and
+so does a unified diff pasted into a payload, whose "@@ -1,3 +1,4 @@" fails
+the third test. If a payload really does contain a line like "@@ old",
+--marker picks another prefix.
 
 A carriage return at the end of a directive line is its line ending, so a
 patch written with CRLF line endings, as PowerShell pipes text, parses the
@@ -705,6 +717,11 @@ HUHUNK above the real one or an indented HUNK, would be payload, so such a
 patch is refused, exit 1, nothing written, every such line named.
 --allow-mistyped-delimiter applies a patch that means one, and the report then
 ends with a warning that names the patch line and the file.
+
+"@@ patch NAME" heads one patch of a break set: one file holding several
+patches, which --try --each tries one at a time, each reported as FILE:NAME.
+Only --each reads the heading. A single run given one is refused rather than
+applying the set whole, and --marker writes such a line as text.
 
 PATHS
 

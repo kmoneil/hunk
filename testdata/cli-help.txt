@@ -52,6 +52,10 @@ FLAGS
                         A command whose last pipeline ends in tail, head, tee
                         or cat is refused too, as under --verify, since the
                         exit it scores would be the filter's.
+                        A file may hold several patches, one "@@ patch NAME"
+                        heading each; every patch is tried alone, its line
+                        named FILE:NAME. Only --each reads the heading: a
+                        single run given one is refused, exit 1.
                         A line per patch goes to stderr as it finishes; the
                         run stops at once if a file is not put back. The exit
                         is the run's, never a command's: 0 when every command
