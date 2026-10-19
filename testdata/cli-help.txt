@@ -49,6 +49,9 @@ FLAGS
                         hunk's, and the command runs once with no patch
                         applied, so none is scored by a command that fails
                         anyway: one that fails there refuses the run, exit 1.
+                        A command whose last pipeline ends in tail, head, tee
+                        or cat is refused too, as under --verify, since the
+                        exit it scores would be the filter's.
                         A line per patch goes to stderr as it finishes; the
                         run stops at once if a file is not put back. The exit
                         is the run's, never a command's: 0 when every command
@@ -63,7 +66,9 @@ FLAGS
                         or times out is reported as "did not build", its
                         output shown and its --try command not run, and the
                         exit is 3. A build that fails with no patch applied
-                        refuses the run, exit 1.
+                        refuses the run, exit 1, and so does one whose last
+                        pipeline ends in tail, head, tee or cat: a patch that
+                        does not build would read as caught.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put

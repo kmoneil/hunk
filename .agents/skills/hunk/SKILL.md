@@ -456,7 +456,9 @@ With it, the last N lines of every patch's command print under its line. A
 suite that names the failing test far from its end can be made to print it
 last, keeping its own status as the exit: `--try 'zig build test > /tmp/out
 2>&1; s=$?; grep -m3 "error: .*failed" /tmp/out; exit $s' --verify-lines 3`.
-`--json` carries every patch's output either way.
+`--json` carries every patch's output either way. Do not pipe the command into
+`tail` instead: under `--each`, a command or `--build` whose last pipeline ends
+in `tail`, `head`, `tee` or `cat` is refused, exit 1, nothing tried.
 
 **In a compiled language, add `--build CMD`.** A break that does not compile
 makes the test command exit nonzero, so `--each` alone scores it as caught: Zig
@@ -491,9 +493,11 @@ with every test failing. `hunk` refuses a `--verify` whose last pipeline ends
 in `tail`, `head`, `tee` or `cat`, at exit 1, before anything is written. There
 is nothing to shorten: the command's output is printed only when the verify
 fails, and then only its last 40 lines. A pipeline that ends in `grep -q` is a
-test and is left alone, and so is anything under `--try`, where a filter on the
-output is the usual way to read it. `hunk` reads plain pipelines only, so a
-pipe inside a subshell or a `$(...)` is still yours to get right.
+test and is left alone, and so is a single `--try`, where a filter on the output
+is the usual way to read it. Under `--try --each` the exit is the whole result,
+so a filter on its command or on `--build`'s is refused the same way. `hunk`
+reads plain pipelines only, so a pipe inside a subshell or a `$(...)` is still
+yours to get right.
 
 One flag to know: if your verify command **rewrites files** (`gofmt -w`,
 `prettier --write`, `make fmt`), pass `--verify-may-format`. Without it, a file

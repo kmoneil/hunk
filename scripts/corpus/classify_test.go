@@ -693,6 +693,15 @@ var reportGoldens = map[string]int{
 	"cli-crlf-payload-on-an-lf-file-json":       2,
 	"cli-verify-piped-into-a-filter":            1,
 	"cli-verify-piped-into-a-filter-json":       1,
+	// #101: a command flag given an empty command, and a filter under --each.
+	"cli-empty-verify-command":                1,
+	"cli-empty-try-command":                   1,
+	"cli-empty-try-command-json":              1,
+	"cli-empty-build-command":                 1,
+	"cli-each-try-piped-into-a-filter":        1,
+	"cli-each-try-piped-into-a-filter-json":   1,
+	"cli-each-build-piped-into-a-filter":      1,
+	"cli-each-build-piped-into-a-filter-json": 1,
 	// "hunk quote --help" is asked for by its command, as cli-help is, and a
 	// quote's refusal reaches the classifier as the apply's parse error.
 	"cli-quote-help":                           ExitProbe,

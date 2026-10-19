@@ -1,0 +1,1 @@
+hunk: --verify was given an empty command, so the batch would be kept with nothing run to check it; if it came from a variable, that variable is empty
