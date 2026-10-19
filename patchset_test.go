@@ -537,11 +537,15 @@ func TestAHeadingOutsideEachIsRefused(t *testing.T) {
 }
 
 // stripDirs cuts each path's directory out of a report, leaving the base
-// names the goldens can hold.
+// names the goldens can hold. A --json report escapes the path, so on
+// Windows the directory appears as C:\\Users\\... and the raw spelling never
+// matches: both are stripped.
 func stripDirs(out string, paths ...string) string {
 	for _, p := range paths {
 		if i := strings.LastIndexAny(p, `/\`); i >= 0 {
-			out = strings.ReplaceAll(out, p[:i+1], "")
+			dir := p[:i+1]
+			out = strings.ReplaceAll(out, dir, "")
+			out = strings.ReplaceAll(out, strings.ReplaceAll(dir, `\`, `\\`), "")
 		}
 	}
 	return out
