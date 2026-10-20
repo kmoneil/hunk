@@ -1106,6 +1106,14 @@ func end(p *os.Process, sig os.Signal, exited <-chan error) error {
 // names those files: something other than hunk removed them, and the report
 // says so without calling the tree inconsistent.
 //
+// A file that holds its original bytes again is put back as one still holding
+// hunk's would be, under either flag, decided 2026-10-20 (#106). A command that
+// wrote it back as it was, a lint's --fix undoing what the patch made stale or
+// a checkout recreating a file the batch deleted, left nothing of its own in
+// it to discard. Until then that was exit 4 on a tree exactly as it was, and
+// under --each it stopped the run. The restore still writes, so the mode comes
+// back with the bytes (§6.6): a recreated file has the umask's.
+//
 // Every step asks what stands at the name before acting on it, with Lstat, and
 // leaves anything that is not what hunk left there. Until 2026-10-07 it asked
 // through symlinks: a create's removal read a link's destination and removed
@@ -1197,7 +1205,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 				})
 				continue
 			}
-			if !mayFormat && there {
+			if !mayFormat && there && !(fi.Mode().IsRegular() && x.holdsOriginal(f)) {
 				notRestored = append(notRestored, NotRestored{
 					Path: f.target.Orig(), Resolved: f.resolved,
 					Reason: "hunk deleted it and something has since created it there,\n" +
@@ -1238,7 +1246,7 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 				})
 				continue
 			}
-			if sum := sha256.Sum256(now); sum != f.wrote {
+			if sum := sha256.Sum256(now); sum != f.wrote && sum != f.sum {
 				notRestored = append(notRestored, NotRestored{
 					Path: f.target.Orig(), Resolved: f.resolved,
 					Reason: fmt.Sprintf("Something rewrote it after hunk did, and restoring could\n"+
@@ -1260,6 +1268,14 @@ func (x *Txn) Rollback(mayFormat bool) (restored int, notRestored []NotRestored,
 	}
 	left = x.removeMadeDirs()
 	return restored, notRestored, gone, left
+}
+
+// holdsOriginal reports whether f's name holds the bytes load read, which
+// rollback counts as nobody's work (#106). Asked only of a regular file: a
+// named pipe would hold the read open.
+func (x *Txn) holdsOriginal(f *file) bool {
+	now, err := x.tree.ReadFile(f.target)
+	return err == nil && sha256.Sum256(now) == f.sum
 }
 
 // pathChanged names the first directory on f's path that is not the one

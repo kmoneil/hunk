@@ -7,4 +7,4 @@ FAIL
 sub/d.txt was not restored.
   sub, the directory hunk deleted it from, is now a symbolic link,
   so hunk wrote nothing there.
-  hunk did not write its original bytes back; they are in version control.
+  hunk did not write its original bytes back, and keeps no copy of them.

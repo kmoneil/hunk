@@ -7,4 +7,4 @@ FAIL
 d.txt was not restored.
   hunk deleted it and something has since put a symbolic link there,
   so restoring would replace that link with a file.
-  hunk did not write its original bytes back; they are in version control.
+  hunk did not write its original bytes back, and keeps no copy of them.

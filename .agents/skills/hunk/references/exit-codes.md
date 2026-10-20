@@ -33,7 +33,10 @@ applies": the tree changed under the run); 1 when `--build` or the command
 failed with no patch applied, before anything was tried. A command's own 124
 never becomes the exit; a timed-out patch is a line and a `--json` entry.
 
-**What rollback leaves.** A symbolic link standing where `hunk` expected its own
+**What rollback leaves.** Only bytes that are neither `hunk`'s nor the file's
+original are somebody's work: a file the command wrote back exactly as it was,
+or a deleted one it recreated that way, is put back like any other, mode and
+all, under either flag. A symbolic link standing where `hunk` expected its own
 file is never removed or overwritten: the file is named and the exit is 4. A
 directory `hunk` made that holds something, or is no longer the one it made, is
 left and named in one line, and the exit stays 3: the batch's own changes are
