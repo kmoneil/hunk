@@ -9,8 +9,13 @@ import (
 // end in (§4). Each exits 0 whatever it was sent, so the pipeline's status is
 // the filter's and the command in front of it fails unseen. grep is left out
 // on purpose: its status depends on what it read, and of the six verifies in
-// the field that ended in one, five were a test somebody wrote.
+// the field that ended in one, five were a test somebody wrote. The sixth was
+// a grep -v, which invertedGrep reads (#107).
 var statusFilters = []string{"tail", "head", "tee", "cat"}
+
+// greps are the names an inverted grep is read under: egrep and fgrep are
+// grep -E and grep -F.
+var greps = []string{"grep", "egrep", "fgrep"}
 
 // keepsItsPipe is what a command says to be run as written. Under pipefail a
 // failing stage fails its pipeline, and a command that reads PIPESTATUS has
@@ -32,7 +37,8 @@ var keepsItsPipe = []string{"pipefail", "pipe_fail", "pipestatus"}
 //
 // The filter is its stage's command word, spelled plainly or as an absolute
 // path. A quoted one, one behind `command`, and a relative path, which is
-// somebody's own program, are not read as the filter.
+// somebody's own program, are not read as the filter. A grep is one when its
+// words put -v in effect, and is named "grep -v" however they spell it.
 func maskingFilter(command string) (string, bool) {
 	lower := strings.ToLower(command)
 	for _, w := range keepsItsPipe {
@@ -41,24 +47,189 @@ func maskingFilter(command string) (string, bool) {
 		}
 	}
 	stages, ok := lastPipeline(command)
-	if !ok || len(stages) < 2 || stages[0] == "!" || slices.Contains(stages, "[[") {
+	if !ok || len(stages) < 2 || stages[0].cmd == "!" ||
+		slices.ContainsFunc(stages, func(s stage) bool { return s.cmd == "[[" }) {
 		return "", false
 	}
-	name := stages[len(stages)-1]
+	last := stages[len(stages)-1]
+	name := last.cmd
 	if strings.HasPrefix(name, "/") {
 		name = name[strings.LastIndexByte(name, '/')+1:]
 	}
-	if !slices.Contains(statusFilters, name) {
-		return "", false
+	switch {
+	case slices.Contains(statusFilters, name):
+		return name, true
+	case slices.Contains(greps, name) && invertedGrep(last.args):
+		return name + " -v", true
 	}
-	return name, true
+	return "", false
+}
+
+// filterStatus is what a refusal says the pipeline's status is, after "and
+// that is". A grep's status depends on what it read, so the refusal says why
+// an inverted one's is no test.
+func filterStatus(filter string) string {
+	if strings.HasSuffix(filter, " -v") {
+		return filter + ", which exits 0 whenever one line it reads does not match"
+	}
+	return filter
+}
+
+// Short options grep takes, GNU's and the BSD one macOS ships. One that takes
+// an argument takes the rest of its word, or the next word: -ev is the pattern
+// "v", and -e -v the pattern "-v". A digit is GNU's -NUM, a context length.
+const (
+	grepShortArg  = "ABCDdefm"
+	grepShortFlag = "abcEFGHhIiJLlMnOoPpqRrSsTUuVvwXxyZz0123456789"
+)
+
+// grepLongArg are grep's long options that take the next word as their
+// argument unless they carry one after =. grepLongFlag are the rest it has,
+// none of which takes the next word: --color and --colour take one only
+// after =. grepStatusOnly are the ones that make it print no lines.
+var (
+	grepLongArg = []string{
+		"regexp", "file", "max-count", "after-context", "before-context", "context",
+		"label", "group-separator", "binary-files", "devices", "directories",
+		"exclude", "exclude-from", "exclude-dir", "include", "include-dir",
+	}
+	grepLongFlag = []string{
+		"extended-regexp", "fixed-strings", "basic-regexp", "perl-regexp",
+		"ignore-case", "no-ignore-case", "word-regexp", "line-regexp", "null-data",
+		"no-messages", "only-matching", "byte-offset", "with-filename", "no-filename",
+		"line-number", "initial-tab", "unix-byte-offsets", "null", "no-group-separator",
+		"text", "recursive", "dereference-recursive", "line-buffered", "binary",
+		"bz2decompress", "decompress", "lzma", "xz", "help", "version",
+	}
+	grepStatusOnly = []string{"quiet", "silent", "count", "files-with-matches", "files-without-match"}
+)
+
+// invertedGrep reports whether a grep's words put -v in effect and none of
+// -q, -c, -l and -L (#107). grep -v exits 0 whenever one line it reads does
+// not match, which for a build's output is always, so a verify ending in one
+// cannot fail: `zig build check 2>&1 | grep -v "^pass "` kept a batch that
+// did not parse, at "verify ok". The four do not change that status. They are
+// left because each prints no lines, only a status, a count or a name, so
+// nobody wrote one to shorten output, and a grep chosen for its status is
+// somebody's test.
+//
+// The words are read as grep reads them, options after the pattern included,
+// since GNU's grep and macOS's both take those, up to --. Anything it is not
+// sure of is false: an option neither grep has, which might take the next
+// word, an option missing its argument, and a word sh would rewrite.
+func invertedGrep(args []string) bool {
+	inverted, test := false, false
+	for i := 0; i < len(args); i++ {
+		w, ok := unquoted(args[i])
+		if !ok {
+			return false
+		}
+		if w == "--" {
+			break
+		}
+		if len(w) < 2 || w[0] != '-' {
+			continue // the pattern, a file, or - for the standard input
+		}
+		if long, ok := strings.CutPrefix(w, "--"); ok {
+			name, _, valued := strings.Cut(long, "=")
+			switch {
+			case slices.Contains(grepLongArg, name):
+				if !valued {
+					if i++; i == len(args) {
+						return false
+					}
+				}
+			case valued && name != "color" && name != "colour":
+				return false
+			case name == "invert-match":
+				inverted = true
+			case slices.Contains(grepStatusOnly, name):
+				test = true
+			case !slices.Contains(grepLongFlag, name) && name != "color" && name != "colour":
+				return false
+			}
+			continue
+		}
+		for j := 1; j < len(w); j++ {
+			c := w[j]
+			switch {
+			case strings.IndexByte(grepShortArg, c) >= 0:
+				if j == len(w)-1 {
+					if i++; i == len(args) {
+						return false
+					}
+				}
+				j = len(w)
+			case strings.IndexByte(grepShortFlag, c) < 0:
+				return false
+			case c == 'v':
+				inverted = true
+			case c == 'q', c == 'c', c == 'l', c == 'L':
+				test = true
+			}
+		}
+	}
+	return inverted && !test
+}
+
+// unquoted is a word as sh hands it to the command: quotes and backslashes
+// removed. It is false for a word sh would rewrite, whose result is not known
+// here: a $ outside single quotes, and an unquoted glob or brace, which could
+// become a file named like an option.
+func unquoted(raw string) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(raw); i++ {
+		switch c := raw[i]; c {
+		case '\'':
+			end := strings.IndexByte(raw[i+1:], '\'')
+			if end < 0 {
+				return "", false
+			}
+			b.WriteString(raw[i+1 : i+1+end])
+			i += end + 1
+		case '"':
+			for i++; ; i++ {
+				if i >= len(raw) || raw[i] == '$' {
+					return "", false
+				}
+				if raw[i] == '"' {
+					break
+				}
+				if raw[i] == '\\' && i+1 < len(raw) && strings.IndexByte("$`\"\\\n", raw[i+1]) >= 0 {
+					i++
+					if raw[i] == '\n' {
+						continue
+					}
+				}
+				b.WriteByte(raw[i])
+			}
+		case '\\':
+			if i++; i < len(raw) && raw[i] != '\n' {
+				b.WriteByte(raw[i])
+			}
+		case '$', '*', '?', '[', '{':
+			return "", false
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String(), true
+}
+
+// A stage is one command of a pipeline: its command word as written, and the
+// words after it, quotes and all. The NAME=value words in front of the command
+// word are neither, and nor is a redirection or its file.
+type stage struct {
+	cmd  string
+	args []string
 }
 
 // pipelineScan is what lastPipeline knows part-way through a command.
 type pipelineScan struct {
-	last   []string // the pipeline that ended most recently
-	cur    []string // the stages before this one, in the pipeline being read
+	last   []stage  // the pipeline that ended most recently
+	cur    []stage  // the stages before this one, in the pipeline being read
 	cmd    string   // this stage's command word, once it has one
+	args   []string // the words after it
 	found  bool     // whether it has
 	some   bool     // this stage holds a word or a redirection
 	target bool     // a redirection is waiting for its file
@@ -69,11 +240,12 @@ type pipelineScan struct {
 // command, and neither are the NAME=value words in front of the command word.
 func (p *pipelineScan) word(raw string) {
 	p.some, p.open = true, false
-	if p.target {
+	switch {
+	case p.target:
 		p.target = false
-		return
-	}
-	if !p.found && !isAssignment(raw) {
+	case p.found:
+		p.args = append(p.args, raw)
+	case !isAssignment(raw):
 		p.cmd, p.found = raw, true
 	}
 }
@@ -94,8 +266,8 @@ func (p *pipelineScan) endStage() bool {
 	if !p.some || p.target {
 		return false
 	}
-	p.cur = append(p.cur, p.cmd)
-	p.cmd, p.found, p.some = "", false, false
+	p.cur = append(p.cur, stage{p.cmd, p.args})
+	p.cmd, p.args, p.found, p.some = "", nil, false, false
 	return true
 }
 
@@ -108,10 +280,10 @@ func (p *pipelineScan) endList() bool {
 	return true
 }
 
-// lastPipeline reads the command word of each stage of the last pipeline in a
-// shell command: the one after the last ;, &&, || or newline, whose exit
-// status is the command's whenever sh gets that far. A stage that is only
-// assignments or redirections has the command word "".
+// lastPipeline reads each stage of the last pipeline in a shell command: the
+// one after the last ;, &&, || or newline, whose exit status is the command's
+// whenever sh gets that far. A stage that is only assignments or redirections
+// has the command word "".
 //
 // It models words, both kinds of quote, backslash, comments, redirections and
 // the operators | |& ; && || and newline. Everything else is false: a
@@ -122,7 +294,7 @@ func (p *pipelineScan) endList() bool {
 // shell to keep right.
 //
 // One pass: a byte is looked at once, or twice where a quote is being closed.
-func lastPipeline(command string) ([]string, bool) {
+func lastPipeline(command string) ([]stage, bool) {
 	var p pipelineScan
 	n := len(command)
 	start := -1 // where the word being read began

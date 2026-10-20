@@ -693,6 +693,7 @@ var reportGoldens = map[string]int{
 	"cli-crlf-payload-on-an-lf-file-json":       2,
 	"cli-verify-piped-into-a-filter":            1,
 	"cli-verify-piped-into-a-filter-json":       1,
+	"cli-verify-piped-into-grep-v":              1,
 	// #101: a command flag given an empty command, and a filter under --each.
 	"cli-empty-verify-command":                1,
 	"cli-empty-try-command":                   1,

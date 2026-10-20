@@ -119,9 +119,10 @@ FLAGS
                         calls this tool was designed from bundled one, and
                         requiring it would be obnoxious for documentation edits.
                         Refused, exit 1, if its last pipeline ends in tail,
-                        head, tee or cat: the exit status would be the
-                        filter's, and the verify could not fail. The output is
-                        printed only on failure, already cut by --verify-lines.
+                        head, tee or cat, or in a grep -v without -q, -c, -l
+                        or -L: the exit status would be the filter's, and the
+                        verify could not fail. The output is printed only on
+                        failure, already cut by --verify-lines.
   --verify-may-format   On verify failure, or after --try, restore original
                         bytes even for files the command rewrote. Set this when
                         the command formats. Without it, a file that changed
@@ -150,8 +151,9 @@ FLAGS
                         applied, so none is scored by a command that fails
                         anyway: one that fails there refuses the run, exit 1.
                         A command whose last pipeline ends in tail, head, tee
-                        or cat is refused too, as under --verify, since the
-                        exit it scores would be the filter's.
+                        or cat, or in a grep -v, is refused too, as under
+                        --verify, since the exit it scores would be the
+                        filter's.
                         A file may hold several patches, one "@@ patch NAME"
                         heading each; every patch is tried alone, its line
                         named FILE:NAME. Only --each reads the heading: a
@@ -171,8 +173,8 @@ FLAGS
                         output shown and its --try command not run, and the
                         exit is 3. A build that fails with no patch applied
                         refuses the run, exit 1, and so does one whose last
-                        pipeline ends in tail, head, tee or cat: a patch that
-                        does not build would read as caught.
+                        pipeline ends in tail, head, tee or cat, or in a grep
+                        -v: a patch that does not build would read as caught.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put
@@ -446,9 +448,10 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	// command says, and a filter on its output is how it is used.
 	if filter, ok := maskingFilter(*verify); ok {
 		return fail(exitUsage, fmt.Errorf("--verify cannot see the command piped into %[1]s fail: "+
-			"a pipeline's exit status is its last command's, and that is %[1]s; "+
+			"a pipeline's exit status is its last command's, and that is %[3]s; "+
 			"drop the pipe, since hunk prints the output only when the verify fails, "+
-			"cut to its last lines by --verify-lines (%[2]d), or set -o pipefail in the command", filter, *verifyLines), "")
+			"cut to its last lines by --verify-lines (%[2]d), or set -o pipefail in the command",
+			filter, *verifyLines, filterStatus(filter)), "")
 	}
 	// Under --each the run is scored by exits, the command's and the build's,
 	// so the reason a single --try is not read does not hold (#101). A command
@@ -458,15 +461,15 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	if *each {
 		if filter, ok := maskingFilter(*try); ok {
 			return fail(exitUsage, fmt.Errorf("--try cannot see the command piped into %[1]s fail under --each: "+
-				"a pipeline's exit status is its last command's, and that is %[1]s, so every patch would read as missed; "+
+				"a pipeline's exit status is its last command's, and that is %[2]s, so every patch would read as missed; "+
 				"drop the pipe, since --verify-lines N prints the last N lines of each patch's output under its line, "+
-				"or set -o pipefail in the command", filter), "")
+				"or set -o pipefail in the command", filter, filterStatus(filter)), "")
 		}
 		if filter, ok := maskingFilter(*build); ok {
 			return fail(exitUsage, fmt.Errorf("--build cannot see the build piped into %[1]s fail: "+
-				"a pipeline's exit status is its last command's, and that is %[1]s, so a patch that does not build would be tried and read as caught; "+
+				"a pipeline's exit status is its last command's, and that is %[3]s, so a patch that does not build would be tried and read as caught; "+
 				"drop the pipe, since hunk prints a failing build's last lines, --verify-lines (%[2]d) of them, "+
-				"or set -o pipefail in the command", filter, *verifyLines), "")
+				"or set -o pipefail in the command", filter, *verifyLines, filterStatus(filter)), "")
 		}
 	}
 	timeout, err := parseTimeout(*timeoutFlag, *verify != "" || *try != "")
