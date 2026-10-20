@@ -331,9 +331,10 @@ func TestASuccessRowSaysWhereARespellingLed(t *testing.T) {
 	}
 }
 
-// Exit 4 tells its reader the original bytes "are in version control", so it
-// has to name the file version control knows. Until 2026-10-08 it named the
-// link, and "git checkout link.txt" exits 0 having restored nothing.
+// Exit 4 says hunk keeps no copy of the original bytes, so version control is
+// where its reader goes for them, and it has to name the file version control
+// knows. Until 2026-10-08 it named the link, and "git checkout link.txt" exits
+// 0 having restored nothing.
 func TestAFileNotRestoredSaysWhereItsPathLed(t *testing.T) {
 	const verify = "echo theirs > real.txt; echo theirs > Sub/s.txt; false"
 	for _, c := range []struct {

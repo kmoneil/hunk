@@ -150,9 +150,9 @@ through `link.txt`, `git diff link.txt` shows nothing and `git checkout
 link.txt` restores nothing. A spelling the directory stores another way is
 named the same way, such as `sub/README.MD` for `Sub/README.md` on a filesystem
 that folds case. A file rollback could not put back carries the same clause,
-since the report sends you to version control for it, and `--json` gives the
-name as `"resolved"`. Under `--allow-outside-root` a file outside the root is
-named by its absolute path, so a write that left the root says where it went.
+since `hunk` keeps no copy of its original bytes, and `--json` gives the name
+as `"resolved"`. Under `--allow-outside-root` a file outside the root is named
+by its absolute path, so a write that left the root says where it went.
 
 Every path is resolved against `--root`, the current directory unless one is
 given. An absolute path is under the root when it names the root's directory by
@@ -396,10 +396,13 @@ dangerous. If your verify command rewrites files (`gofmt -w`, `prettier
 --write`, `make fmt`), pass `--verify-may-format`. Without it, a file that
 changed after `hunk` wrote it is left alone rather than reverted, and the exit
 is 4. `hunk` cannot tell a formatter from another process writing the same tree,
-and silently discarding somebody else's work is worse than stopping. A file
-`hunk` created that is already gone is the exception: gone is what rolling a
-create back leaves, so it counts as rolled back and the exit stays 3, with one
-line naming the file as removed by something else.
+and silently discarding somebody else's work is worse than stopping. A file's
+original bytes are nobody's work, though: a file the command wrote back exactly
+as it was, or a deleted one it recreated that way, is put back like any other,
+mode and all, under either flag. A file `hunk` created that is already gone is
+another exception: gone is what rolling a create back leaves, so it counts as
+rolled back and the exit stays 3, with one line naming the file as removed by
+something else.
 
 Rollback acts only on what `hunk` left there, and asks without following
 symbolic links. A link standing where `hunk` created, deleted or rewrote a file

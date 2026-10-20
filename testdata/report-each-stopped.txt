@@ -4,6 +4,6 @@ $ zig build test
 
 src/faults.zig was not restored.
   it changed after hunk wrote it, so restoring would discard somebody else's work; --verify-may-format says the verify command is expected to rewrite files
-  hunk did not write its original bytes back; they are in version control.
+  hunk did not write its original bytes back, and keeps no copy of them.
 not tried: breaks/02-texture.hunk, breaks/19-loose.hunk
 tried 0 of 3 patches; stopped at breaks/01-shadow-reach.hunk: 1 file was not restored; 2 patches not tried

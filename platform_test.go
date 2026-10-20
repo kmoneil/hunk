@@ -109,11 +109,18 @@ func needsBash(t *testing.T) {
 // compiling there.
 func makeFIFO(t *testing.T, name string) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows has no named pipes in a filesystem")
-	}
+	needsNamedPipes(t)
 	if out, err := exec.Command("mkfifo", name).CombinedOutput(); err != nil {
 		t.Fatalf("mkfifo %s: %v: %s", name, err, out)
+	}
+}
+
+// needsNamedPipes skips a test whose command makes a named pipe with mkfifo,
+// for the reason makeFIFO gives.
+func needsNamedPipes(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no named pipes in a filesystem")
 	}
 }
 

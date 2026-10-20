@@ -620,7 +620,9 @@ func writeNotRestored(w io.Writer, notRestored []NotRestored) {
 		for _, line := range strings.Split(n.Reason, "\n") {
 			fmt.Fprintf(w, "  %s\n", showControls(line))
 		}
-		fmt.Fprintln(w, "  hunk did not write its original bytes back; they are in version control.")
+		// Until 2026-10-20 this said they "are in version control", which no
+		// run checks and which is false outside a repository (#106).
+		fmt.Fprintln(w, "  hunk did not write its original bytes back, and keeps no copy of them.")
 	}
 }
 

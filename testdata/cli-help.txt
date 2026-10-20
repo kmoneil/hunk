@@ -26,11 +26,12 @@ FLAGS
   --verify-may-format   On verify failure, or after --try, restore original
                         bytes even for files the command rewrote. Set this when
                         the command formats. Without it, a file that changed
-                        after hunk wrote it is left alone and the exit is 4,
-                        because silently reverting another writer's work is the
-                        one behaviour that would make this tool dangerous. With
-                        it, you are asserting nothing else writes the tree
-                        during the verify.
+                        after hunk wrote it, to anything but its original
+                        bytes, is left alone and the exit is 4, because
+                        silently reverting another writer's work is the one
+                        behaviour that would make this tool dangerous. With it,
+                        you are asserting nothing else writes the tree during
+                        the verify.
   --verify-lines N      Tail of the --verify or --try output to print. (40)
                         Under --each, given, it prints under every patch's
                         line, a caught one's too, to say what caught it; not

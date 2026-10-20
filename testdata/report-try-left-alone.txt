@@ -7,4 +7,4 @@ FBA_USED 1320
 
 src/faults.zig was not restored.
   Something rewrote it after hunk did.
-  hunk did not write its original bytes back; they are in version control.
+  hunk did not write its original bytes back, and keeps no copy of them.
