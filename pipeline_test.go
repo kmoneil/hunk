@@ -177,6 +177,75 @@ var maskingRows = []struct {
 	{"zsh's spelling of it", "setopt PIPE_FAIL; a | tail", ""},
 	{"PIPESTATUS, wherever it is mentioned", "a | tail # PIPESTATUS is not read here", ""},
 	{"pipestatus in lower case", "a | tail # see $pipestatus", ""},
+
+	// An inverted grep exits 0 whenever one line does not match (#107).
+	{"#107's command", `zig build check 2>&1 | grep -v "^pass "`, "grep -v"},
+	{"#107's repro", `sh -c 'echo "error: the build broke"; exit 1' 2>&1 | grep -v '^pass '`, "grep -v"},
+	{"--invert-match", "a | grep --invert-match x", "grep -v"},
+	{"-v bundled first", "a | grep -vE 'x|y'", "grep -v"},
+	{"-v bundled last", "a | grep -Ev 'x|y'", "grep -v"},
+	{"-v after the pattern, which grep permutes", "a | grep x -v", "grep -v"},
+	{"-v with -e taking each pattern", "a | grep -v -e x -e y", "grep -v"},
+	{"-ve, whose e takes the next word", "a | grep -ve x", "grep -v"},
+	{"after an option with its value attached", "a | grep -m5 -v x", "grep -v"},
+	{"after a long option whose value is the next word", "a | grep --max-count 5 -v x", "grep -v"},
+	{"after a long option whose value follows =", "a | grep --label=out -v x", "grep -v"},
+	{"after --color, which takes nothing from the next word", "a | grep --color -v x", "grep -v"},
+	{"after --color=never", "a | grep --color=never -v x", "grep -v"},
+	{"after GNU's -NUM", "a | grep -2 -v x", "grep -v"},
+	{"with -s, which quiets only errors", "a | grep -sv x", "grep -v"},
+	{"with -o, which still exits on what it selected", "a | grep -vo x", "grep -v"},
+	{"reading a file, whose status is still the pipeline's", "a | grep -v x log", "grep -v"},
+	{"behind a redirection", "a | grep -v x 2>/dev/null", "grep -v"},
+	{"a quoted -v", "a | grep '-v' x", "grep -v"},
+	{"an escaped -v", `a | grep \-v x`, "grep -v"},
+	{"a dollar in single quotes is a character", "a | grep -v '^$'", "grep -v"},
+	{"an escaped dollar in double quotes is a character", `a | grep -v "^\$"`, "grep -v"},
+	{"a quoted glob is a character", "a | grep -v 'x*'", "grep -v"},
+	{"egrep", "a | egrep -v 'x|y'", "egrep -v"},
+	{"fgrep", "a | fgrep -v x", "fgrep -v"},
+	{"an absolute path to grep", "a | /usr/bin/grep -v x", "grep -v"},
+	{"two in a row", "a | grep -v x | grep -v y", "grep -v"},
+	{"after --, -q is the pattern", "a | grep -v -- -q", "grep -v"},
+
+	// A grep that is a test, is not inverted, or is not read for sure.
+	{"grep with no -v", "a | grep x", ""},
+	{"-vq", "a | grep -vq x", ""},
+	{"-v and --quiet", "a | grep -v --quiet x", ""},
+	{"-v and --silent", "a | grep -v --silent x", ""},
+	{"-vc", "a | grep -vc x", ""},
+	{"--count", "a | grep --count -v x", ""},
+	{"-vl", "a | grep -vl x", ""},
+	{"-v and -L", "a | grep -v -L x", ""},
+	{"--files-with-matches", "a | grep --files-with-matches -v x", ""},
+	{"--files-without-match", "a | grep --files-without-match -v x", ""},
+	{"a quoted -q", "a | grep -v '-q' x", ""},
+	{"-ev, whose e takes the v", "a | grep -ev x", ""},
+	{"-mv, whose m takes the v", "a | grep -mv x", ""},
+	{"-e -v, whose pattern is -v", "a | grep -e -v", ""},
+	{"--regexp -v, whose pattern is -v", "a | grep --regexp -v", ""},
+	{"after --, -v is the pattern", "a | grep -- -v", ""},
+	{"a quoted -e taking the -v", `a | grep "-e" -v`, ""},
+	{"an option neither grep has", "a | grep -K -v x", ""},
+	{"a long option neither grep has", "a | grep --frobnicate -v x", ""},
+	{"an abbreviated long option, which GNU takes", "a | grep --inv x", ""},
+	{"a flag given a value", "a | grep --invert-match=yes x", ""},
+	{"an option missing its argument", "a | grep -v -e", ""},
+	{"a long option missing its argument", "a | grep -v --regexp", ""},
+	{"a variable, which could hold -q", `a | grep -v "$PAT"`, ""},
+	{"an unquoted variable", "a | grep -v $PAT", ""},
+	{"a glob, which could name a file -q", "a | grep -v x*", ""},
+	{"a bracket", "a | grep -v [0-9]", ""},
+	{"a brace, which bash expands", "a | grep -{v,q} x", ""},
+	{"rg, whose options are not grep's", "a | rg -v x", ""},
+	{"grep behind command", "a | command grep -v x", ""},
+	{"a relative path to a grep", "a | ./grep -v x", ""},
+	{"a quoted grep", "a | 'grep' -v x", ""},
+	{"an inverted grep that is not last", "a | grep -v x | grep -q y", ""},
+	{"an inverted grep before &&", "a | grep -v x && b", ""},
+	{"an inverted grep under pipefail", "set -o pipefail; a | grep -v x", ""},
+	{"an inverted grep negated", "! a | grep -v x", ""},
+	{"an inverted grep with nothing piped in", "grep -v x log", ""},
 }
 
 func TestMaskingFilter(t *testing.T) {
@@ -211,12 +280,106 @@ func TestLastPipeline(t *testing.T) {
 		{"nothing at all", " \n", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, ok := lastPipeline(c.command)
+			stages, ok := lastPipeline(c.command)
+			var got []string
+			for _, s := range stages {
+				got = append(got, s.cmd)
+			}
 			if !ok || !slices.Equal(got, c.want) {
 				t.Errorf("lastPipeline(%q) = %q, %v; want %q", c.command, got, ok, c.want)
 			}
 		})
 	}
+}
+
+// The words after a stage's command word are what an inverted grep is read
+// from (#107): as written, quotes and all, and without the redirections or
+// their files, or the assignments in front of the command word.
+func TestLastPipelineKeepsEachStagesWords(t *testing.T) {
+	for _, c := range []struct {
+		name, command string
+		want          [][]string // each stage's words after its command word
+	}{
+		{"none", "a | b", [][]string{nil, nil}},
+		{"as written", `a x | grep -v '^pass ' "y z"`, [][]string{{"x"}, {"-v", "'^pass '", `"y z"`}}},
+		{"redirections and their files are not words", "a 2>&1 | grep -v x 2>/dev/null >out y", [][]string{nil, {"-v", "x", "y"}}},
+		{"nor are assignments in front", "a | X=1 grep -v x", [][]string{nil, {"-v", "x"}}},
+		{"an assignment after the command word is one", "a | env X=1 grep", [][]string{nil, {"X=1", "grep"}}},
+		{"only the last list", "a -q | b; c | grep -v x", [][]string{nil, {"-v", "x"}}},
+		{"a stage with no command word has none", "< f | grep -v x", [][]string{nil, {"-v", "x"}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stages, ok := lastPipeline(c.command)
+			if !ok || len(stages) != len(c.want) {
+				t.Fatalf("lastPipeline(%q) = %+v, %v; want %d stages", c.command, stages, ok, len(c.want))
+			}
+			for i, s := range stages {
+				if !slices.Equal(s.args, c.want[i]) {
+					t.Errorf("stage %d (%q) has words %q, want %q", i, s.cmd, s.args, c.want[i])
+				}
+			}
+		})
+	}
+}
+
+// unquoted is a word as sh hands it over, or false where sh would rewrite it.
+func TestUnquoted(t *testing.T) {
+	for _, c := range []struct {
+		raw, want string
+		ok        bool
+	}{
+		{"abc", "abc", true},
+		{"", "", true},
+		{"'a b'", "a b", true},
+		{`"a b"`, "a b", true},
+		{`a'b'"c"d`, "abcd", true},
+		{`"a\"b"`, `a"b`, true},
+		{`"a\b"`, `a\b`, true},
+		{`"a\$b"`, "a$b", true},
+		{`"a\\b"`, `a\b`, true},
+		{"\"a\\\nb\"", "ab", true},
+		{`a\ b`, "a b", true},
+		{`\-v`, "-v", true},
+		{"a\\\nb", "ab", true},
+		{`a\`, "a", true},
+		{"'$x'", "$x", true},
+		{"'*'", "*", true},
+		{`"*"`, "*", true},
+		{`"$x"`, "", false},
+		{"$x", "", false},
+		{"x*", "", false},
+		{"x?", "", false},
+		{"[x]", "", false},
+		{"{a,b}", "", false},
+		{"'unclosed", "", false},
+		{`"unclosed`, "", false},
+		{`"ends on a backslash\`, "", false},
+	} {
+		got, ok := unquoted(c.raw)
+		if got != c.want || ok != c.ok {
+			t.Errorf("unquoted(%q) = %q, %v; want %q, %v", c.raw, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func FuzzUnquoted(f *testing.F) {
+	for _, s := range []string{"abc", `'a b'`, `"a\"b"`, `a\ b`, `"$x"`, "x*", `"x\`, "'"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		got, ok := unquoted(raw)
+		if !ok && got != "" {
+			t.Fatalf("unquoted(%q) = %q, false", raw, got)
+		}
+		// A word with nothing for sh to remove or rewrite is handed over as
+		// it is.
+		if !strings.ContainsAny(raw, `'"\$*?[{`) && (!ok || got != raw) {
+			t.Fatalf("unquoted(%q) = %q, %v; want it unchanged", raw, got, ok)
+		}
+		if ok && len(got) > len(raw) {
+			t.Fatalf("unquoted(%q) = %q, which is longer", raw, got)
+		}
+	})
 }
 
 // listOf writes the filters the way a sentence does: "tail, head, tee or cat",
@@ -314,6 +477,34 @@ func TestAVerifyPipedIntoAFilterIsRefused(t *testing.T) {
 		})
 	}
 
+	// Named as grep -v however the flag was spelled, and with the reason its
+	// status is no test, since a grep's usually is one.
+	for _, g := range greps {
+		t.Run("naming "+g+" -v", func(t *testing.T) {
+			root := cliTree(t, map[string]string{"a.txt": "one\n"})
+			before := snapshot(t, root)
+			code, _, errOut := runCLI(t, root, []string{"--verify", "false | " + g + " -Ev x"}, vPatch)
+			if code != exitUsage || !strings.Contains(errOut, "piped into "+g+" -v fail") ||
+				!strings.Contains(errOut, "and that is "+g+" -v, which exits 0 whenever one line it reads does not match;") {
+				t.Errorf("exit %d, stderr %q", code, errOut)
+			}
+			assertUnchanged(t, root, before)
+		})
+	}
+
+	// #107 as filed. The command leaves a file if it runs at all.
+	t.Run("#107's repro: exit 1, nothing written and nothing run", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"a.txt": "one\n"})
+		before := snapshot(t, root)
+		code, out, errOut := runCLI(t, root,
+			[]string{"--verify", `touch ran.txt; sh -c 'echo "error: the build broke"; exit 1' 2>&1 | grep -v '^pass '`}, vPatch)
+		if code != exitUsage || out != "" {
+			t.Errorf("exit %d, stdout %q; want 1 and the refusal on stderr", code, out)
+		}
+		golden(t, "cli-verify-piped-into-grep-v", errOut)
+		assertUnchanged(t, root, before)
+	})
+
 	t.Run("after the refusals that were there first", func(t *testing.T) {
 		root := cliTree(t, map[string]string{"a.txt": "one\n"})
 		code, _, errOut := runCLI(t, root, []string{"--try", "true", "--verify", piped}, vPatch)
@@ -350,6 +541,36 @@ func TestWhatTheFilterRefusalLeavesAlone(t *testing.T) {
 		code, _, errOut := runCLI(t, root, []string{"--verify", "cat a.txt | tail -1 | grep -q NOPE"}, vPatch)
 		if code != exitVerifyFailed {
 			t.Errorf("exit %d, stderr %q; want 3", code, errOut)
+		}
+		assertUnchanged(t, root, before)
+	})
+
+	// -q makes an inverted grep a test (#107): it runs, and its status decides
+	// both ways, on the grep the platform has.
+	t.Run("an inverted grep with -q runs and passes on its status", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"a.txt": "one\n"})
+		code, out, errOut := runCLI(t, root, []string{"--verify", "cat a.txt | grep -vq one"}, vPatch)
+		if code != exitOK || !strings.Contains(out, "verify ok") {
+			t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
+		}
+	})
+
+	t.Run("and fails on it", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"a.txt": "one\n"})
+		before := snapshot(t, root)
+		code, _, errOut := runCLI(t, root, []string{"--verify", "cat a.txt | grep -vq ONE"}, vPatch)
+		if code != exitVerifyFailed {
+			t.Errorf("exit %d, stderr %q; want 3", code, errOut)
+		}
+		assertUnchanged(t, root, before)
+	})
+
+	t.Run("a single --try may end in an inverted grep", func(t *testing.T) {
+		root := cliTree(t, map[string]string{"a.txt": "one\n"})
+		before := snapshot(t, root)
+		code, out, errOut := runCLI(t, root, []string{"--try", "printf 'pass 1\\nerror\\n' | grep -v '^pass '"}, vPatch)
+		if code != exitOK || !strings.Contains(out, "\nerror\n") || strings.Contains(out, "\npass 1\n") {
+			t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
 		}
 		assertUnchanged(t, root, before)
 	})
@@ -393,6 +614,9 @@ func TestEveryDocumentNamesTheFiltersAVerifyIsRefusedFor(t *testing.T) {
 	if want := "ends in " + listOf(statusFilters, ""); !strings.Contains(flat(help.String()), want) {
 		t.Errorf("--help does not say %q", want)
 	}
+	if want := "or in a grep -v without -q, -c, -l or -L"; !strings.Contains(flat(help.String()), want) {
+		t.Errorf("--help does not say %q", want)
+	}
 	// The reflex is to shorten the output, so each document has to say what
 	// already does. The skill says it without the flag: skillOmits leaves
 	// --verify-lines out, and what an agent needs is that there is nothing to
@@ -408,6 +632,9 @@ func TestEveryDocumentNamesTheFiltersAVerifyIsRefusedFor(t *testing.T) {
 		doc := flat(string(b))
 		if want := listOf(statusFilters, "`"); !strings.Contains(doc, want) {
 			t.Errorf("%s does not name the filters as %q", p, want)
+		}
+		if want := listOf(statusFilters, "`") + ", or in a `grep -v`"; !strings.Contains(doc, want) {
+			t.Errorf("%s does not name the inverted grep as %q", p, want)
 		}
 		if !strings.Contains(doc, already) {
 			t.Errorf("%s does not say %q, which is what makes the pipe unnecessary", p, already)
@@ -447,6 +674,8 @@ func FuzzMaskingFilter(f *testing.F) {
 	f.Add(strings.Repeat("a>b ", 1<<14) + "| tail")
 	f.Add(strings.Repeat("#\n", 1<<15) + "a | tail")
 	f.Add("a | tail " + strings.Repeat("\"", 1<<16))
+	f.Add("a | grep " + strings.Repeat("-e x ", 1<<13) + "-v")
+	f.Add("a | grep " + strings.Repeat(`'x'"y"\z `, 1<<13) + "-v")
 
 	f.Fuzz(func(t *testing.T, s string) {
 		// Total: every command is a filter or not, never a panic.
@@ -455,12 +684,17 @@ func FuzzMaskingFilter(f *testing.F) {
 			t.Fatalf("maskingFilter(%q) = %q, %v", s, filter, ok)
 		}
 		if ok {
-			// A refusal names one of the four and nothing of the caller's.
-			if !slices.Contains(statusFilters, filter) {
+			// A refusal names one of the four, or a grep as grep -v, and
+			// nothing of the caller's.
+			name, grep := strings.CutSuffix(filter, " -v")
+			if !slices.Contains(statusFilters, filter) && !(grep && slices.Contains(greps, name)) {
 				t.Fatalf("%q was refused for %q, which is not a filter", s, filter)
 			}
-			if !strings.Contains(s, "|") || !strings.Contains(s, filter) {
+			if !strings.Contains(s, "|") || !strings.Contains(s, name) {
 				t.Fatalf("%q was refused for a pipe into %s that it does not hold", s, filter)
+			}
+			if grep && !strings.Contains(s, "v") {
+				t.Fatalf("%q was refused for an inverted grep with no v in it", s)
 			}
 			lower := strings.ToLower(s)
 			for _, w := range keepsItsPipe {

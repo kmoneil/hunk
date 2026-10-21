@@ -379,8 +379,11 @@ failing, and a verify written that way cannot fail. `hunk` refuses one at exit
 `tail`, `head`, `tee` or `cat`. Drop the pipe. The command's output is printed
 only when the verify fails, and then only its last 40 lines, which
 `--verify-lines N` changes. A pipeline that ends in `grep` is left alone,
-because `grep`'s status depends on what it read, and so is a single `--try`,
-whose tree goes back whatever its command says. Under `--try --each` the exit
+because `grep`'s status depends on what it read, except a `grep -v`: it exits
+0 whenever one line it reads does not match, which for a build's output is
+always, so it is refused the same way, unless `-q`, `-c`, `-l` or `-L` has it
+print no lines and makes it a test. And a single `--try` is left alone, since
+its tree goes back whatever its command says. Under `--try --each` the exit
 is the result, so its command and `--build`'s are refused the same way. The
 check reads plain pipelines and nothing cleverer: a command with a subshell, a
 command substitution or a here-document runs as written, and so does one that
@@ -478,8 +481,9 @@ others, give `--verify-lines N`: then the last N lines of every patch's output
 print under its line, the caught ones too, and a suite whose last lines name
 the failing test says what caught each break. `--json` carries every patch's
 output, given or not. That is the way to shorten it: a command or a `--build`
-whose last pipeline ends in `tail`, `head`, `tee` or `cat` is refused under
-`--each`, exit 1, nothing tried, since the exit scored would be the filter's.
+whose last pipeline ends in `tail`, `head`, `tee` or `cat`, or in a `grep -v`,
+is refused under `--each`, exit 1, nothing tried, since the exit scored would
+be the filter's.
 The run stops at once
 where carrying on would lie: a file not put back (exit 4, the block names
 it), a patch refused after the preflight passed (the tree changed under the

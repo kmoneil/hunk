@@ -292,6 +292,22 @@ func TestATryOrBuildPipedIntoAFilterIsRefusedUnderEach(t *testing.T) {
 			})
 		}
 
+		// An inverted grep scores the same way (#107).
+		for _, g := range greps {
+			t.Run(c.name+": naming "+g+" -v", func(t *testing.T) {
+				root, patches := eachFixture(t)
+				mark := pidFile(t, "ran")
+				code, _, errOut := runCLI(t, root, args(counted(mark, "false 2>&1 | "+g+" -v '^pass '"), patches[0]), "")
+				if code != exitUsage || !strings.Contains(errOut, "piped into "+g+" -v fail") ||
+					!strings.Contains(errOut, "and that is "+g+" -v, which exits 0 whenever one line it reads does not match, so") {
+					t.Errorf("exit %d, stderr %q", code, errOut)
+				}
+				if n := markerLines(t, mark); n != 0 {
+					t.Errorf("the command ran %d times, want none", n)
+				}
+			})
+		}
+
 		t.Run(c.name+": under --dry-run too", func(t *testing.T) {
 			root, patches := eachFixture(t)
 			code, out, errOut := runCLI(t, root, append([]string{"--dry-run"}, args("false | tail -1", patches[0])...), "")
