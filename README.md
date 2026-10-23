@@ -32,10 +32,14 @@ HUNK
 ```
 
 ```
-M internal/cli/root.go  +2 -1
+M internal/cli/root.go  +1 -0
 M internal/cli/scope.go +2 -2
-2 files, 2 hunks, +4 -3, verify ok (1.9s)
+2 files, 2 hunks, +3 -2, verify ok (1.9s)
 ```
+
+The counts are lines of the file, as `git diff --numstat` counts them. The
+line `root.go`'s `@@ old` repeats in `@@ new` is unchanged, so that file is one
+line added, and `scope.go`'s two lines were each rewritten.
 
 ## Why this exists
 
@@ -303,9 +307,9 @@ HUNK
 ```
 quoted src/parse.go 40-95, 56 lines: "func parse(src []byte) (*Tree, error) {" to "}"
 quoted src/parse.go 210-262, 53 lines: "func walk(t *Tree) error {" to "}"
-M src/parse.go +9 -109
+M src/parse.go +5 -105
 M src/main.go  +1 -1
-2 files, 3 hunks, +10 -110 (dry run: nothing written)
+2 files, 3 hunks, +6 -106 (dry run: nothing written)
 ```
 
 `--new FILE` adds `@@ new` and FILE's content, so the range is replaced by it.

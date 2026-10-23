@@ -205,8 +205,8 @@ several `@@ old`/`@@ new` pairs can follow one `@@ file`.
 
 ```
 $ hunk --dry-run -f patch.txt
-M internal/cli/root.go +3 -1
-1 file, 2 hunks, +3 -1 (dry run: nothing written)
+M internal/cli/root.go +3 -2
+1 file, 2 hunks, +3 -2 (dry run: nothing written)
 ```
 
 It runs the whole validation phase, so a near miss is reported in full and the
@@ -323,9 +323,9 @@ HUNK
 ```
 quoted src/parse.go 40-95, 56 lines: "func parse(src []byte) (*Tree, error) {" to "}"
 quoted src/parse.go 210-262, 53 lines: "func walk(t *Tree) error {" to "}"
-M src/parse.go +9 -109
+M src/parse.go +5 -105
 M src/main.go  +1 -1
-2 files, 3 hunks, +10 -110 (dry run: nothing written)
+2 files, 3 hunks, +6 -106 (dry run: nothing written)
 ```
 
 `--new FILE` adds `@@ new` and FILE's content. Without it the hunk stops after

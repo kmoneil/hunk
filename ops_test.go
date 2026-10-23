@@ -1803,9 +1803,10 @@ func TestAnAppendThatChangesNothingIsNotAWrite(t *testing.T) {
 		{"an empty prepend", "x\n", "@@ prepend t.txt\n", "0 files, 1 hunk, +0 -0\n", "x\n"},
 		{"an empty append to an empty file", "", "@@ append t.txt\n", "0 files, 1 hunk, +0 -0\n", ""},
 		{
-			// The seam byte is a change, so this one is a write.
+			// The seam byte is a change, so this one is a write, and the
+			// line it ended counts as changed, as git counts it (#111).
 			"an empty append to a file with no final newline", "x", "@@ append t.txt\n",
-			"M t.txt +0 -0  (added a final newline)\n1 file, 1 hunk, +0 -0\n", "x\n",
+			"M t.txt +1 -1  (added a final newline)\n1 file, 1 hunk, +1 -1\n", "x\n",
 		},
 		{
 			// Listed once, for the replace.
@@ -1864,8 +1865,9 @@ func TestACreatedFileWithNoFinalNewlineSaysSo(t *testing.T) {
 			"A n.txt +2 -0  (added a final newline)", "hi\nthere\n",
 		},
 		{
+			// A created file counts the lines it ends with (#111).
 			"a later replace takes it away", nil, "@@ create n.txt\nhi\n\n@@ old\nhi\n\n@@ new\nbye\n",
-			"A n.txt +2 -1  (no final newline)", "bye",
+			"A n.txt +1 -0  (no final newline)", "bye",
 		},
 		{
 			// The newline prepend gives its payload is not reported, so only

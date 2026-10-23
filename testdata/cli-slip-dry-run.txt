@@ -1,8 +1,8 @@
-M e.txt +2 -2
-M j.txt +1 -1
+M e.txt +4 -2
+M j.txt +1 -2
 M z.txt +1 -1
-M m.txt +3 -3
-4 files, 5 hunks, +7 -7 (dry run: nothing written)
+M m.txt +6 -3
+4 files, 5 hunks, +12 -8 (dry run: nothing written)
 
 warning: hunk 1 (patch line 2) leaves an empty line after "A" in e.txt: its new text ends in a newline and its old text does not; if that was not meant, take out the blank line under its new text
 warning: hunk 2 (patch line 7) leaves an empty line after "B" in e.txt: its new text ends in a newline and its old text does not; if that was not meant, take out the blank line under its new text

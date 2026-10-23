@@ -289,14 +289,14 @@ func TestASlipsRemedyFollowsTheOutcome(t *testing.T) {
 		{"--try that fails", []string{"--try", "echo caught; exit 7"}, 7, slipNotApplied},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, cleanOut, cleanErr := runCLI(t, cliTree(t, files), c.args, "@@ file a.txt\n@@ old\na\n@@ new\nA\n")
+			// The same empty line, added on purpose with ends that agree.
+			_, cleanOut, cleanErr := runCLI(t, cliTree(t, files), c.args, "@@ file a.txt\n@@ old\na\n\n@@ new\nA\n\n\n")
 			root := cliTree(t, files)
 			code, out, errOut := runCLI(t, root, c.args, slipPatch)
 			if code != c.exit {
 				t.Fatalf("exit %d, want %d\n%s%s", code, c.exit, out, errOut)
 			}
 			tenths := func(s string) string { return reTenths.ReplaceAllString(s, "(0.0s)") }
-			// The patch that agrees adds no line, so the counts are the same.
 			if tenths(out) != tenths(cleanOut) {
 				t.Errorf("stdout is not the clean patch's\n--- got ---\n%s--- clean ---\n%s", out, cleanOut)
 			}

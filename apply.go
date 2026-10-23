@@ -586,13 +586,13 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		if !bytes.Equal(next, f.cur) {
 			f.changed = true
 			f.applied++
-			// Per occurrence, not per hunk: an "@@ old x2" that rewrites two
-			// lines changed two lines, and a diffstat saying +1 -1 understates
-			// it. §5.1's globals.go row is +2 -2 and §3.6's hunk for that file
-			// is exactly an x2 on a one-line old, which is the only row of that
-			// example that corresponds to that patch.
-			f.added += lineCount(repl) * h.Count
-			f.removed += lineCount(old) * h.Count
+			// The file's lines the replacement changed, per occurrence
+			// (counts.go, #111): an "@@ old x2" that rewrites two lines
+			// changed two lines, and one that rewrites two words on one line
+			// changed one.
+			a, r := replaceCounts(f.cur, old, repl, h.Count)
+			f.added += a
+			f.removed += r
 			x.noteSlips(n, h, f, old, repl, next)
 		}
 		f.cur = next
@@ -699,6 +699,10 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 		f.deleted = false
 		f.created = true
 		f.eol = dominantEOL(f.cur)
+		// These two sums stand only for an overwrite, a delete and then a
+		// create of a file that exists, which commits as a modify: every line
+		// removed and every line added, as the patch said. A file that ends
+		// created or deleted is counted from its bytes by result (#111).
 		f.added += lineCount(f.cur)
 
 	case OpDelete:
@@ -735,6 +739,11 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 		}
 		f.cur = append(append([]byte{}, base...), body...)
 		f.added += lineCount(body)
+		// Ending the file's last line changed it, as git counts it (#111).
+		if len(base) > len(before) {
+			f.added++
+			f.removed++
+		}
 
 	case OpPrepend:
 		// The mirror: for prepend the text on the left of the seam is the
@@ -1418,8 +1427,19 @@ func (x *Txn) result(hunks int) *Result {
 		if op == "" {
 			continue
 		}
+		// A file the batch created is every line it ends with, and one it
+		// deleted every line it had, whatever hunks came between (#111): a
+		// create and then a replace in it is one new file, as git shows it,
+		// not the sum of the two.
+		added, removed := f.added, f.removed
+		switch op {
+		case "create":
+			added, removed = lineCount(f.cur), 0
+		case "delete":
+			added, removed = 0, lineCount(f.orig)
+		}
 		r.Files = append(r.Files, FileResult{
-			Path: f.target.Orig(), Resolved: f.resolved, Op: op, Added: f.added, Removed: f.removed,
+			Path: f.target.Orig(), Resolved: f.resolved, Op: op, Added: added, Removed: removed,
 			SeamAdded: f.seamAdded,
 			// Read off the bytes the batch ends with, not the create's payload:
 			// a later hunk can take the newline away or give it back, and a
@@ -1568,8 +1588,7 @@ func mixedEndings(b []byte) bool {
 }
 
 // lineCount is §5.1's diffstat unit: a run ending in a newline, plus a final
-// run that does not. §5.1's own example is self-consistent under exactly this
-// rule and under no other, its "+8 -3" being 2+2+4 added and 1+2+0 removed.
+// run that does not, which is what git counts as a line.
 func lineCount(b []byte) int {
 	if len(b) == 0 {
 		return 0
