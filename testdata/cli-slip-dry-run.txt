@@ -1,0 +1,11 @@
+M e.txt +2 -2
+M j.txt +1 -1
+M z.txt +1 -1
+M m.txt +3 -3
+4 files, 5 hunks, +7 -7 (dry run: nothing written)
+
+warning: hunk 1 (patch line 2) leaves an empty line after "A" in e.txt: its new text ends in a newline and its old text does not; if that was not meant, take out the blank line under its new text
+warning: hunk 2 (patch line 7) leaves an empty line after "B" in e.txt: its new text ends in a newline and its old text does not; if that was not meant, take out the blank line under its new text
+warning: hunk 3 (patch line 13) joins the next line onto its replacement in j.txt, making "Ab": its old text ends in a newline and its new text does not; if that was not meant, leave a blank line under its new text, as under its old text
+warning: hunk 4 (patch line 19) leaves z.txt with no final newline: its old text ends in a newline at the end of the file and its new text does not; if that was not meant, leave a blank line under its new text, as under its old text
+warning: hunk 5 (patch line 25) leaves an empty line after each of its 3 replacements in m.txt, the first after "x = 2": its new text ends in a newline and its old text does not; if that was not meant, take out the blank line under its new text

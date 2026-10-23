@@ -157,6 +157,11 @@ func runEach(cfg eachConfig, tree *Tree, stdout, stderr io.Writer, interrupted *
 	if !cfg.asJSON {
 		gap := o.n+e.n > 0
 		for _, ep := range patches {
+			// A patch's slips (#111), from its preflight, and then its
+			// strays. Every patch is put back, so the remedy is the patch's.
+			if ep.res != nil && writeSlips(stderr, ep.name, ep.res.Slips, false, gap) {
+				gap = false
+			}
 			if ep.p != nil && len(ep.p.Strays) > 0 {
 				writeStrays(stderr, ep.name, ep.p.Strays, false, gap)
 				gap = false
@@ -908,6 +913,9 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code in
 			}
 		}
 		je.Patches = append(je.Patches, jp)
+		if ep.res != nil {
+			out.Warnings = append(out.Warnings, slipWarnings(ep.name, ep.res.Slips, false)...)
+		}
 		var md *MistypedDelimiters
 		switch {
 		case ep.p != nil:

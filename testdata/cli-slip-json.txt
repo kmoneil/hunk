@@ -1,0 +1,73 @@
+{
+  "ok": true,
+  "exit": 0,
+  "files": [
+    {
+      "path": "e.txt",
+      "op": "modify",
+      "added": 2,
+      "removed": 2
+    },
+    {
+      "path": "j.txt",
+      "op": "modify",
+      "added": 1,
+      "removed": 1
+    },
+    {
+      "path": "z.txt",
+      "op": "modify",
+      "added": 1,
+      "removed": 1
+    },
+    {
+      "path": "m.txt",
+      "op": "modify",
+      "added": 3,
+      "removed": 3
+    }
+  ],
+  "hunks": 5,
+  "warnings": [
+    {
+      "kind": "empty_line",
+      "hunk": 1,
+      "patch_line": 2,
+      "path": "e.txt",
+      "text": "A",
+      "message": "hunk 1 (patch line 2) leaves an empty line after \"A\" in e.txt: its new text ends in a newline and its old text does not; if that was not meant, remove the empty line from e.txt"
+    },
+    {
+      "kind": "empty_line",
+      "hunk": 2,
+      "patch_line": 7,
+      "path": "e.txt",
+      "text": "B",
+      "message": "hunk 2 (patch line 7) leaves an empty line after \"B\" in e.txt: its new text ends in a newline and its old text does not; if that was not meant, remove the empty line from e.txt"
+    },
+    {
+      "kind": "joined_line",
+      "hunk": 3,
+      "patch_line": 13,
+      "path": "j.txt",
+      "text": "Ab",
+      "message": "hunk 3 (patch line 13) joins the next line onto its replacement in j.txt, making \"Ab\": its old text ends in a newline and its new text does not; if that was not meant, put the line break back in j.txt"
+    },
+    {
+      "kind": "no_final_newline",
+      "hunk": 4,
+      "patch_line": 19,
+      "path": "z.txt",
+      "text": "B",
+      "message": "hunk 4 (patch line 19) leaves z.txt with no final newline: its old text ends in a newline at the end of the file and its new text does not; if that was not meant, end z.txt in a newline again"
+    },
+    {
+      "kind": "empty_line",
+      "hunk": 5,
+      "patch_line": 25,
+      "path": "m.txt",
+      "text": "x = 2",
+      "message": "hunk 5 (patch line 25) leaves an empty line after each of its 3 replacements in m.txt, the first after \"x = 2\": its new text ends in a newline and its old text does not; if that was not meant, remove the empty lines from m.txt"
+    }
+  ]
+}

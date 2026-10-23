@@ -1886,8 +1886,10 @@ func TestACreatedFileWithNoFinalNewlineSaysSo(t *testing.T) {
 			"@@ delete n.txt\n@@ create n.txt\nnew\n\n", "M n.txt +1 -1", "new\n",
 		},
 		{
-			// Only a create is reported. A replace spells both sides, and
-			// §3.3's blank-line rule is how it spells the newline.
+			// Only a create is reported in the row. A replace spells both
+			// sides, and §3.3's blank-line rule is how it spells the
+			// newline; since #111 one whose sides disagree, as the next
+			// row's do, is warned of after the report (slip_test.go).
 			"a modify of a file that has none",
 			map[string]string{"n.txt": "a\nb"},
 			"@@ file n.txt\n@@ old\na\n@@ new\nA\n", "M n.txt +1 -1", "A\nb",

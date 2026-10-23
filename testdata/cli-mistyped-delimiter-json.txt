@@ -12,6 +12,7 @@
   "hunks": 1,
   "warnings": [
     {
+      "kind": "mistyped_delimiter",
       "patch_line": 6,
       "path": "notes.txt",
       "text": "HUHUNK",
