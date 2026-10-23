@@ -15,6 +15,12 @@ linters:
     - errcheck
     - govet
     - ineffassign
+    # A function that checks err and then returns nil, which errcheck passes
+    # because the error was checked. Not where err is a named result that a
+    # deferred cleanup reads, as in writeAtomic: a swallowed fsync there gets
+    # past this and the whole suite.
+    - nilerr
+    - staticcheck
     - unused
   settings:
     govet:
@@ -41,6 +47,19 @@ linters:
         - fmt.Fprintln
         - (*strings.Builder).WriteString
         - (*bytes.Buffer).WriteString
+    staticcheck:
+      # The SA checks only, the ones that report code that is wrong rather than
+      # code that could be shorter. staticcheck's default set reported seven
+      # things here on 2026-10-22 and none was a defect: six asked for a struct
+      # literal to become a conversion, one for De Morgan's law.
+      #
+      # Tried the same day and left out, because a gate that reports what
+      # nobody will fix teaches everyone to read past it: nilaway (92 reports,
+      # and the two traced were not real), gosec (9, each a file the user named
+      # or a command the user gave, which is hunk's job), exhaustive (5,
+      # switches that are partial on purpose).
+      checks:
+        - SA*
   exclusions:
     paths:
       # Gitignored working directories. They hold no Go this module builds.
