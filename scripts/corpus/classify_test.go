@@ -453,6 +453,26 @@ func TestHunkExit(t *testing.T) {
 			"--each --build, every patch built and was caught", "hunk --try x --build y --each a.hunk",
 			"tried a.hunk  the command exited 1 (0.1s)\ntried 1 patch and put back every file; every command exited nonzero (0.2s)\n", 0,
 		},
+		// The runs on the tree as it is after the last patch, from 2026-10-22
+		// (#110): a clause after the verdict decides, and the story line above
+		// it, which says "with no patch applied" too, must not read as the
+		// refusal before the first patch, which is 1.
+		{
+			"--each, the command fails after the last patch", "hunk --try x --each a.hunk b.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\ntried b.hunk  the command exited 1 (0.1s)\nhunk: after the last patch, the command exited 1 with no patch applied, and it passed before the first: something besides the patches makes it fail, so any catch may be that\n\n$ x\nlint: a new rule fires\n(last 1 of 1 lines)\ntried 2 patches and put back every file; every command exited nonzero, but the command now fails with no patch applied (0.3s)\n", 3,
+		},
+		{
+			"--each --build, the build fails after the last patch", "hunk --try x --build y --each a.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\nhunk: after the last patch, the build exited 2 with no patch applied, and it passed before the first: something besides the patches makes it fail, so the command could not run again to confirm the catches\n\n$ y\nerror: hash mismatch\n(last 1 of 1 lines)\ntried 1 patch and put back every file; every command exited nonzero, but the build now fails with no patch applied (0.3s)\n", 3,
+		},
+		{
+			"--each, the command could not start after the last patch", "hunk --try x --each a.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\nhunk: could not run the --try command with no patch applied after the last patch: fork/exec /tmp/sh: exec format error\ntried 1 patch and put back every file; every command exited nonzero, but the --try command could not start with no patch applied (0.2s)\n", 5,
+		},
+		{
+			"--each, interrupted after the last patch", "hunk --try x --each a.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\ntried 1 patch and put back every file; every command exited nonzero, but the check with no patch applied was interrupted by SIGTERM (3.0s)\n", 143,
+		},
 		{
 			"--each --build refused: the build fails with no patch applied", "hunk --try x --build y --each a.hunk",
 			"hunk: the build exited 2 with no patch applied, so every patch would read as not built; nothing was tried\n\n$ y\nerror: no step named 'tst'\n(last 1 of 1 lines)\n", 1,
@@ -658,6 +678,9 @@ var reportGoldens = map[string]int{
 	"report-each-every-tail":                          3,
 	"report-each-command-baseline":                    1,
 	"report-each-command-baseline-json":               1,
+	"report-each-after":                               3,
+	"report-each-after-build":                         3,
+	"report-each-after-json":                          3,
 	"cli-rollback-incomplete":                         4,
 	"cli-rollback-left-a-directory":                   3,
 	"cli-rollback-left-a-directory-json":              3,

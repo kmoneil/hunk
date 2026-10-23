@@ -1,0 +1,10 @@
+tried breaks/01-shadow-reach.hunk        the command exited 1 (139.8s)
+tried breaks/02-texture-not-hashed.hunk  the command exited 1 (4.0s)
+tried breaks/03-loose.hunk               the command exited 1 (4.2s)
+hunk: after the last patch, the command exited 1 with no patch applied, and it passed before the first: something besides the patches makes it fail, so any catch may be that
+
+$ zig build test
+src/net.zig:40:5: error: lint: 'std.debug.print' in library code
+error: the following command failed with 1 compilation errors:
+(last 2 of 2 lines)
+tried 3 patches and put back every file; every command exited nonzero, but the command now fails with no patch applied (292.3s)

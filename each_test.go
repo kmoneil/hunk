@@ -87,8 +87,8 @@ func TestEachTriesEachPatchAlone(t *testing.T) {
 		if diff := snapshotDiff(before, snapshot(t, root)); len(diff) > 0 {
 			t.Errorf("tree changed: %v", diff)
 		}
-		if n := markerLines(t, mark); n != 4 {
-			t.Errorf("the command ran %d times, want 4: once on the tree as it is, once a patch", n)
+		if n := markerLines(t, mark); n != 5 {
+			t.Errorf("the command ran %d times, want 5: on the tree as it is, once a patch, and on the tree again after the last (#110)", n)
 		}
 		if !strings.Contains(out, "tried 3 patches and put back every file; every command exited nonzero") {
 			t.Errorf("stdout = %q", out)

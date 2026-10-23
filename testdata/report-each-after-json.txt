@@ -1,0 +1,50 @@
+{
+  "ok": false,
+  "exit": 3,
+  "each": {
+    "command": "zig build test",
+    "try_baseline": {
+      "ran": true,
+      "ok": true,
+      "status": 0,
+      "seconds": 140.2,
+      "output": [
+        "All 212 tests passed."
+      ]
+    },
+    "try_baseline_after": {
+      "ran": true,
+      "ok": false,
+      "status": 1,
+      "seconds": 4.1,
+      "output": [
+        "src/net.zig:40:5: error: lint: 'std.debug.print' in library code",
+        "error: the following command failed with 1 compilation errors:"
+      ]
+    },
+    "patches": [
+      {
+        "patch": "breaks/01-shadow-reach.hunk",
+        "ran": true,
+        "status": 1,
+        "seconds": 139.8,
+        "rolled_back": 1
+      },
+      {
+        "patch": "breaks/02-texture-not-hashed.hunk",
+        "ran": true,
+        "status": 1,
+        "seconds": 4,
+        "rolled_back": 1
+      },
+      {
+        "patch": "breaks/03-loose.hunk",
+        "ran": true,
+        "status": 1,
+        "seconds": 4.2,
+        "rolled_back": 1
+      }
+    ]
+  },
+  "error": "after the last patch, the command exited 1 with no patch applied, and it passed before the first: something besides the patches makes it fail, so any catch may be that"
+}

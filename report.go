@@ -761,13 +761,17 @@ func endedJSON(v *Verify) jsonEnded {
 // the order they were given. build is --build's command, and baseline its run
 // on the tree as it was before the first patch; try_baseline is the
 // command's run there, after the build's (#90). baseline kept its name from
-// v0.3.13, where it was the only one.
+// v0.3.13, where it was the only one. baseline_after and try_baseline_after
+// are the same pair once the last patch is back (#110), run only when a patch
+// was caught and the run did not stop.
 type jsonEach struct {
-	Command     string          `json:"command"`
-	Build       string          `json:"build,omitempty"`
-	Baseline    *jsonEachRun    `json:"baseline,omitempty"`
-	TryBaseline *jsonEachRun    `json:"try_baseline,omitempty"`
-	Patches     []jsonEachPatch `json:"patches"`
+	Command          string          `json:"command"`
+	Build            string          `json:"build,omitempty"`
+	Baseline         *jsonEachRun    `json:"baseline,omitempty"`
+	TryBaseline      *jsonEachRun    `json:"try_baseline,omitempty"`
+	BaselineAfter    *jsonEachRun    `json:"baseline_after,omitempty"`
+	TryBaselineAfter *jsonEachRun    `json:"try_baseline_after,omitempty"`
+	Patches          []jsonEachPatch `json:"patches"`
 }
 
 // jsonEachRun is one --build run, or the command's run on the tree as it is.

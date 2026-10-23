@@ -466,6 +466,14 @@ tried breaks/19-loose.hunk          the command timed out after 170s
 tried 3 patches and put back every file; 1 exited nonzero, 1 exited 0, 1 timed out (249.2s)
 ```
 
+When the last patch is back and at least one was caught, the command runs on
+the tree as it is once more, after `--build` where there is one. Something
+besides the patches can change during a run, a tool upgraded or a service
+gone, and then every later patch reads as caught by that rather than by its
+test. A run that fails there is exit 3, told above the summary with its
+output, and the summary ends `but the command now fails with no patch
+applied`.
+
 The set can be one file, a heading per break: `@@ patch NAME` begins a patch,
 and the lines from there to the next heading are its text. Each is tried
 alone and reported as `FILE:NAME`; files with and without headings mix
@@ -492,8 +500,9 @@ signal. Patches the stop left untried are listed as not tried.
 
 The exit is the run's, never a command's: 0 when every patch was tried and
 put back and every command exited nonzero; 3, as a verify whose verdict went
-against you, when a command exited 0 or timed out; 1, 2, 5 or 6 when the run
-refused or stopped; 4 when a file was not put back. In `--json` the run is an
+against you, when a command exited 0 or timed out, or the command failed with
+no patch applied after the last patch; 1, 2, 5 or 6 when the run refused or
+stopped; 4 when a file was not put back. In `--json` the run is an
 `each` object, one entry per patch, so a script reads `each.patches` rather
 than the lines.
 

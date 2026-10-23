@@ -438,7 +438,8 @@ each alone and puts every file back, prints a line per patch on stderr as it
 finishes, and stops at once if a file is not put back, where a loop would carry
 on against a broken tree. The exit is the run's, never a command's: 0 means
 every command exited nonzero (every break caught), 3 means a command exited 0
-or timed out (read the lines), 4 means it stopped with a file not restored.
+or timed out, or the tree failed after the last patch (read the lines), 4
+means it stopped with a file not restored.
 `--timeout` applies to each command separately. A script should read `--json`'s
 `each.patches`. The set can be one file, an `@@ patch NAME` heading per break:
 each is tried alone and reported as `FILE:NAME`, and a heading fault (no name,
@@ -453,7 +454,11 @@ tried, with its output: every patch would have read as caught. That is what
 catches a command whose exit is not the suite's: `exit ${pipestatus[1]}` is
 zsh's and the command runs under `sh`, a pipe's status is its last command's,
 and a test filter that matches nothing exits 5 under pytest. Read the output:
-the command, or the tree, is what to fix.
+the command, or the tree, is what to fix. It runs again after the last patch
+when one was caught, and one that fails there is exit 3, `but the command now
+fails with no patch applied`: something besides the patches changed during the
+run, a tool upgraded or a service gone, so no catch can be trusted until you
+have read its output.
 
 **To see what caught each break, give `--verify-lines N`.** Without it a caught
 patch's output is not printed, only that of one that exited 0 or timed out.

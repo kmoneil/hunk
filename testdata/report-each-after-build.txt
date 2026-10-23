@@ -1,0 +1,6 @@
+hunk: after the last patch, the build exited 2 with no patch applied, and it passed before the first: something besides the patches makes it fail, so the command could not run again to confirm the catches
+
+$ zig build
+build.zig.zon:7:20: error: hash mismatch: manifest declares 1220ab, found 1220cd
+(last 1 of 1 lines)
+tried 3 patches and put back every file; every command exited nonzero, but the build now fails with no patch applied (292.3s)

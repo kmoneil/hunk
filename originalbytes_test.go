@@ -259,8 +259,8 @@ func TestEachCarriesOnPastAFileWrittenBackAsItWas(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit %d, want 0, every patch caught:\n%s%s", code, out, errOut)
 	}
-	if n := markerLines(t, mark); n != 3 {
-		t.Errorf("the command ran %d times, want 3: on the tree as it is, then under each patch", n)
+	if n := markerLines(t, mark); n != 4 {
+		t.Errorf("the command ran %d times, want 4: on the tree as it is, under each patch, and on the tree again after the last (#110)", n)
 	}
 	for _, s := range []string{"was not restored", "stopped at", "not tried"} {
 		if strings.Contains(out+errOut, s) {
