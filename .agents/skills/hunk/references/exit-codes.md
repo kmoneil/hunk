@@ -26,7 +26,9 @@ rolled back.
 when every patch was tried and put back and every command exited nonzero; 3
 when a command exited 0 or timed out, which a deliberate-break run reads as a
 missed break or a hang, or, under `--build`, a patch did not build, which
-tested nothing; 4 when a file was not put back, and the run stopped there; 1,
+tested nothing, or the command or `--build` failed with no patch applied after
+the last patch, which leaves every catch in doubt (5 if it could not start);
+4 when a file was not put back, and the run stopped there; 1,
 2 or 5 when the preflight refused ("could not be read", "would not apply",
 "could not be checked"), or a patch stopped applying mid-run (2, "no longer
 applies": the tree changed under the run); 1 when `--build` or the command

@@ -52,11 +52,11 @@ func TestEachBuild(t *testing.T) {
 		if code != exitOK {
 			t.Fatalf("exit %d: %s%s", code, out, errOut)
 		}
-		if n := markerLines(t, built); n != 4 {
-			t.Errorf("the build ran %d times, want 4: once on the tree as it is, once a patch", n)
+		if n := markerLines(t, built); n != 5 {
+			t.Errorf("the build ran %d times, want 5: on the tree as it is, once a patch, and on the tree again after the last (#110)", n)
 		}
-		if n := markerLines(t, ran); n != 4 {
-			t.Errorf("the command ran %d times, want 4: once on the tree as it is, once a patch", n)
+		if n := markerLines(t, ran); n != 5 {
+			t.Errorf("the command ran %d times, want 5: on the tree as it is, once a patch, and on the tree again after the last (#110)", n)
 		}
 		if diff := snapshotDiff(before, snapshot(t, root)); len(diff) > 0 {
 			t.Errorf("tree changed: %v", diff)
@@ -82,11 +82,11 @@ func TestEachBuild(t *testing.T) {
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d, want 3: %s%s", code, out, errOut)
 		}
-		if n := markerLines(t, ran); n != 3 {
-			t.Errorf("the command ran %d times, want 3: on the tree as it is and under the two that built, never for the patch that did not", n)
+		if n := markerLines(t, ran); n != 4 {
+			t.Errorf("the command ran %d times, want 4: on the tree as it is, under the two that built, never for the patch that did not, and on the tree again after the last (#110)", n)
 		}
-		if n := markerLines(t, built); n != 4 {
-			t.Errorf("the build ran %d times, want 4", n)
+		if n := markerLines(t, built); n != 5 {
+			t.Errorf("the build ran %d times, want 5", n)
 		}
 		if diff := snapshotDiff(before, snapshot(t, root)); len(diff) > 0 {
 			t.Errorf("tree changed: the patch that did not build was not put back: %v", diff)
@@ -128,8 +128,8 @@ func TestEachBuild(t *testing.T) {
 		if code != exitVerifyFailed {
 			t.Fatalf("exit %d, want 3: %s%s", code, out, errOut)
 		}
-		if n := markerLines(t, ran); n != 2 {
-			t.Errorf("the command ran %d times, want 2: on the tree as it is and under the patch that built", n)
+		if n := markerLines(t, ran); n != 3 {
+			t.Errorf("the command ran %d times, want 3: on the tree as it is, under the patch that built, and on the tree again after the last (#110)", n)
 		}
 		if l := eachLine(errOut, patches[1]); l != "did not build: the build timed out after 2s" {
 			t.Errorf("the line = %q: %q", l, errOut)
@@ -160,8 +160,9 @@ func TestEachBuild(t *testing.T) {
 		for path, want := range map[string]string{
 			// The tree as it is, then the first patch, then the second, the
 			// first put back in between: the command as the build, since #90.
-			buildSaw:   "alpha\nbeta\nALPHA\nbeta\nalpha\nBETA\n",
-			commandSaw: "alpha\nbeta\nALPHA\nbeta\nalpha\nBETA\n",
+			// Then the tree as it is again, the second put back (#110).
+			buildSaw:   "alpha\nbeta\nALPHA\nbeta\nalpha\nBETA\nalpha\nbeta\n",
+			commandSaw: "alpha\nbeta\nALPHA\nbeta\nalpha\nBETA\nalpha\nbeta\n",
 		} {
 			b, err := os.ReadFile(filepath.FromSlash(path))
 			must(t, err)

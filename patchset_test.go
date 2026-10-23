@@ -266,8 +266,9 @@ func TestABreakSetIsTriedPatchByPatch(t *testing.T) {
 			t.Fatalf("exit %d: %s%s", code, out, errOut)
 		}
 		// The baseline run, then one per patch: three patches from two files.
-		if n := markerLines(t, mark); n != 4 {
-			t.Errorf("the command ran %d times, want 4", n)
+		// Then the tree as it is again, after the last (#110).
+		if n := markerLines(t, mark); n != 5 {
+			t.Errorf("the command ran %d times, want 5", n)
 		}
 		assertUnchanged(t, root, before)
 		for _, line := range []string{

@@ -42,6 +42,12 @@ package main
 // test, an exit taken from the wrong end of a pipe, a cd from the wrong
 // directory: each is a careful caller's mistake, and each was in the field.
 //
+// Both run once more after the last patch, from issue #110: something besides
+// the patches can change during a run, a linter upgraded or a service gone,
+// and then every later patch is caught by that rather than by its test. A
+// run that fails there leaves every catch in doubt, and the exit is 3, as for
+// a break that passed.
+//
 // A caught patch's output prints only when --verify-lines is given (#89): a
 // passing suite's forty lines under every catch would bury the misses, and
 // the caller who wants to know what caught each asks for the lines that say.
@@ -396,14 +402,23 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 	o := eachOutcome{
 		tried: tried, zeros: zeros, timeouts: timeouts, notBuilt: notBuilt,
 		stopAt: stopAt, stopErr: stopErr, sig: sig,
-		seconds: time.Since(start).Seconds(),
 	}
+	if stopAt < 0 && o.caught() > 0 {
+		// The tree as it is once more, the last patch back (#110). The runs
+		// before the first patch say the command could pass then; these say
+		// it still can, so that a catch is the patch's and not that of
+		// something that changed meanwhile. Only a catch needs it: a break
+		// that passed, hung or did not build is already the news.
+		o.sig, o.afterErr = eachAfter(cfg, tree, stop, &bases)
+	}
+	o.bases = bases
+	o.seconds = time.Since(start).Seconds()
 	code := eachExit(patches, o)
-	if sig != nil && code != exitRollbackFailed && interrupted != nil {
-		*interrupted = sig
+	if o.sig != nil && code != exitRollbackFailed && interrupted != nil {
+		*interrupted = o.sig
 	}
 	if cfg.asJSON {
-		return eachJSON(cfg, patches, bases, code, eachStopReason(patches, stopAt, sig, stopErr), stdout, stderr)
+		return eachJSON(cfg, patches, bases, code, eachStopReason(patches, o), stdout, stderr)
 	}
 	writeEachEnd(cfg, patches, o, code, stdout, stderr)
 	return code
@@ -470,21 +485,91 @@ func runBuild(cfg eachConfig, txn *Txn, tree *Tree, stop Stop) (*Verify, error) 
 	return b, nil
 }
 
-// eachBaselines is the runs on the tree as it is, before the first patch:
-// --build's where there is one, then the command's. Either is nil where it
-// did not run.
+// eachAfter runs the build, where there is one, and then the command on the
+// tree as it is once the last patch is back (#110), into bases. The build
+// goes first for the reason it does before the first patch, and one more: the
+// last patch's build may have left what the command runs, and the command
+// would then be testing that break. A signal already waiting ends the first
+// run as it starts, so there is no separate check for one. It returns the
+// signal that ended either run, and the run that could not start.
+func eachAfter(cfg eachConfig, tree *Tree, stop Stop, bases *eachBaselines) (os.Signal, *afterCannotStart) {
+	if cfg.build != "" {
+		b, err := runOnTheTree(cfg.build, cfg, tree, stop)
+		if err != nil {
+			return nil, &afterCannotStart{who: "the --build command", err: err}
+		}
+		bases.buildAfter = b
+		if !b.OK {
+			return b.Signal, nil
+		}
+	}
+	c, err := runOnTheTree(cfg.command, cfg, tree, stop)
+	if err != nil {
+		return nil, &afterCannotStart{who: "the --try command", err: err}
+	}
+	bases.commandAfter = c
+	return c.Signal, nil
+}
+
+// afterCannotStart is a run on the tree as it is after the last patch that
+// could not start: exit 5, as the same failure before the first patch is.
+type afterCannotStart struct {
+	who string // "the --build command" or "the --try command"
+	err error
+}
+
+func (e *afterCannotStart) Error() string {
+	return fmt.Sprintf("could not run %s with no patch applied after the last patch: %v", e.who, e.err)
+}
+
+// eachBaselines is the runs on the tree as it is: --build's where there is
+// one, then the command's, before the first patch, and the same pair after
+// the last (#110). Each is nil where it did not run.
 type eachBaselines struct {
-	build, command *Verify
+	build, command           *Verify
+	buildAfter, commandAfter *Verify
+}
+
+// failedAfter is the run after the last patch that ended by itself or by the
+// timeout without passing, and who ran it: the build's, which goes first, or
+// the command's. Nil when both passed or neither ran; one a signal ended is
+// the signal's to report.
+func (b eachBaselines) failedAfter() (*Verify, string) {
+	switch {
+	case b.buildAfter != nil && !b.buildAfter.OK && b.buildAfter.Signal == nil:
+		return b.buildAfter, "the build"
+	case b.commandAfter != nil && !b.commandAfter.OK && b.commandAfter.Signal == nil:
+		return b.commandAfter, "the command"
+	}
+	return nil, ""
+}
+
+// endedHow is how a run on the tree as it is ended without passing, in the
+// words the sentences about it use: "exited 5", "timed out after 1s".
+func endedHow(b *Verify) string {
+	if b.TimedOut > 0 {
+		return "timed out after " + shortDuration(b.TimedOut)
+	}
+	return fmt.Sprintf("exited %d", b.Status)
 }
 
 // baselineFailure is why a run on the tree as it is refused the run: who ran,
 // how it ended, and what every patch would have read as.
 func baselineFailure(who string, b *Verify, reads string) string {
-	what := fmt.Sprintf("exited %d", b.Status)
-	if b.TimedOut > 0 {
-		what = "timed out after " + shortDuration(b.TimedOut)
+	return who + " " + endedHow(b) + " with no patch applied, so every patch would read as " + reads + "; nothing was tried"
+}
+
+// afterFailure is why the run on the tree as it is after the last patch leaves
+// every catch in doubt: who ran, how it ended, and what that means. It opens
+// with "after the last patch" so that no reader, scripts/corpus included,
+// takes it for the refusal before the first patch, which is exit 1.
+func afterFailure(who string, b *Verify) string {
+	s := "after the last patch, " + who + " " + endedHow(b) +
+		" with no patch applied, and it passed before the first: something besides the patches makes it fail, "
+	if who == "the build" {
+		return s + "so the command could not run again to confirm the catches"
 	}
-	return who + " " + what + " with no patch applied, so every patch would read as " + reads + "; nothing was tried"
+	return s + "so any catch may be that"
 }
 
 // eachBaselineRefused reports a run refused before its first patch by a run
@@ -509,6 +594,14 @@ type eachOutcome struct {
 	stopErr                error // a mid-run refusal or I/O failure
 	sig                    os.Signal
 	seconds                float64
+	bases                  eachBaselines     // the runs on the tree as it is, before and after
+	afterErr               *afterCannotStart // a run after the last patch that could not start
+}
+
+// caught is how many patches the command caught: tried, and neither passed,
+// timed out nor failed to build.
+func (o eachOutcome) caught() int {
+	return o.tried - o.zeros - o.timeouts - o.notBuilt
 }
 
 // eachExit is §4.3's exit: the run's own, never a command's.
@@ -520,10 +613,20 @@ func eachExit(patches []*eachPatch, o eachOutcome) int {
 		return signalExit(o.sig)
 	case o.stopErr != nil:
 		return ExitCode(o.stopErr)
+	case o.afterErr != nil:
+		// As the same failure before the first patch is: I/O.
+		return exitIO
 	case o.zeros > 0 || o.timeouts > 0 || o.notBuilt > 0:
 		// As a verify that went against the caller exits: the tree is back in
 		// place, and the verdict is the news (§4.3). A patch that did not
 		// build was shown nothing, so it is not a catch either.
+		return exitVerifyFailed
+	}
+	if failed, _ := o.bases.failedAfter(); failed != nil {
+		// The tree as it is fails after the last patch (#110), so no catch is
+		// shown to be the patch's. Not 1, which says nothing was tried, and
+		// not 0, which says every catch stands: the lines are the news, as
+		// they are at 3.
 		return exitVerifyFailed
 	}
 	return exitOK
@@ -553,6 +656,15 @@ func writeEachEnd(cfg eachConfig, patches []*eachPatch, o eachOutcome, code int,
 			fmt.Fprintf(stderr, "not tried: %s\n", strings.Join(notTried, ", "))
 		}
 	}
+	// The run on the tree as it is after the last patch, where it did not
+	// pass: why, and its output, which is what says what changed (#110).
+	if failed, who := o.bases.failedAfter(); failed != nil {
+		fmt.Fprintf(stderr, "hunk: %s\n", afterFailure(who, failed))
+		writeCommandOutput(stderr, failed)
+	}
+	if o.afterErr != nil {
+		fmt.Fprintf(stderr, "hunk: %v\n", o.afterErr)
+	}
 
 	// The summary: stdout when the run is clean, as any success is, stderr
 	// otherwise.
@@ -571,8 +683,8 @@ func writeEachEnd(cfg eachConfig, patches []*eachPatch, o eachOutcome, code int,
 		}
 		fmt.Fprintln(w)
 	default:
-		fmt.Fprintf(w, "tried %s and put back every file; %s (%.1fs)\n",
-			patchCount(o.tried), eachVerdict(o.tried, o.zeros, o.timeouts, o.notBuilt), o.seconds)
+		fmt.Fprintf(w, "tried %s and put back every file; %s%s (%.1fs)\n",
+			patchCount(o.tried), eachVerdict(o.tried, o.zeros, o.timeouts, o.notBuilt), eachAfterClause(o), o.seconds)
 	}
 }
 
@@ -644,19 +756,51 @@ func eachStopClause(patches []*eachPatch, stopAt int, sig os.Signal, stopErr err
 }
 
 // eachStopReason is the one-line form of the stop for --json, where the text
-// above would have told the story.
-func eachStopReason(patches []*eachPatch, stopAt int, sig os.Signal, stopErr error) string {
-	if stopAt < 0 {
-		return ""
+// above would have told the story; for a run that did not stop, of the run on
+// the tree as it is after the last patch where that did not pass (#110).
+func eachStopReason(patches []*eachPatch, o eachOutcome) string {
+	if o.stopAt < 0 {
+		return eachAfterReason(o)
 	}
-	ep := patches[stopAt]
+	ep := patches[o.stopAt]
 	switch {
 	case len(ep.failures) > 0:
 		return fmt.Sprintf("%s no longer applies; the preflight matched every patch, so the tree has changed since the run began", ep.name)
-	case stopErr != nil:
-		return fmt.Sprintf("at %s: %v", ep.name, stopErr)
+	case o.stopErr != nil:
+		return fmt.Sprintf("at %s: %v", ep.name, o.stopErr)
 	}
-	return eachStopClause(patches, stopAt, sig, stopErr)
+	return eachStopClause(patches, o.stopAt, o.sig, o.stopErr)
+}
+
+// eachAfterClause is the summary's word on the run on the tree as it is after
+// the last patch, where it did not pass (#110): "" where it passed or did not
+// run. Each begins ", but", which is what scripts/corpus reads 3 or 5 off.
+func eachAfterClause(o eachOutcome) string {
+	failed, who := o.bases.failedAfter()
+	switch {
+	case o.sig != nil:
+		return ", but the check with no patch applied was interrupted by " + signalName(o.sig)
+	case o.afterErr != nil:
+		return ", but " + o.afterErr.who + " could not start with no patch applied"
+	case failed != nil:
+		return ", but " + who + " now fails with no patch applied"
+	}
+	return ""
+}
+
+// eachAfterReason is the same for --json's error, as a sentence the text
+// prints above the summary.
+func eachAfterReason(o eachOutcome) string {
+	failed, who := o.bases.failedAfter()
+	switch {
+	case o.sig != nil:
+		return "the check with no patch applied after the last patch was interrupted by " + signalName(o.sig)
+	case o.afterErr != nil:
+		return o.afterErr.Error()
+	case failed != nil:
+		return afterFailure(who, failed)
+	}
+	return ""
 }
 
 // eachVerdict is the summary's middle: what the commands said, and how many
@@ -715,6 +859,12 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code in
 	}
 	if bases.command != nil {
 		je.TryBaseline = eachCommandJSON(bases.command)
+	}
+	if bases.buildAfter != nil {
+		je.BaselineAfter = eachBuildJSON(bases.buildAfter)
+	}
+	if bases.commandAfter != nil {
+		je.TryBaselineAfter = eachCommandJSON(bases.commandAfter)
 	}
 	if stopReason != "" {
 		out.Error = stopReason

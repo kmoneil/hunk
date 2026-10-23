@@ -129,8 +129,8 @@ func TestEachCommandBaselineOrder(t *testing.T) {
 		}
 		b, err := os.ReadFile(log)
 		must(t, err)
-		if string(b) != "build\ncommand\nbuild\ncommand\n" {
-			t.Errorf("the runs went %q, want the build and the command on the tree as it is, then under the patch", b)
+		if string(b) != "build\ncommand\nbuild\ncommand\nbuild\ncommand\n" {
+			t.Errorf("the runs went %q, want the build and the command on the tree as it is, then under the patch, then on the tree again (#110)", b)
 		}
 	})
 

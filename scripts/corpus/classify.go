@@ -166,6 +166,11 @@ var (
 	// command's run there, from 2026-10-16 (#90), refuses in the same words
 	// and at the same code.
 	reEachBaseline = regexp.MustCompile(`(?m)^hunk: the (?:build|command) (?:exited \d+|timed out after \S+) with no patch applied`)
+	// The same pair after the last patch, from 2026-10-22 (#110): a clause
+	// after the summary's verdict, beginning ", but", where either did not
+	// pass. A signal during them is its own exit, one that could not start
+	// is 5, and a failure is 3 whatever the verdict before it says.
+	reEachAfterInterrupted = regexp.MustCompile(`, but the check with no patch applied was interrupted by (SIG[A-Z]+)`)
 
 	// A --verify or --try command that could not start, which is 5 whether it
 	// was refused before writing (no sh) or rolled back after (an sh that
@@ -409,7 +414,14 @@ func HunkExit(cmd, result string) int {
 		return 5
 	}
 	if m := reEachVerdict.FindStringSubmatch(result); m != nil {
-		if strings.Contains(m[1], "exited 0") || strings.Contains(m[1], "timed out") || strings.Contains(m[1], "did not build") {
+		if a := reEachAfterInterrupted.FindStringSubmatch(m[1]); a != nil {
+			return signalExit(a[1])
+		}
+		if strings.Contains(m[1], ", but ") && strings.Contains(m[1], " could not start with no patch applied") {
+			return 5
+		}
+		if strings.Contains(m[1], "exited 0") || strings.Contains(m[1], "timed out") || strings.Contains(m[1], "did not build") ||
+			strings.Contains(m[1], " now fails with no patch applied") {
 			return 3
 		}
 		return ExitOK

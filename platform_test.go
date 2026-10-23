@@ -169,6 +169,19 @@ func needsShellSymlinks(t *testing.T) {
 	}
 }
 
+// needsShellSwap skips a test that puts a symbolic link to the real sh first on
+// PATH and has a command swap it mid-run for a file that cannot run, which is
+// how a shell that starts the patches' commands and then cannot start the run
+// after the last patch is reached. Windows finds sh.exe by its extension, and
+// a link to Git for Windows' sh needs a privilege the runner does not grant;
+// brokenShell, which fails from the start, is the half Windows does test.
+func needsShellSwap(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows finds sh.exe by its extension, and making the link needs a privilege")
+	}
+}
+
 // brokenShell returns a directory to use as PATH in which exec.LookPath finds
 // an sh that cannot run: garbage, marked executable where there is such a
 // mark. It is how a verify command that is found and still cannot start is
