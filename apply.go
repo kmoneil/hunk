@@ -139,6 +139,9 @@ type FileResult struct {
 type Result struct {
 	Files []FileResult
 	Hunks int
+	// Slips are the replacements whose ends disagree about a newline
+	// (#111), in hunk order, warned of after the report.
+	Slips []Slip
 }
 
 // ValidationError is exit 2: one or more hunks did not match, and nothing was
@@ -270,6 +273,8 @@ type Txn struct {
 	hunkTarget []Target
 	// crlfPatch is Patch.CRLF, kept by Load for convert and created.
 	crlfPatch bool
+	// slips are what Validate found, for the Result (#111).
+	slips []noted
 	// beforeCommit runs after the check and before the first write, when it is
 	// set. The CLI installs its signal handler there: earlier, a signal still
 	// kills a load or a validation that writes nothing, and a hung one with it.
@@ -588,6 +593,7 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			// example that corresponds to that patch.
 			f.added += lineCount(repl) * h.Count
 			f.removed += lineCount(old) * h.Count
+			x.noteSlips(n, h, f, old, repl, next)
 		}
 		f.cur = next
 	}
@@ -1402,6 +1408,11 @@ func shortHash(sum [sha256.Size]byte) string {
 
 func (x *Txn) result(hunks int) *Result {
 	r := &Result{Hunks: hunks}
+	for _, s := range x.slips {
+		if s.stands() {
+			r.Slips = append(r.Slips, s.Slip)
+		}
+	}
 	for _, f := range x.files {
 		op := f.finalOp()
 		if op == "" {

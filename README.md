@@ -202,7 +202,14 @@ Three rules worth knowing before the first patch:
    trailing newline gets one when it is written, and `@@ append` first ends the
    file's last line if it has none. `@@ create` writes its payload exactly, so
    leave the blank line if the new file should end in a newline. The report
-   says `(no final newline)` when it does not.
+   says `(no final newline)` when it does not. A replacement's two ends have
+   to agree: a blank line under `@@ new` and none under `@@ old`, which a
+   blank line left between hunks for readability gives, leaves an empty line
+   after the replacement, and the other way round joins the next line onto it
+   or takes away the file's final newline. The batch applies as written, and
+   the report ends with a `warning:` on stderr, under `--quiet` too, naming the
+   hunk, the line it left and the fix. To add an empty line on purpose, end
+   both with the blank line and give `@@ new` a second.
 2. **Hunks apply in order, against the file as earlier hunks left it.** So a
    later hunk can match text an earlier one created. A hunk that fails stops the
    later hunks against *that file*, which are reported as skipped rather than
@@ -260,8 +267,10 @@ patch without the line is the usual fix. A document about `hunk` may really
 hold such a line: `--allow-mistyped-delimiter` applies the patch with it, and
 the report then ends with a warning on stderr, under `--quiet` too, that names
 the line and the file, counts any lines after it and says they never ran as
-commands. `--json` carries each line in `warnings` either way: the patch line,
-the path, the line, how many payload lines follow it, and the sentence.
+commands. `--json` carries each line in `warnings` either way: its `kind`,
+`mistyped_delimiter`, the patch line, the path, the line, how many payload lines
+follow it, and the sentence. The warnings of rule 1 are there too, as
+`empty_line`, `joined_line` and `no_final_newline`, with the hunk.
 
 `hunk format` prints the full grammar and a worked example that applies.
 

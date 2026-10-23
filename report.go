@@ -222,10 +222,17 @@ func (r *Report) changedTheTree() bool {
 // under quiet too: it is a guess about what the caller meant rather than a
 // fact about what hunk did, it is something to act on, and a --try report has
 // to start "tried" (§4.1).
+//
+// A replacement whose ends disagree about a newline (#111) is warned of
+// there too, before the strays, for the same reasons.
 func (r *Report) Text(out, errOut io.Writer, quiet bool) {
 	o, e := &tally{w: out}, &tally{w: errOut}
 	r.text(o, e, quiet)
-	writeStrays(errOut, "", r.Strays, r.changedTheTree(), o.n+e.n > 0)
+	gap := o.n+e.n > 0
+	if r.Result != nil && writeSlips(errOut, "", r.Result.Slips, r.changedTheTree(), gap) {
+		gap = false
+	}
+	writeStrays(errOut, "", r.Strays, r.changedTheTree(), gap)
 }
 
 func (r *Report) text(out, errOut io.Writer, quiet bool) {
@@ -671,21 +678,29 @@ type jsonReport struct {
 	// NotRestored is what a commit that failed part-way could not put back.
 	// The verify's own list is inside Verify.
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
-	// Warnings are the lines that look like a mistyped heredoc delimiter
-	// (#92), whatever the outcome.
+	// Warnings are the replacements whose ends disagree about a newline
+	// (#111), when the batch matched, and the lines that look like a
+	// mistyped heredoc delimiter (#92), whatever the outcome.
 	Warnings []jsonWarning `json:"warnings,omitempty"`
 }
 
-// jsonWarning is one stray line: where it is in the patch, the file its
-// payload is for, the line, how many payload lines follow it, and the text
-// report's sentence. Patch names the patch file under --each alone, as a
-// failure's does.
+// jsonWarning is one warning, and kind says which. A stray line,
+// "mistyped_delimiter": where it is in the patch, the file its payload is
+// for, the line, how many payload lines follow it, and the text report's
+// sentence. A slip, "empty_line", "joined_line" or "no_final_newline": the
+// hunk, its patch line, its file, the line the slip leaves, and the
+// sentence. Patch names the patch file under --each alone, as a failure's
+// does. Kind came in on 2026-10-23 with the slips; a warning from before
+// then is a stray.
 type jsonWarning struct {
-	Patch      string `json:"patch,omitempty"`
-	PatchLine  int    `json:"patch_line"`
-	Path       string `json:"path"`
-	Text       string `json:"text"`
-	LinesAfter int    `json:"lines_after"`
+	Kind      string `json:"kind"`
+	Patch     string `json:"patch,omitempty"`
+	Hunk      int    `json:"hunk,omitempty"`
+	PatchLine int    `json:"patch_line"`
+	Path      string `json:"path"`
+	Text      string `json:"text"`
+	// LinesAfter is a stray's alone, and is there when it is 0.
+	LinesAfter *int   `json:"lines_after,omitempty"`
 	Message    string `json:"message"`
 }
 
@@ -698,9 +713,10 @@ func jsonWarnings(patchName string, strays []Stray, onDisk, refused bool) []json
 		if refused {
 			msg = strayRefusal(patchName, s)
 		}
+		after := s.After
 		out = append(out, jsonWarning{
-			Patch: patchName, PatchLine: s.Line, Path: s.Path, Text: string(s.Text),
-			LinesAfter: s.After, Message: msg,
+			Kind: "mistyped_delimiter", Patch: patchName, PatchLine: s.Line, Path: s.Path, Text: string(s.Text),
+			LinesAfter: &after, Message: msg,
 		})
 	}
 	return out
@@ -928,8 +944,11 @@ func (r *Report) JSON(w io.Writer) error {
 			}
 		}
 	}
+	if r.Result != nil {
+		out.Warnings = slipWarnings("", r.Result.Slips, r.changedTheTree())
+	}
 	var md *MistypedDelimiters
-	out.Warnings = jsonWarnings("", r.Strays, r.changedTheTree(), errors.As(r.Err, &md))
+	out.Warnings = append(out.Warnings, jsonWarnings("", r.Strays, r.changedTheTree(), errors.As(r.Err, &md))...)
 	return encodeReport(w, out)
 }
 

@@ -758,6 +758,12 @@ and append first ends the file's last line if it has none. create writes its
 payload exactly, so leave the blank line if the new file should end in a
 newline. The report says "(no final newline)" when it does not.
 
+Give a replacement's old and new the same ending. A blank line under new and
+none under old leaves an empty line after the replacement, and the other way
+round joins the next line onto it. Either applies, and a warning after the
+report names the hunk. To add an empty line on purpose, end both with a blank
+line and new with two.
+
 A created file's mode is 0644 less the umask, as for a shell redirect. A file
 that existed keeps its mode, including one deleted and created again in the
 same batch.

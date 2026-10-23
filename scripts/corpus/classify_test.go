@@ -738,6 +738,12 @@ var reportGoldens = map[string]int{
 	"cli-mistyped-delimiter-rest-of-the-command": 0,
 	"cli-mistyped-delimiter-verify-failed":       3,
 	"cli-each-mistyped-delimiter":                3,
+	// #111: a report followed by a warning of a replacement whose ends
+	// disagree about a newline, which changes no exit either.
+	"cli-slip":         0,
+	"cli-slip-dry-run": 0,
+	"cli-slip-json":    0,
+	"cli-each-slip":    0,
 	// #100: a break set, one file of several patches under "@@ patch"
 	// headings. A heading fault refuses the run at 1, and a heading outside
 	// --each is a parse error.

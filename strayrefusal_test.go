@@ -144,7 +144,7 @@ func TestAMistypedDelimiterRefusedInJSON(t *testing.T) {
 			var msgs []string
 			for i, want := range []struct{ line, after int }{{6, 0}, {11, 1}} {
 				w := r.Warnings[i]
-				if w.PatchLine != want.line || w.LinesAfter != want.after || w.Path != "notes.txt" || w.Patch != "" {
+				if w.Kind != "mistyped_delimiter" || w.PatchLine != want.line || w.LinesAfter == nil || *w.LinesAfter != want.after || w.Path != "notes.txt" || w.Patch != "" {
 					t.Errorf("warning %d = %+v", i+1, w)
 				}
 				if !strings.Contains(w.Message, "so nothing was written") || !strings.HasSuffix(w.Message, allowMistypedFlag) {

@@ -1,0 +1,4 @@
+tried p1.hunk  the command exited 1 (0.0s)
+tried 1 patch and put back every file; every command exited nonzero (0.0s)
+
+warning: p1.hunk hunk 1 (line 2) leaves an empty line after "A" in a.txt: its new text ends in a newline and its old text does not; if that was not meant, take out the blank line under its new text
