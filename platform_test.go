@@ -81,6 +81,16 @@ func needsSignals(t *testing.T) {
 	}
 }
 
+// needsGit skips a test that checks a count against git's own, where there is
+// no git to ask. Every CI runner has one, so this is for a bare machine, not
+// for a platform: what git counts as a line is the same everywhere.
+func needsGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git on PATH to compare the counts with")
+	}
+}
+
 // needsMake skips a test that runs this repository's Makefile. Its recipes are
 // POSIX shell and the developer workflow they serve runs on macOS and Linux;
 // the Windows job tests the binary, and has neither make nor the sh the

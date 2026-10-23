@@ -5,14 +5,14 @@
     {
       "path": "e.txt",
       "op": "modify",
-      "added": 2,
+      "added": 4,
       "removed": 2
     },
     {
       "path": "j.txt",
       "op": "modify",
       "added": 1,
-      "removed": 1
+      "removed": 2
     },
     {
       "path": "z.txt",
@@ -23,7 +23,7 @@
     {
       "path": "m.txt",
       "op": "modify",
-      "added": 3,
+      "added": 6,
       "removed": 3
     }
   ],
