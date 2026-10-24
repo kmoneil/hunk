@@ -3,9 +3,13 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	goversion "go/version"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -170,6 +174,156 @@ func TestMakefileNamesNoFixedTempPath(t *testing.T) {
 		if strings.HasPrefix(line, "\t") && strings.Contains(line, "/tmp/") {
 			t.Errorf("Makefile:%d: a recipe names a fixed path under /tmp; use mktemp -d: %s", i+1, strings.TrimSpace(line))
 		}
+	}
+}
+
+// fixedIn is the first Go release whose fuzz coordinator does not fail a clean
+// run on its own -fuzztime deadline, `context deadline exceeded` with no input
+// written: Go issue 75804. The fix reached release-branch.go1.27 before
+// go1.27.0 was tagged, and no 1.26 release has it.
+const fixedIn = "go1.27.0"
+
+var (
+	fuzzGoPin   = regexp.MustCompile(`(?m)^FUZZ_GO_VERSION[ \t]*:=[ \t]*(.*?)[ \t]*$`)
+	goDirective = regexp.MustCompile(`(?m)^go[ \t]+(.*?)[ \t]*$`)
+	bareRelease = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+)
+
+// fuzzToolchainFault says what is wrong with fuzzing on the release pin while
+// go.mod's go line says mod, or "" when nothing is.
+//
+// The pin exists only because go.mod is below fixedIn, so it is a fault for go.mod
+// to reach it with the pin still there: the bump that crosses it removes the
+// exception, and every job is back on go.mod's toolchain.
+func fuzzToolchainFault(pin, mod string) string {
+	switch {
+	case !goversion.IsValid("go" + mod):
+		return fmt.Sprintf("go.mod's go line %q is not a Go version", mod)
+	case goversion.Compare("go"+mod, fixedIn) >= 0:
+		return fmt.Sprintf("go.mod says go %s, which has the deadline fix already: "+
+			"remove FUZZ_GO_VERSION and fuzz on go.mod's toolchain, as every other job runs", mod)
+	case !bareRelease.MatchString(pin) || !goversion.IsValid("go"+pin):
+		return fmt.Sprintf("FUZZ_GO_VERSION is %q; want a release written bare, like 1.27.3, "+
+			"so that GOTOOLCHAIN=go%s names a toolchain", pin, pin)
+	case goversion.Compare("go"+pin, fixedIn) < 0:
+		return fmt.Sprintf("FUZZ_GO_VERSION is %s, older than %s, the first release whose "+
+			"fuzz coordinator does not fail a clean run on its own deadline", pin, fixedIn)
+	}
+	return ""
+}
+
+// pinned returns what re captures from the one line of file it matches.
+func pinned(t *testing.T, file string, re *regexp.Regexp) string {
+	t.Helper()
+	b, err := os.ReadFile(file)
+	must(t, err)
+	m := re.FindAllStringSubmatch(string(b), -1)
+	if len(m) != 1 {
+		t.Fatalf("%s: %d lines match %s, want 1", file, len(m), re)
+	}
+	return m[0][1]
+}
+
+// The toolchain `make fuzz` runs has the deadline fix, and is pinned only while
+// go.mod's is one that does not.
+func TestTheFuzzToolchainHasTheDeadlineFix(t *testing.T) {
+	for _, tt := range []struct {
+		name, pin, mod string
+		want           string // "" for no fault, else a substring of it
+	}{
+		{name: "today's pin", pin: "1.27.3", mod: "1.26.9"},
+		{name: "the first release with the fix", pin: "1.27.0", mod: "1.26.9"},
+		{name: "a later minor", pin: "1.28.1", mod: "1.26.9"},
+		{name: "go.mod written as a language version", pin: "1.27.3", mod: "1.26"},
+		{name: "a 1.26 release, which never got the fix", pin: "1.26.10", mod: "1.26.9", want: "FUZZ_GO_VERSION is 1.26.10, older than go1.27.0"},
+		{name: "a language version, which no toolchain is", pin: "1.27", mod: "1.26.9", want: `FUZZ_GO_VERSION is "1.27"; want a release written bare`},
+		{name: "spelled as GOTOOLCHAIN spells it", pin: "go1.27.3", mod: "1.26.9", want: `FUZZ_GO_VERSION is "go1.27.3"; want a release written bare`},
+		{name: "a release candidate", pin: "1.27rc1", mod: "1.26.9", want: `FUZZ_GO_VERSION is "1.27rc1"; want a release written bare`},
+		{name: "empty", pin: "", mod: "1.26.9", want: `FUZZ_GO_VERSION is ""; want a release written bare`},
+		{name: "go.mod reaches the fix", pin: "1.27.3", mod: "1.27.0", want: "go.mod says go 1.27.0, which has the deadline fix already"},
+		{name: "go.mod passes it", pin: "1.28.1", mod: "1.28.0", want: "remove FUZZ_GO_VERSION"},
+		{name: "go.mod's line is not a version", pin: "1.27.3", mod: "1.26.x", want: `go.mod's go line "1.26.x" is not a Go version`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fuzzToolchainFault(tt.pin, tt.mod)
+			switch {
+			case tt.want == "" && got != "":
+				t.Errorf("refused %s against go %s: %s", tt.pin, tt.mod, got)
+			case tt.want != "" && !strings.Contains(got, tt.want):
+				t.Errorf("for %s against go %s got %q, want it to say %q", tt.pin, tt.mod, got, tt.want)
+			}
+		})
+	}
+	t.Run("the Makefile's pin against go.mod", func(t *testing.T) {
+		if f := fuzzToolchainFault(pinned(t, "Makefile", fuzzGoPin), pinned(t, "go.mod", goDirective)); f != "" {
+			t.Error(f)
+		}
+	})
+}
+
+// `make fuzz` runs every go command on FUZZ_GO_VERSION's toolchain, whatever
+// GOTOOLCHAIN it inherits: setup-go sets local, and this machine names a 1.26
+// toolchain for everything else. Until 2026-10-24 it ran go.mod's go1.26.9,
+// and issue #116 is the latest night that cost: one target red with nothing
+// found. The go here is a stand-in that records what each call saw, answers
+// `env GOVERSION` with it as a switched go would, and lists two targets.
+func TestMakeFuzzRunsTheFuzzToolchain(t *testing.T) {
+	needsMake(t)
+	want := "go" + pinned(t, "Makefile", fuzzGoPin)
+	dir := t.TempDir()
+	prog, log := filepath.Join(dir, "go"), filepath.Join(dir, "log")
+	must(t, os.WriteFile(prog, []byte(`#!/bin/sh
+printf '%s %s\n' "${GOTOOLCHAIN-unset}" "$*" >> "$FAKEGO_LOG"
+case "$*" in
+"env GOVERSION") echo "${GOTOOLCHAIN-unset}" ;;
+*-list*) printf 'FuzzOne\nFuzzTwo\n' ;;
+esac
+`), 0o755))
+	fuzzCall := regexp.MustCompile(`-fuzz=\^(\w+)\$`)
+	for _, tt := range []struct {
+		name   string
+		env    string // GOTOOLCHAIN in make's environment, "" for unset
+		target string
+		fuzzed []string
+	}{
+		{name: "nothing set", fuzzed: []string{"FuzzOne", "FuzzTwo"}},
+		{name: "setup-go's local", env: "local", fuzzed: []string{"FuzzOne", "FuzzTwo"}},
+		{name: "a 1.26 toolchain named", env: "go1.26.9", fuzzed: []string{"FuzzOne", "FuzzTwo"}},
+		{name: "one target, as the nightly runs it", env: "local", target: "FuzzTwo", fuzzed: []string{"FuzzTwo"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GOTOOLCHAIN", tt.env)
+			if tt.env == "" {
+				must(t, os.Unsetenv("GOTOOLCHAIN"))
+			}
+			must(t, os.WriteFile(log, nil, 0o644))
+			args := []string{"fuzz", "GO=" + prog, "FUZZTIME=1s"}
+			if tt.target != "" {
+				args = append(args, "FUZZTARGET="+tt.target)
+			}
+			code, out := runMake(t, []string{"FAKEGO_LOG=" + log}, args...)
+			if code != 0 {
+				t.Fatalf("exit %d:\n%s", code, out)
+			}
+			if !strings.Contains(out, "fuzz: toolchain "+want+"\n") {
+				t.Errorf("the run does not say it is on %s:\n%s", want, out)
+			}
+			b, err := os.ReadFile(log)
+			must(t, err)
+			var fuzzed []string
+			for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+				saw, call, _ := strings.Cut(l, " ")
+				if saw != want {
+					t.Errorf("go %s ran with GOTOOLCHAIN %s, want %s", call, saw, want)
+				}
+				if m := fuzzCall.FindStringSubmatch(call); m != nil {
+					fuzzed = append(fuzzed, m[1])
+				}
+			}
+			if !slices.Equal(fuzzed, tt.fuzzed) {
+				t.Errorf("fuzzed %v, want %v; the calls were:\n%s", fuzzed, tt.fuzzed, b)
+			}
+		})
 	}
 }
 

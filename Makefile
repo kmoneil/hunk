@@ -20,6 +20,17 @@ GOVULNCHECK_VERSION    := v1.6.0
 # large table would move it and nothing else in the gate would notice.
 SIZE_BUDGET_BYTES := 4718592
 
+# The toolchain `make fuzz` runs, which is not go.mod's. Every go1.26 release
+# has a fuzz coordinator that can fail a clean run on its own -fuzztime
+# deadline, with `context deadline exceeded` and no input written: Go issue
+# 75804, fixed in go1.27.0 and never in 1.26. Only the search moves. go.mod,
+# and with it the minimum Go, the tests that replay every seed and crasher, the
+# vulnerability scan and the release build, all stay on go.mod's toolchain.
+# The go command fetches this one itself, through the module proxy and checked
+# against the checksum database. Once go.mod reaches go1.27.0 it has no reason
+# to exist, and TestTheFuzzToolchainHasTheDeadlineFix fails to say so.
+FUZZ_GO_VERSION := 1.27.3
+
 FUZZTIME ?= 20s
 
 .PHONY: all build fmt fmt-check vet lint test gates deps-gate check corpus corpus-test skill-grade skill-grade-test install hooks tools vuln size fuzz fuzz-targets clean
@@ -96,8 +107,16 @@ fuzz-targets:
 # test` already replays every seed and every committed crasher on every run,
 # which is the regression half and the half worth blocking a merge on. This is
 # the discovery half.
+#
+# Every go command in it runs on FUZZ_GO_VERSION's toolchain, whatever
+# GOTOOLCHAIN the environment holds: setup-go sets local, and an assignment here
+# overrides the environment. It prints which one it got, so a job log answers
+# whether a red night ran the fixed toolchain.
+fuzz: export GOTOOLCHAIN := go$(FUZZ_GO_VERSION)
 fuzz:
-	@for t in $${FUZZTARGET:-$$($(GO) test -list='^Fuzz' . | grep '^Fuzz')}; do \
+	@v=$$($(GO) env GOVERSION) || exit 1; \
+	echo "fuzz: toolchain $$v"; \
+	for t in $${FUZZTARGET:-$$($(GO) test -list='^Fuzz' . | grep '^Fuzz')}; do \
 		echo "fuzz: $$t"; \
 		$(GO) test -run='^$$' -fuzz="^$$t$$" -fuzztime=$(FUZZTIME) . || exit 1; \
 	done

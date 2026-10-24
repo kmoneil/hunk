@@ -22,6 +22,14 @@ permissions:
 # made outside the root through a Windows junction, to 1.26.9. A CI that
 # quietly fell back to an older toolchain would be testing the vulnerable one
 # and reporting green.
+#
+# One exception, and it lives in the Makefile rather than here: `make fuzz`
+# runs the toolchain FUZZ_GO_VERSION pins, which the go command fetches for
+# itself over setup-go's GOTOOLCHAIN=local. Every go1.26 fuzz coordinator can
+# fail a clean run on its own deadline (Go issue 75804, fixed in go1.27.0).
+# Only the search moves: every setup-go here still reads go.mod, so the tests
+# that replay every seed, the scan and the build stay on the toolchain that
+# ships.
 
 jobs:
   check:
