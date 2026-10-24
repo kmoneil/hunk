@@ -32,7 +32,9 @@ on:
 permissions:
   contents: read
 
-# The Go version comes from go.mod. See the note in ci.yml.
+# setup-go installs the Go version go.mod names, as every job does; see the note
+# in ci.yml. The fuzz step itself runs on the newer toolchain the Makefile pins
+# in FUZZ_GO_VERSION, which the go command fetches: see the note there.
 
 jobs:
   targets:
@@ -141,18 +143,22 @@ jobs:
               "A panic is the obvious find and not the only one. These targets also" \
               "assert properties, and a property failure matters more: that a batch" \
               "is all-or-nothing, that a resolved path stays inside the root, that" \
-              "\\\"no anchor found\\\" is only said when no line of old is anywhere in" \
+              "\"no anchor found\" is only said when no line of old is anywhere in" \
               "the file, that the ASCII fold agrees with the rune-by-rune one, that" \
               "an append adds whole lines, and that the near-miss prefilter never" \
               "hides a cause a normalization would name. A wrong refusal and a" \
               "missing refusal are both defects here." \
               "" \
               "**If a target's only failure line is \`context deadline exceeded\`**" \
-              "and no input was attached, nothing was found. That is the Go" \
-              "toolchain's fuzz coordinator racing its own -fuzztime deadline:" \
-              "\`golang/go#75804\`, fixed on Go's master by CL 774140 and in no" \
-              "release yet, so the go1.26 toolchain go.mod pins still has it. Re-run" \
-              "that target and commit nothing. Any other failure is a find." \
+              "and no input was attached, read the \`fuzz: toolchain\` line at the" \
+              "top of its log. Before go1.27.0, Go's fuzz coordinator could race its" \
+              "own -fuzztime deadline and fail a run that found nothing:" \
+              "\`golang/go#75804\`. \`make fuzz\` runs the toolchain FUZZ_GO_VERSION" \
+              "names in the Makefile, which has the fix, so this should not happen." \
+              "On a toolchain older than go1.27.0 nothing was found: re-run that" \
+              "target, commit nothing, and find out why the pin was not used. On" \
+              "go1.27.0 or later it is not that bug: keep the run and look before" \
+              "re-running. Any other failure is a find." \
               "" \
               "If the target is FuzzResolveStaysInsideTheRoot, treat it as a" \
               "containment failure until proven otherwise and check govulncheck" \
