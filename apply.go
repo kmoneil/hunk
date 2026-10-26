@@ -579,6 +579,21 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			continue
 		}
 		repl := x.convert(h.New, f.eol)
+		// Under --eol auto no copy is edited whose replacement would part a
+		// CRLF's two bytes (#122). The diagnosis is attached past §7.2's cap
+		// as well: it prints no span to fill a context window, and without it
+		// the failure would read "expected 1 occurrence, found 1".
+		if x.opt.EOL != EOLStrict {
+			if split := DiagnoseSplitCRLF(f.cur, old, repl, h.Count); split != nil {
+				f.failedAt = n
+				split.Shifted = f.applied
+				failures = append(failures, Failure{
+					Hunk: n, Path: h.Path, PatchLine: h.Line,
+					Expected: h.Count, Found: found, Near: split,
+				})
+				continue
+			}
+		}
 		next := bytes.Replace(f.cur, old, repl, h.Count)
 		// A hunk whose new text equals its old text matched, and changed
 		// nothing. Rewriting the file anyway would move its mtime and

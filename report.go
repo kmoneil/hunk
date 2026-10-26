@@ -385,10 +385,25 @@ func writeFailureBlocks(w io.Writer, failures []Failure) {
 			fmt.Fprint(w, " that overlap")
 		case DiagMixedEndings:
 			fmt.Fprint(w, " across both line endings")
+		case DiagSplitCRLF:
+			// The count was right, so the number found is the claim, and the
+			// clause says how many of those copies cannot be edited.
+			endings := "CRLF line endings"
+			if f.Near.Found == 1 {
+				endings = "a CRLF line ending"
+			}
+			switch {
+			case f.Found == 1:
+				fmt.Fprint(w, ", and replacing it would split ", endings)
+			case f.Near.Found == f.Found:
+				fmt.Fprint(w, ", and replacing them would split ", endings)
+			default:
+				fmt.Fprintf(w, ", and replacing %d of them would split %s", f.Near.Found, endings)
+			}
 		}
 		fmt.Fprintln(w)
 		switch f.Near.Kind {
-		case DiagTooMany, DiagOverlap, DiagMixedEndings:
+		case DiagTooMany, DiagOverlap, DiagMixedEndings, DiagSplitCRLF:
 		default:
 			fmt.Fprintln(w)
 		}
@@ -970,7 +985,7 @@ func jsonFailureOf(f Failure) jsonFailure {
 		switch d.Kind {
 		case DiagTooMany:
 			jf.Lines = d.Lines
-		case DiagOverlap, DiagMixedEndings:
+		case DiagOverlap, DiagMixedEndings, DiagSplitCRLF:
 			// The lines where copies are, as for too many, and the cause
 			// and the remedy, since found alone does not say why a count
 			// that equals the claim was refused.
