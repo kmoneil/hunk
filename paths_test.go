@@ -1024,6 +1024,10 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 	for _, s := range []string{"sub/in.txt", ".git/config", "../x", "", "absd/in.txt", "up/x", "d/../../x"} {
 		f.Add(alias + "/" + s)
 	}
+	// Absolute paths outside the root, in a directory that is there and under
+	// ones that are not, for the --root their refusal offers (#123).
+	f.Add(filepath.Join(filepath.Dir(root), "f.txt"))
+	f.Add(filepath.Join(filepath.Dir(root), "not", "made", "yet.go"))
 	gitDir, err := os.Stat(filepath.Join(root, ".git"))
 	if err != nil {
 		f.Fatal(err)
@@ -1046,6 +1050,24 @@ func FuzzResolveStaysInsideTheRoot(f *testing.F) {
 			// A refusal names a control character; it never prints one.
 			if name, ok := firstControl(pr.Error()); ok {
 				t.Fatalf("Resolve(%q): %q prints %s raw", p, pr.Error(), name)
+			}
+			// A refused absolute path is offered a --root that holds it, and
+			// that root takes it (#123). A directory this process cannot open
+			// is no --root for it, and the offer does not look for another.
+			const outside = "an absolute path is allowed only under the root"
+			if strings.HasPrefix(pr.Reason, outside) {
+				offered := holder(filepath.Clean(p))
+				if !strings.Contains(pr.Reason, "--root "+offered+",") {
+					t.Fatalf("Resolve(%q): %q does not offer --root %s", p, pr.Reason, offered)
+				}
+				moved, err := OpenTree(offered, false)
+				if err != nil {
+					return
+				}
+				defer moved.Close()
+				if _, err := moved.Resolve(p); errors.As(err, &pr) && strings.HasPrefix(pr.Reason, outside) {
+					t.Fatalf("Resolve(%q) offers --root %s, which refuses it the same way: %v", p, offered, err)
+				}
 			}
 			return
 		}
@@ -1438,6 +1460,128 @@ func TestAPathRefusalIsGolden(t *testing.T) {
 				t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
 			}
 			golden(t, c.golden, slashPaths(strings.ReplaceAll(errOut, root, "/the/root")))
+		})
+	}
+}
+
+// An absolute path outside the root is refused naming a --root that holds it,
+// and that --root applies the same patch (#123). Until 2026-10-26 the refusal
+// said where the root was and not how to move it. The base is substituted as
+// /the, so the root is /the/root and the path /the/outside/f.txt, and in JSON
+// as JSON spells it, as in TestAPathThatLeavesTheRootIsGolden.
+func TestAnAbsolutePathOutsideTheRootIsGolden(t *testing.T) {
+	base := cliTree(t, map[string]string{"root/in.txt": "x\n", "outside/f.txt": "x\n"})
+	root, outside := filepath.Join(base, "root"), filepath.Join(base, "outside")
+	before := snapshot(t, base)
+	patch := "@@ file " + filepath.Join(outside, "f.txt") + "\n@@ old\nx\n@@ new\ny\n"
+
+	code, out, errOut := runCLI(t, root, nil, patch)
+	if code != exitNoMatch {
+		t.Fatalf("exit %d, want %d: %s", code, exitNoMatch, errOut)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want the refusal on stderr and nothing else", out)
+	}
+	golden(t, "cli-path-refused-absolute-outside", slashPaths(strings.ReplaceAll(errOut, base, "/the")))
+
+	code, out, errOut = runCLI(t, root, []string{"--json"}, patch)
+	if code != exitNoMatch || errOut != "" {
+		t.Fatalf("exit %d, stderr %q; want %d and nothing on stderr", code, errOut, exitNoMatch)
+	}
+	escaped, err := json.Marshal(base)
+	must(t, err)
+	out = strings.ReplaceAll(out, strings.Trim(string(escaped), `"`), "/the")
+	golden(t, "cli-path-refused-absolute-outside-json", strings.ReplaceAll(out, `\\`, "/"))
+	assertUnchanged(t, base, before)
+
+	// The advice, taken.
+	code, out, errOut = runCLI(t, outside, nil, patch)
+	if code != exitOK {
+		t.Fatalf("under --root %s: exit %d, want %d: %s%s", outside, code, exitOK, out, errOut)
+	}
+	if got := readFile(t, outside, "f.txt"); got != "y\n" {
+		t.Errorf("f.txt = %q, want the edit under the --root the refusal named", got)
+	}
+}
+
+// holder walks up to the nearest directory that exists, on the real
+// filesystem, and keeps the spelling it was given.
+func TestHolderIsTheNearestDirectoryThatExists(t *testing.T) {
+	base := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(base, "d", "e"), 0o755))
+	must(t, os.WriteFile(filepath.Join(base, "d", "f.txt"), []byte("x\n"), 0o644))
+	must(t, os.Symlink(filepath.Join(base, "d"), filepath.Join(base, "alias")))
+	must(t, os.Symlink(filepath.Join(base, "missing"), filepath.Join(base, "dangling")))
+	top := filepath.VolumeName(base) + string(filepath.Separator)
+	// Named for this test's own temporary directory, so nothing at the top of
+	// the volume has it.
+	absent := filepath.Join(top, filepath.Base(filepath.Dir(base)))
+	for _, c := range []struct{ name, in, want string }{
+		{"a file in a directory that is there", filepath.Join(base, "d", "f.txt"), filepath.Join(base, "d")},
+		{"a file a directory further down", filepath.Join(base, "d", "e", "g.txt"), filepath.Join(base, "d", "e")},
+		{
+			"a file to create under directories not made yet",
+			filepath.Join(base, "d", "new", "deeper", "x.go"), filepath.Join(base, "d"),
+		},
+		{"a path through a file", filepath.Join(base, "d", "f.txt", "x"), filepath.Join(base, "d")},
+		{"through a link, spelled as written", filepath.Join(base, "alias", "f.txt"), filepath.Join(base, "alias")},
+		{"through a link that leads nowhere", filepath.Join(base, "dangling", "x"), base},
+		{"directly under the top", top + "f.txt", top},
+		{"under nothing that exists but the top", filepath.Join(absent, "x", "f.txt"), top},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := holder(c.in); got != c.want {
+				t.Errorf("holder(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// A refused absolute path is offered a --root that holds it, and a tree opened
+// there takes the path, so the advice is never a second refusal of the same
+// kind (#123). The rows are spelled as an agent writes them, through a link and
+// with a .. included, and the --root is offered in the patch's spelling.
+func TestARefusedAbsolutePathOffersARootThatTakesIt(t *testing.T) {
+	base := spellingTree(t)
+	tree, err := OpenTree(filepath.Join(base, "real"), false)
+	must(t, err)
+	t.Cleanup(func() { tree.Close() })
+	sep := string(filepath.Separator)
+	for _, c := range []struct{ name, in, root string }{
+		{"a sibling's file", filepath.Join(base, "real2", "f.txt"), filepath.Join(base, "real2")},
+		{
+			"a file to create beside the root, under directories not made",
+			filepath.Join(base, "new", "deep", "x.go"), base,
+		},
+		{
+			"through a link to the directory above the root",
+			filepath.Join(base, "up", "real2", "f.txt"), filepath.Join(base, "up", "real2"),
+		},
+		{
+			"a .. the patch wrote, cleaned first",
+			filepath.Join(base, "real2") + sep + ".." + sep + "real2" + sep + "f.txt", filepath.Join(base, "real2"),
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := tree.Resolve(c.in)
+			var pr *PathRefusal
+			if !errors.As(err, &pr) {
+				t.Fatalf("Resolve(%q) = %v, want a *PathRefusal", c.in, err)
+			}
+			want := "an absolute path is allowed only under the root; to reach it, pass a --root that holds it, " +
+				"such as --root " + c.root + ", and relative paths are resolved there too"
+			if pr.Reason != want {
+				t.Errorf("Reason = %q, want %q", pr.Reason, want)
+			}
+			if !strings.HasSuffix(err.Error(), "; the root is "+tree.Shown()) {
+				t.Errorf("%q does not end naming the root as %q", err, tree.Shown())
+			}
+			moved, err := OpenTree(c.root, false)
+			must(t, err)
+			defer moved.Close()
+			if _, err := moved.Resolve(c.in); err != nil {
+				t.Errorf("under the --root it offered, Resolve(%q): %v", c.in, err)
+			}
 		})
 	}
 }

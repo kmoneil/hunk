@@ -165,6 +165,10 @@ file. A symlink that stays inside the root is followed wherever it stands on
 the path, whether it holds an absolute path or a relative one. A path that
 leads outside, through `..` or a symlink, is refused with exit 2, and the
 refusal names the symlink when there is one, and the root as you gave it.
+An absolute path outside the root is refused the same way, and the refusal
+names a `--root` that would take it: the nearest directory above the path that
+exists, as you spelled it. Relative paths and `--verify` move with `--root`,
+so a path outside the root is best given a batch of its own.
 A `..` written after a symlink in a patch's path is refused too, when
 following the link and cancelling it as text name two different files: the
 refusal prints both readings, so name the file itself.

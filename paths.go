@@ -368,9 +368,15 @@ func (t *Tree) toName(p string) (string, error) {
 		if rest, ok := t.within(filepath.Clean(p)); ok {
 			return t.joinName("", rest, true), nil
 		}
+		// The way out is a --root that holds the path, so the refusal names
+		// one (#123), and says that relative paths move with it: a create of
+		// one in the same batch would land under the new root at exit 0.
+		// --allow-outside-root is the other way out and is not offered, since
+		// it unconfines every path in the batch (#43).
 		return "", &PathRefusal{
 			Path: p, Root: t.Shown(),
-			Reason: "an absolute path is allowed only under the root",
+			Reason: "an absolute path is allowed only under the root; to reach it, pass a --root that holds it, " +
+				"such as --root " + holder(filepath.Clean(p)) + ", and relative paths are resolved there too",
 		}
 	}
 	clean := filepath.Clean(p)
@@ -381,6 +387,22 @@ func (t *Tree) toName(p string) (string, error) {
 		}
 	}
 	return clean, nil
+}
+
+// holder is the nearest directory above p that exists, spelled as p spells it,
+// for a refusal to offer as a --root that holds p. p's parent alone is not
+// enough: a create may name directories it is to make, and OpenTree refuses a
+// root that is not there. The walk ends at the top of p's volume, offered
+// whether or not it exists, which on POSIX it always does.
+func holder(p string) string {
+	d := filepath.Dir(p)
+	for filepath.Dir(d) != d {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+			break
+		}
+		d = filepath.Dir(d)
+	}
+	return d
 }
 
 // refuseOwnDotDotAfterALink refuses a ".." the patch itself wrote that cancels
