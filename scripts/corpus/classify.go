@@ -105,13 +105,15 @@ var (
 	// "hunk quote", from 2026-10-12: it prints lines of a file as a hunk and
 	// applies nothing, so on its own it is no application either. It is nearly
 	// always in a brace group piped into the hunk that does apply, and that
-	// call is the apply's: quotesOnly asks whether a command has any other
+	// call is the apply's: printsOnly asks whether a command has any other
 	// invocation, and hunkInvocation reads past these to the one whose flags
 	// are the batch's. The word boundary rather than a space after it, so the
 	// match ends at the word and the next invocation's anchor is still there
-	// to be found.
-	reHunkQuote = regexp.MustCompile(hunkAnchor + `(?:\S*/)?hunk\s+quote\b`)
-	reQuoteNext = regexp.MustCompile(`^\s*quote\b`)
+	// to be found. "hunk invert", from 2026-10-26, prints the patch that
+	// undoes a patch and applies nothing either, so it is read the same way.
+	reHunkPrints = regexp.MustCompile(hunkAnchor + `(?:\S*/)?hunk\s+(?:quote|invert)\b`)
+	rePrintsNext = regexp.MustCompile(`^\s*(?:quote|invert)\b`)
+	reHunkInvert = regexp.MustCompile(hunkAnchor + `(?:\S*/)?hunk\s+invert\b`)
 
 	// hunk's own report, exit by exit. Every one of these is goldened in
 	// testdata/, and classify_test.go reads the golden files rather than copies
@@ -368,7 +370,7 @@ func IsHunkCall(cmd string) bool { return reHunkCall.MatchString(commandSkeleton
 // Returns ExitProbe for an invocation that asked hunk about itself, and
 // ExitUnclassified for output this file does not recognise.
 func HunkExit(cmd, result string) int {
-	if sk := commandSkeleton(cmd); reHunkProbe.MatchString(sk) || quotesOnly(sk) {
+	if sk := commandSkeleton(cmd); reHunkProbe.MatchString(sk) || printsOnly(sk) {
 		return ExitProbe
 	}
 	if reTryJSON.MatchString(result) {
@@ -472,11 +474,11 @@ func HunkExit(cmd, result string) int {
 	return ExitUnclassified
 }
 
-// quotesOnly reports whether a command's skeleton runs hunk only as "hunk
-// quote". One apply among the quotes makes it an application, classified by
-// the report the apply printed.
-func quotesOnly(skeleton string) bool {
-	n := len(reHunkQuote.FindAllStringIndex(skeleton, -1))
+// printsOnly reports whether a command's skeleton runs hunk only as "hunk
+// quote" or "hunk invert". One apply among them makes it an application,
+// classified by the report the apply printed.
+func printsOnly(skeleton string) bool {
+	n := len(reHunkPrints.FindAllStringIndex(skeleton, -1))
 	return n > 0 && n == len(reHunkCall.FindAllStringIndex(skeleton, -1))
 }
 
@@ -592,15 +594,15 @@ func Marker(cmd string) string {
 // to the end of its line. A flag on the other side of a && belongs to another
 // command, and a patch payload is not a flag at all.
 //
-// The first one that is not "hunk quote": in `{ hunk quote a.go 4 9 --new n; }
-// | hunk --verify 'go build ./...'` the flags of the batch are the second
-// invocation's, and --new is not a flag an application was given. A command
-// that only quotes has no such part.
+// The first one that is not "hunk quote" or "hunk invert": in `{ hunk quote
+// a.go 4 9 --new n; } | hunk --verify 'go build ./...'` the flags of the batch
+// are the second invocation's, and --new is not a flag an application was
+// given. A command that only quotes or inverts has no such part.
 func hunkInvocation(cmd string) string {
 	sk := commandSkeleton(cmd)
 	var loc []int
 	for _, m := range reHunkCall.FindAllStringSubmatchIndex(sk, -1) {
-		if !reQuoteNext.MatchString(sk[m[3]:]) {
+		if !rePrintsNext.MatchString(sk[m[3]:]) {
 			loc = m
 			break
 		}
@@ -639,9 +641,11 @@ func HunkFlags(cmd string) []string {
 
 // ReadsPatchFromFile reports whether -f gave the patch, which puts it outside
 // the transcript. Directives then returns nothing, and nothing has to mean
-// unknown rather than none.
+// unknown rather than none. An apply of what hunk invert printed is outside
+// it too, whatever the invert read: the inverse is never in the command.
 func ReadsPatchFromFile(cmd string) bool {
-	return reHunkPatchFile.MatchString(hunkInvocation(cmd))
+	apply := hunkInvocation(cmd)
+	return reHunkPatchFile.MatchString(apply) || (apply != "" && reHunkInvert.MatchString(commandSkeleton(cmd)))
 }
 
 // Directives are the operations a patch used, in order of first appearance and
