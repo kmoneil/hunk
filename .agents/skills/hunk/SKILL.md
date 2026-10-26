@@ -361,6 +361,31 @@ Five things to know:
   reason and applies nothing. Fix that quote and run the pipe again. Its own
   exits are 1 for a bad call, 2 for a refusal about the file or the range.
 
+## Taking a patch back out: `hunk invert`
+
+To commit an applied patch apart from other work in the same files, take it
+out, commit, and put it back. Do not write a script that swaps each `old` and
+`new`: `hunk invert` prints the inverse, the hunks last first, and it applies
+like any patch.
+
+```sh
+hunk invert -f p.hunk | hunk --dry-run
+hunk invert -f p.hunk | hunk
+git commit -am 'the work under it'
+hunk -f p.hunk
+```
+
+Keep the patch in a file for this: a heredoc you applied is gone. Apply the
+inverse with the patch's `--eol` and `--marker`. An inverse whose text the file
+no longer holds, or holds twice, is exit 2 like any miss. A `@@ create` becomes
+its text taken out and then a `@@ delete`, which cannot see text added to the
+file since: that is deleted with it, so read the dry run. Under `--eol auto`
+the text goes back in the ending the file has most of by then, so a patch that
+took out a CRLF file's only line ending gets it back as LF. `@@ delete`,
+`@@ append`, `@@ prepend` and an empty `@@ new` have no inverse: the patch is
+refused at exit 1, each such hunk named, and the refusal is printed as an
+`@@ end` line that stops the `hunk` it is piped into.
+
 ## When to reach for it, and when not
 
 `hunk` earns its keep when an edit has something to go wrong: several changes
@@ -380,6 +405,7 @@ mirror of the habit this replaces, and it costs the same thing: round trips.
 | An edit that has to be **computed**: a block built from a list, a file split at an index | Python or the shell. `hunk` takes literal bytes in and literal bytes out, and has no expression language. Compute the patch if it helps, then pipe it in |
 | One literal edit repeated across files: a version bump, a year | `hunk`, with a loop that writes the patch (above) |
 | Replacing or deleting a whole block you know by its line numbers | `hunk quote`, piped into `hunk --dry-run` first (above) |
+| Taking an applied patch back out, to commit the work under it apart | `hunk invert -f p.hunk`, piped into `hunk --dry-run` first (above) |
 | Several replacements, or several files, that must land together | `hunk` |
 | An edit that must be undone if the tests fail | `hunk --verify '...'` |
 | More than one file of a compiled language in one batch | `hunk --verify 'go build ./...'` |

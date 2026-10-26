@@ -1,0 +1,60 @@
+hunk invert prints the patch that undoes a patch, so that it can be checked
+and applied like any other.
+
+  hunk invert [flags] [-f PATCH]
+
+The patch comes from -f or from stdin, and its inverse goes to stdout. Each
+replacement has its old and new swapped and keeps its count, and the hunks come
+last first, since each undoes the file as the hunks before it left it. A create
+becomes a replacement that takes its text out of the file, then a delete, so a
+file whose created text has changed since is refused rather than deleted.
+
+  hunk invert -f p.hunk | hunk --dry-run
+  hunk invert -f p.hunk | hunk --verify 'go build ./...'
+
+Nothing is read from the tree. The apply checks the inverse as it checks any
+patch: each new text has to be in its file exactly as many times as the hunk
+wrote it, so an inverse whose text the file no longer holds, or holds somewhere
+else too, is refused and nothing is written. Apply it with the --eol and
+--marker the patch was applied with.
+
+WHAT IT CANNOT CHECK
+
+That a created file holds nothing but what was created. No hunk can say "only
+if the file is exactly this", so text added to a created file since, around the
+text it was created with, is deleted with it. Read the --dry-run first. And a
+directory a create made is left in place, empty: a delete removes the file.
+
+Under --eol auto, the inverse's text is written in the line ending its file has
+most of when the inverse is applied, as any patch's is. A patch that changed
+which ending that is, as joining the only two lines of a CRLF file does, gets
+its text back in the other one.
+
+WHAT HAS NO INVERSE
+
+A patch with any of these is refused, every one named:
+
+  @@ delete       the patch does not hold the bytes to put back
+  @@ append       it may also have ended the file's last line, and the line
+                  ending it added is the file's; the patch holds neither
+  @@ prepend      the line ending it may have added is the file's, under the
+                  --eol it was applied with; the patch holds neither
+  an empty new    the text it took out has nothing left to find its place by
+
+FLAGS
+
+  -f FILE                     Read the patch from FILE rather than stdin.
+  --marker STR                Directive prefix, of the patch and of its
+                              inverse. (@@)
+  --allow-mistyped-delimiter  Invert a patch with a line that looks like a
+                              mistyped heredoc delimiter, as hunk applies one.
+
+REFUSALS
+
+A refusal is written twice: on stderr, and on stdout as an "@@ end" line that
+carries the reason, which no patch may hold. So the hunk it is piped into stops
+at exit 1 instead of applying part of an inverse, or none at all at exit 0.
+
+  1  a flag, a patch that does not parse or names a mistyped heredoc
+     delimiter, or a hunk with no inverse
+  5  I/O error writing the inverse

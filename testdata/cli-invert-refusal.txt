@@ -1,0 +1,9 @@
+hunk invert: 3 hunks have no inverse, so the patch was not inverted
+
+hunk 1  d.txt  (patch line 1)
+  a delete is not inverted: the patch does not hold the bytes to put back
+hunk 3  g.txt  (patch line 7)
+  an append is not inverted: it may also have ended the file's last line, and the line ending it added is the file's; the patch holds neither
+hunk 4  h.txt  (patch line 10)
+  its new text is empty, so it took text out, and nothing is left in the file to find the place to put it back by
+@@ end refused by hunk invert: 3 hunks have no inverse, so the patch was not inverted

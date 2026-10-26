@@ -552,6 +552,23 @@ func TestHunkExit(t *testing.T) {
 		},
 		{"a file named quote is not the subcommand", "hunk -f quote", "M a.go +1 -1\n1 file, 1 hunk, +1 -1\n", 0},
 		{"nor is a word that starts like it", "hunk quoted", "", ExitUnclassified},
+		// "hunk invert" prints a patch and applies nothing, as a quote does.
+		{"an invert alone applies nothing", "hunk invert -f p.hunk", "@@ file a.go\n@@ old\nA\n@@ new\na\n", ExitProbe},
+		{"nor does one written to a file", "hunk invert -f p.hunk > inv.hunk", "", ExitProbe},
+		{
+			"nor one that refused",
+			"hunk invert -f p.hunk",
+			"hunk invert: 1 hunk has no inverse, so the patch was not inverted\n\nhunk 1  a.go  (patch line 1)\n  a delete is not inverted: the patch does not hold the bytes to put back\n@@ end refused by hunk invert: 1 hunk has no inverse, so the patch was not inverted\n",
+			ExitProbe,
+		},
+		{"an invert piped into an apply is an application", "hunk invert -f p.hunk | hunk --dry-run", "M a.go +1 -1\n1 file, 1 hunk, +1 -1 (dry run: nothing written)\n", 0},
+		{
+			"and its refusal is the apply's exit 1",
+			"hunk invert -f p.hunk | hunk",
+			"hunk invert: 1 hunk has no inverse, so the patch was not inverted\n\nhunk 1  a.go  (patch line 1)\n  a delete is not inverted: the patch does not hold the bytes to put back\nhunk: patch line 1: \"@@ end\" takes no argument; found: refused by hunk invert: 1 hunk has no inverse, so the patch was not inverted\n",
+			1,
+		},
+		{"nor is a word that starts like invert", "hunk inverted", "", ExitUnclassified},
 		// A loop is one call, one round trip, and its exit is the worst the
 		// text shows (IsHunkCall's comment has the argument).
 		{
@@ -731,6 +748,11 @@ var reportGoldens = map[string]int{
 	"cli-quote-help":                           ExitProbe,
 	"cli-quote-refusal-reaches-the-apply":      1,
 	"cli-quote-refusal-reaches-the-apply-json": 1,
+	// #119: "hunk invert --help" likewise, and hunk invert's refusal, which
+	// on its own applies nothing, as a quote's does not; piped into an apply
+	// it reaches the classifier as the apply's parse error, as a quote's does.
+	"cli-invert-help":    ExitProbe,
+	"cli-invert-refusal": ExitProbe,
 	// #92: a report followed by a warning of a mistyped delimiter, which
 	// changes no exit.
 	"cli-mistyped-delimiter":                     0,
@@ -1196,6 +1218,8 @@ func TestHunkFlags(t *testing.T) {
 		},
 		{"the apply on a later line", "hunk quote a.go 4 9 --new n.go > r.hunk\nhunk --json -f r.hunk", []string{"--json"}},
 		{"a command that only quotes passed an application nothing", "hunk quote a.go 4 9 --new n.go --marker %%", nil},
+		{"an invert's flags are passed over for the apply's", "hunk invert --allow-mistyped-delimiter -f p.hunk | hunk --dry-run", []string{"--dry-run"}},
+		{"a command that only inverts passed an application nothing", "hunk invert --marker %% -f p.hunk", nil},
 		// Only the word right after the name is the subcommand.
 		{"an apply whose patch file is named quote", "hunk --json -f quote", []string{"--json"}},
 	} {
@@ -1222,6 +1246,10 @@ func TestReadsPatchFromFile(t *testing.T) {
 		{"no -f at all", "hunk --dry-run <<'H'\n@@ old\nH", false},
 		{"the apply's -f behind a quote", "hunk quote a.go 4 9 > r.hunk; hunk -f r.hunk", true},
 		{"a quote has no -f", "hunk quote a.go 4 9 | hunk", false},
+		// An inverse is never in the command, whatever the invert read.
+		{"an inverse piped into the apply", "hunk invert -f p.hunk | hunk --dry-run", true},
+		{"one read from stdin", "hunk invert < p.hunk | hunk", true},
+		{"an invert alone is no apply", "hunk invert -f p.hunk", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := ReadsPatchFromFile(c.cmd); got != c.want {

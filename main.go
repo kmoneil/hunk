@@ -106,6 +106,8 @@ const usage = `hunk applies literal text edits, in batches, as one transaction.
   hunk format                  print the grammar and one worked example
   hunk quote FILE START END    print lines of FILE as a hunk, to replace a
                                block without pasting it; see its --help
+  hunk invert [-f PATCH]       print the patch that undoes a patch, to check
+                               and apply like any other; see its --help
 
 Nothing is written until every hunk in the batch is known to match exactly as
 many times as it claimed, and until every target is known to be unchanged since
@@ -278,6 +280,10 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	if len(args) > 0 && args[0] == "quote" {
 		return runQuote(args[1:], stdout, stderr)
 	}
+	// invert reads a patch and writes one, and touches no tree.
+	if len(args) > 0 && args[0] == "invert" {
+		return runInvert(args[1:], stdin, stdout, stderr)
+	}
 
 	fs := flag.NewFlagSet("hunk", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // the errors are written below, once, to stderr
@@ -404,6 +410,9 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		}
 		if fs.Arg(0) == "quote" {
 			return fail(exitUsage, errors.New(`quote is a subcommand and comes first, its flags after it; run "hunk quote --help"`), "")
+		}
+		if fs.Arg(0) == "invert" {
+			return fail(exitUsage, errors.New(`invert is a subcommand and comes first, its flags after it; run "hunk invert --help"`), "")
 		}
 		return fail(exitUsage, fmt.Errorf("unexpected argument %q; the patch comes from stdin or -f", fs.Arg(0)), "")
 	}

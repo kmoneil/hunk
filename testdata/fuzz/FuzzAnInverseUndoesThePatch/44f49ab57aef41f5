@@ -1,0 +1,7 @@
+go test fuzz v1
+[]byte("\r\r\nb\r")
+[]byte("\r\n")
+[]byte("0")
+[]byte("0")
+[]byte("0")
+bool(false)

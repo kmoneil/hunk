@@ -377,6 +377,55 @@ tree decides (a FILE the apply would refuse, a line past the end, a directive
 line, a range that is one empty line), and 5 for an I/O error. `hunk quote
 --help` has the whole of it.
 
+## Undoing a patch: `hunk invert`
+
+A patch applied on top of other uncommitted work in the same files has to come
+back out before either can be committed alone, and `git add -p` is interactive.
+`hunk invert` prints the patch that undoes a patch, which applies like any
+other:
+
+```sh
+hunk invert -f p.hunk | hunk --dry-run   # read it
+hunk invert -f p.hunk | hunk             # take the patch out
+git commit -am 'the work under it'
+hunk -f p.hunk                           # and put it back
+```
+
+Each replacement has its old and new swapped and keeps its count, and the
+hunks come last first, since each undoes the file as the hunks before it left
+it. The apply checks the inverse as it checks any patch: each new text has to
+be in its file exactly as many times as the hunk wrote it, so an inverse whose
+text the file no longer holds, or holds somewhere else too, is refused with
+exit 2 and nothing is written. Apply it with the `--eol` and `--marker` the
+patch was applied with. It reads no tree, and takes its patch from `-f` or
+stdin.
+
+A `@@ create` becomes a replacement that takes the created text out of the
+file, then a `@@ delete`, so a file whose created text has changed since is
+refused rather than deleted. What it cannot check is that the file holds
+nothing else: no hunk can say "only if the file is exactly this", so text added
+to a created file since is deleted with it. Read the `--dry-run`. A directory
+the create made is left in place, empty. And under `--eol auto` the inverse's
+text is written in the line ending its file has most of when the inverse is
+applied, as any patch's is, so a patch that changed which ending that is, as
+joining the only two lines of a CRLF file does, gets its text back in the other
+one.
+
+Some hunks have no inverse the patch can say, and a patch with any of them is
+refused with exit 1, every such hunk named:
+
+- `@@ delete`: the patch does not hold the bytes to put back.
+- `@@ append`: it may also have ended the file's last line, and the line ending
+  it added is the file's.
+- `@@ prepend`: the line ending it may have added is the file's, under the
+  `--eol` it was applied with.
+- a replacement with an empty `@@ new`, which took text out: nothing is left in
+  the file to find its place by.
+
+As with `hunk quote`, a refusal is written to stdout as well, as an `@@ end`
+line, so the `hunk` it is piped into stops at exit 1 rather than applying
+nothing at exit 0. `hunk invert --help` has the whole of it.
+
 ## Verify, and rollback
 
 `--verify CMD` runs after a successful apply, from `--root`, through `sh -c`.
