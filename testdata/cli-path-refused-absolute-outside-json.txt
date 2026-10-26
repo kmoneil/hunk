@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "exit": 2,
+  "error": "/the/outside/f.txt: an absolute path is allowed only under the root; to reach it, pass a --root that holds it, such as --root /the/outside, and relative paths are resolved there too; the root is /the/root"
+}

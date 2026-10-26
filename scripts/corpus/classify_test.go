@@ -645,6 +645,8 @@ var reportGoldens = map[string]int{
 	"cli-path-refused-dotdot-after-link-json":         ExitNoMatch,
 	"cli-path-refused-leaves-the-root":                ExitNoMatch,
 	"cli-path-refused-leaves-the-root-json":           ExitNoMatch,
+	"cli-path-refused-absolute-outside":               ExitNoMatch,
+	"cli-path-refused-absolute-outside-json":          ExitNoMatch,
 	"cli-path-refused-root-given-through-a-link":      ExitNoMatch,
 	"cli-path-refused-root-given-through-a-link-json": ExitNoMatch,
 	"cli-an-absolute-link-in-a-parent":                0,
