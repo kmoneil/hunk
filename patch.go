@@ -764,6 +764,11 @@ round joins the next line onto it. Either applies, and a warning after the
 report names the hunk. To add an empty line on purpose, end both with a blank
 line and new with two.
 
+A replacement whose new is its old matches and changes nothing, and a warning
+after the report names the hunk. Under --eol auto that includes a new that
+differs from its old only in line endings, since either is written in the
+file's ending: --eol strict changes a line's ending.
+
 A created file's mode is 0644 less the umask, as for a shell redirect. A file
 that existed keeps its mode, including one deleted and created again in the
 same batch.

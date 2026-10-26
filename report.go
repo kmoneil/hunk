@@ -223,8 +223,9 @@ func (r *Report) changedTheTree() bool {
 // fact about what hunk did, it is something to act on, and a --try report has
 // to start "tried" (§4.1).
 //
-// A replacement whose ends disagree about a newline (#111) is warned of
-// there too, before the strays, for the same reasons.
+// A replacement whose ends disagree about a newline (#111), or that changed
+// nothing (#118), is warned of there too, before the strays, for the same
+// reasons.
 func (r *Report) Text(out, errOut io.Writer, quiet bool) {
 	o, e := &tally{w: out}, &tally{w: errOut}
 	r.text(o, e, quiet)
@@ -679,8 +680,9 @@ type jsonReport struct {
 	// The verify's own list is inside Verify.
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
 	// Warnings are the replacements whose ends disagree about a newline
-	// (#111), when the batch matched, and the lines that look like a
-	// mistyped heredoc delimiter (#92), whatever the outcome.
+	// (#111) and those that changed nothing (#118), when the batch matched,
+	// and the lines that look like a mistyped heredoc delimiter (#92),
+	// whatever the outcome.
 	Warnings []jsonWarning `json:"warnings,omitempty"`
 }
 
@@ -689,9 +691,10 @@ type jsonReport struct {
 // for, the line, how many payload lines follow it, and the text report's
 // sentence. A slip, "empty_line", "joined_line" or "no_final_newline": the
 // hunk, its patch line, its file, the line the slip leaves, and the
-// sentence. Patch names the patch file under --each alone, as a failure's
-// does. Kind came in on 2026-10-23 with the slips; a warning from before
-// then is a stray.
+// sentence. A hunk that changed nothing, "no_change": the same, with its old
+// text's first line (#118). Patch names the patch file under --each alone,
+// as a failure's does. Kind came in on 2026-10-23 with the slips; a warning
+// from before then is a stray.
 type jsonWarning struct {
 	Kind      string `json:"kind"`
 	Patch     string `json:"patch,omitempty"`

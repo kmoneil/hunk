@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "exit": 0,
+  "files": [
+    {
+      "path": "f.txt",
+      "op": "modify",
+      "added": 1,
+      "removed": 1
+    }
+  ],
+  "hunks": 3,
+  "warnings": [
+    {
+      "kind": "no_change",
+      "hunk": 2,
+      "patch_line": 6,
+      "path": "f.txt",
+      "text": "b",
+      "message": "hunk 2 (patch line 6) changes nothing in f.txt: its old and new text are the same; if a change was meant, write it under @@ new"
+    },
+    {
+      "kind": "no_change",
+      "hunk": 3,
+      "patch_line": 11,
+      "path": "c.txt",
+      "text": "a",
+      "message": "hunk 3 (patch line 11) changes nothing in c.txt: its old and new text differ only in line endings, and --eol auto writes the file's; to change a line's ending, pass --eol strict"
+    }
+  ]
+}

@@ -561,12 +561,19 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 		if lines[real] != "" {
 			real++
 		}
+		// A hunk that changed nothing is FuzzANoChangeIsWhatTheHunkDid's.
+		var slips []Slip
+		for _, s := range r.Slips {
+			if s.Kind != SlipNoChange && s.Kind != SlipLineEndings {
+				slips = append(slips, s)
+			}
+		}
 		agree := bytes.HasSuffix(old, lf) == bytes.HasSuffix(repl, lf) || len(repl) == 0
-		if agree && len(r.Slips) > 0 {
-			t.Fatalf("ends that agree were warned of: %+v\nstart %q old %q new %q", r.Slips, start, old, repl)
+		if agree && len(slips) > 0 {
+			t.Fatalf("ends that agree were warned of: %+v\nstart %q old %q new %q", slips, start, old, repl)
 		}
 		kinds := map[SlipKind]bool{}
-		for _, s := range r.Slips {
+		for _, s := range slips {
 			if s.Hunk != 1 || s.Line != 1 || s.Path != "a.txt" || s.Of != n || s.Count < 1 || s.Count > n || kinds[s.Kind] {
 				t.Fatalf("slip %+v\nstart %q old %q new %q", s, start, old, repl)
 			}

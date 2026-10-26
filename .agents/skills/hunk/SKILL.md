@@ -50,6 +50,7 @@ success.
 | exit 5 | Assume the edit landed | Read the message. Unless it says otherwise, nothing was written, or it was put back. The cause is outside the patch: a missing shell, a name the filesystem refused, a full disk |
 | exit 6, `changed on disk` | Retry the same patch | Something else wrote the tree. Re-read the file and rebuild the patch against what is there now |
 | exit 0, then `warning: hunk 2 (patch line 7) leaves an empty line after "B"` | Take exit 0 as the edit you meant | The batch applied with that empty line, joined line or missing final newline in it. If you did not mean it, do what the warning ends with, in the file it names |
+| exit 0, then `warning: hunk 2 (patch line 6) changes nothing in f.txt` | Take exit 0 as the edit you meant | That hunk matched and wrote nothing: its new text is its old, or under `--eol auto` differs from it only in line endings. Send the change you meant, or for a line ending, the same hunk with `--eol strict` |
 | exit 1, `patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter` | Pass `--allow-mistyped-delimiter` to get it past | Take the line out of the patch and send it again: nothing was written. If it counts lines after it, they were the rest of your command: take them out too and run them yourself. The flag is for a line you mean as text, as in a document about `hunk`; under it the patch applies and a `warning:` names the line |
 
 The near-miss report exists so that a failed match costs zero extra round trips.
@@ -118,7 +119,9 @@ file does not pass through the shell, so no line in it can end anything.
 A patch may use CRLF line endings, as a file written on Windows or text piped
 from PowerShell does. A carriage return at the end of a directive line is its
 ending; under the default `--eol auto`, a patch whose every line ends in CRLF
-reads its payloads the same way, and `--eol strict` keeps every payload byte. A
+reads its payloads the same way, and `--eol strict` keeps every payload byte.
+So under `--eol auto` a replacement that only changes a line's ending changes
+nothing, and a `warning:` says so: pass `--eol strict` to change endings. A
 control character anywhere else in a directive line is refused and named: in a
 path with exit 2, stuck to a directive word with exit 1. So is a directive
 missing its space, `@@file b.go`, or with a no-break space for one, wherever
