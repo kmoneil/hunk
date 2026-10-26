@@ -1,0 +1,20 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 1,
+      "path": "f.txt",
+      "patch_line": 2,
+      "expected": 1,
+      "found": 1,
+      "lines": [
+        1
+      ],
+      "near_miss": {
+        "cause": "split line ending",
+        "detail": "old begins on the newline of a CRLF and new does not begin with one, which would leave its carriage return on its own; start old after the newline, or pass --eol strict to edit the bytes as they are"
+      }
+    }
+  ]
+}

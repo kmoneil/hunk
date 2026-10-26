@@ -678,6 +678,15 @@ func FuzzAnInverseUndoesThePatch(f *testing.F) {
 		f.Add([]byte(c[0]), []byte(c[1]), []byte(c[2]), []byte(c[3]), []byte("Z"), false)
 		f.Add([]byte(c[0]), []byte(c[1]), []byte(c[2]), []byte(c[3]), []byte("Z"), true)
 	}
+	// #122. The nightly's find: a bare "\r" for old, which met the CR of every
+	// CRLF, so the inverse took another copy of "\r\n\n" at exit 0. And the
+	// same with no bare CR, the ending flipped by a join: the inverse's "\nR"
+	// landed on the newline of the CRLF its patch wrote. c is written in CRLF
+	// because the count here is of raw bytes. Both are refused now, the first
+	// when it is applied and the second when it is inverted.
+	f.Add([]byte("\r\n\x00\r\n\n"), []byte("\n\x00"), []byte("\r\n\n"), []byte("\r"), []byte("\n0"), false)
+	f.Add([]byte("a\r\nv\r\nw\r\nx\r\ny\r\nP\nQ\nm\nn\n"), []byte("a"), []byte("P\nQ"),
+		[]byte("Q\r\nv\r\nw\r\nx\r\ny"), []byte("\nR"), false)
 	f.Fuzz(func(t *testing.T, start, a, b, c, d []byte, strict bool) {
 		n1 := bytes.Count(start, a)
 		if len(a) == 0 || n1 == 0 {

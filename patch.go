@@ -736,7 +736,9 @@ replaces all three. There is no "one or more" and no "zero or more". If you do
 not know the count, that is the thing this tool exists to refuse: add
 surrounding context to the old text until it is unique. Copies that overlap,
 and under --eol auto copies in a file's other line ending, count as well, and
-are refused rather than edited.
+are refused rather than edited. Under --eol auto, so is a copy whose replacement
+would split a CRLF: one that begins on its newline, or ends on its carriage
+return, when new does not do the same.
 
 PAYLOADS
 

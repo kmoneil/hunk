@@ -60,7 +60,8 @@ directory a create made is left in place, empty: a delete removes the file.
 Under --eol auto, the inverse's text is written in the line ending its file has
 most of when the inverse is applied, as any patch's is. A patch that changed
 which ending that is, as joining the only two lines of a CRLF file does, gets
-its text back in the other one.
+its text back in the other one, and where that text would begin or end inside a
+CRLF, the inverse is refused, as any replacement that would split one is.
 
 WHAT HAS NO INVERSE
 

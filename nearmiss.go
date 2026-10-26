@@ -48,6 +48,10 @@ const (
 	// counted, so the count cannot see those copies, and editing the rest is a
 	// guess.
 	DiagMixedEndings
+	// DiagSplitCRLF: under --eol auto, old occurs as many times as claimed,
+	// but replacing a copy would part a CRLF line ending's carriage return
+	// from its newline (#122).
+	DiagSplitCRLF
 )
 
 // A Diagnosis explains why a hunk did not apply. It renders to both the text
@@ -101,7 +105,8 @@ type Diagnosis struct {
 	Column   int
 
 	// Lines are where each match starts (DiagTooMany, DiagOverlap and
-	// DiagMixedEndings), capped.
+	// DiagMixedEndings), capped, and for DiagSplitCRLF the line of each CRLF
+	// a replacement would split.
 	Lines []int
 	// Endings is each listed match's line endings, "CRLF", "LF" or "mixed",
 	// parallel to Lines (DiagMixedEndings only).
@@ -110,7 +115,8 @@ type Diagnosis struct {
 	MoreLines int
 	// Found is the total number of matches: what the suggested "@@ old x N"
 	// needs (DiagTooMany), and the true count where the count missed some
-	// (DiagOverlap, DiagMixedEndings).
+	// (DiagOverlap, DiagMixedEndings). For DiagSplitCRLF it is how many of
+	// the copies would split one.
 	Found int
 
 	// Shifted is the number of hunks that changed this file earlier in the same
@@ -306,6 +312,77 @@ func DiagnoseMixedEndings(old, file []byte) *Diagnosis {
 		}
 	}
 	return d
+}
+
+// DiagnoseSplitCRLF reports the copies of old in file that replacing with repl
+// would part a CRLF's carriage return from its newline, or nil when none would
+// (#122). A copy that begins on the LF of a CRLF, when repl does not begin with
+// LF, would leave the CR on its own; one that ends on the CR, when repl does
+// not end with CR, would leave the LF without it. old and repl are the payloads
+// as --eol auto converted them, and the copies are the first n left to right,
+// the ones bytes.Replace edits.
+//
+// Only --eol auto asks. There a line break in a payload stands for the file's
+// line ending, and in a file with both endings it can land on half of a CRLF.
+// Until 2026-10-26 that applied at exit 0. Joining "\nfoo" onto the line above
+// it, in an LF file where that line ended in CRLF, left "x\r foo". And the
+// inverse of a patch that changed a file's dominant ending left CRs where the
+// forward patch had written CRLFs, which broke up the text a later hunk of the
+// inverse looked for, so that it matched another copy, at the right count: the
+// nightly fuzz found that.
+func DiagnoseSplitCRLF(file, old, repl []byte, n int) *Diagnosis {
+	if len(old) == 0 {
+		return nil
+	}
+	opensOnLF := old[0] == '\n' && (len(repl) == 0 || repl[0] != '\n')
+	closesOnCR := old[len(old)-1] == '\r' && (len(repl) == 0 || repl[len(repl)-1] != '\r')
+	if !opensOnLF && !closesOnCR {
+		return nil
+	}
+	var crs []int
+	split, begins, ends := 0, false, false
+	for off, seen := 0, 0; seen < n; seen++ {
+		i := bytes.Index(file[off:], old)
+		if i < 0 {
+			break
+		}
+		s, e := off+i, off+i+len(old)
+		b := opensOnLF && s > 0 && file[s-1] == '\r'
+		en := closesOnCR && e < len(file) && file[e] == '\n'
+		if b || en {
+			split++
+			cr := e - 1
+			if b {
+				cr = s - 1
+			}
+			if len(crs) < tooManyLimit {
+				crs = append(crs, cr)
+			}
+		}
+		begins, ends = begins || b, ends || en
+		off = e
+	}
+	if split == 0 {
+		return nil
+	}
+	const strict = ", or pass --eol strict to edit the bytes as they are"
+	var detail string
+	switch {
+	case begins && ends:
+		detail = "old begins on the newline of one CRLF and ends on the carriage return of another, " +
+			"and new neither begins with a newline nor ends with a carriage return, which would part them; " +
+			"start old after the newline and end it before the carriage return" + strict
+	case begins:
+		detail = "old begins on the newline of a CRLF and new does not begin with one, " +
+			"which would leave its carriage return on its own; start old after the newline" + strict
+	default:
+		detail = "old ends on the carriage return of a CRLF and new does not end with one, " +
+			"which would part it from its newline; end old before the carriage return" + strict
+	}
+	return &Diagnosis{
+		Kind: DiagSplitCRLF, Cause: "split line ending", Detail: detail,
+		Found: split, Lines: lineNumbers(file, crs), MoreLines: split - len(crs),
+	}
 }
 
 // matchStarts counts every occurrence of pat in text, overlapping ones
@@ -1182,6 +1259,23 @@ func (d *Diagnosis) Render(indent string) string {
 		}
 		fmt.Fprintf(&b, "\n\n%s%s\n", indent, d.Detail)
 		return b.String()
+
+	case DiagSplitCRLF:
+		// Not returned from: the lines are the file's as earlier hunks in
+		// the batch left it, which the note after the switch says.
+		at := make([]string, len(d.Lines))
+		for i, l := range d.Lines {
+			at[i] = fmt.Sprint(l)
+		}
+		which := "lines"
+		if len(at) == 1 && d.MoreLines == 0 {
+			which = "line"
+		}
+		fmt.Fprintf(&b, "%sat %s %s", indent, which, strings.Join(at, ", "))
+		if d.MoreLines > 0 {
+			fmt.Fprintf(&b, ", and %d more", d.MoreLines)
+		}
+		fmt.Fprintf(&b, "\n\n%s%s\n", indent, d.Detail)
 
 	case DiagNoRoom:
 		fmt.Fprintf(&b, "%sline %d of your old is at line %d, and the %s above it\n",

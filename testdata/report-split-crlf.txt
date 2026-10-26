@@ -1,0 +1,7 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  f.txt  (patch line 2)
+  expected 1 occurrence, found 1, and replacing it would split a CRLF line ending
+  at line 1
+
+  old begins on the newline of a CRLF and new does not begin with one, which would leave its carriage return on its own; start old after the newline, or pass --eol strict to edit the bytes as they are

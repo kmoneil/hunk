@@ -202,6 +202,14 @@ a line break is also looked for in a file's other ending. Either way the report
 lists every copy's line, for `@@ old x2` as for a bare `@@ old`, and the fix is a
 line of context that makes `old` fit one place.
 
+Under `--eol auto` a replacement may not split a CRLF either. In a file with both
+endings, a line break in a payload can land on half of one: an `old` that
+begins on the newline of a CRLF, when `new` does not begin with one, would leave
+its carriage return on its own, and one that ends on the carriage return, when
+`new` does not end with one, would part it from its newline. Either is refused
+with exit 2, the line of each such CRLF named. `--eol strict` edits the bytes as
+they are.
+
 Three rules worth knowing before the first patch:
 
 1. **A payload never gains a trailing newline.** To match text that ends in a

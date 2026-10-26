@@ -367,13 +367,38 @@ func hasLoneCR(s string) bool {
 	return false
 }
 
+// splitsACRLF reports whether replacing the first n copies of old in file, left
+// to right as strings.Replace takes them, with repl would part a CRLF's
+// carriage return from its newline: a copy that begins on the newline when repl
+// does not, or ends on the carriage return when repl does not (#122).
+func splitsACRLF(file, old, repl string, n int) bool {
+	off := 0
+	for range n {
+		i := strings.Index(file[off:], old)
+		if i < 0 {
+			return false
+		}
+		s, e := off+i, off+i+len(old)
+		if strings.HasSuffix(file[:s], "\r") && strings.HasPrefix(file[s:], "\n") && !strings.HasPrefix(repl, "\n") {
+			return true
+		}
+		if strings.HasSuffix(file[:e], "\r") && strings.HasPrefix(file[e:], "\n") && !strings.HasSuffix(repl, "\r") {
+			return true
+		}
+		off = e
+	}
+	return false
+}
+
 // The counted copies are exactly the copies replaced. For any file and old,
 // either the hunk is refused, or an exhaustive scan finds exactly as many
 // copies as the hunk claimed, overlapping ones and (under --eol auto) ones in
 // either line ending included, and the file is those copies replaced. And a
 // refusal for a missed copy is one an exhaustive scan agrees with. The scans
 // here try every offset and fold the endings themselves; they share nothing
-// with the code under test.
+// with the code under test. Under --eol auto, since 2026-10-26, a hunk is also
+// refused at the count it claimed when replacing a copy would split a CRLF,
+// and only then: splitsACRLF is the scan for that.
 func FuzzTheCountedCopiesAreTheReplacedOnes(f *testing.F) {
 	for _, s := range []struct {
 		file, old string
@@ -391,6 +416,10 @@ func FuzzTheCountedCopiesAreTheReplacedOnes(f *testing.F) {
 	} {
 		f.Add(s.file, s.old, "R\n", s.count, s.strict)
 	}
+	// Two copies of "\n", the first on the newline of a CRLF: refused for the
+	// split, at the count it claimed. Found by this target the day the rule
+	// was added, when the rule was not yet the target's.
+	f.Add("\r\n\n", "\n", "0", uint8('['), false)
 	f.Fuzz(func(t *testing.T, file, old, repl string, count uint8, strict bool) {
 		if old == "" || hasLoneCR(file) || hasLoneCR(old) || hasLoneCR(repl) {
 			t.Skip()
@@ -444,6 +473,9 @@ func FuzzTheCountedCopiesAreTheReplacedOnes(f *testing.F) {
 			if want := strings.Replace(file, conv(old), conv(repl), n); string(got) != want {
 				t.Fatalf("applied %q -> %q in %q: got %q, want %q", old, repl, file, got, want)
 			}
+			if !strict && splitsACRLF(file, conv(old), conv(repl), n) {
+				t.Fatalf("applied %q -> %q in %q, splitting a CRLF", old, repl, file)
+			}
 			return
 		}
 		d := failures[0].Near
@@ -457,6 +489,10 @@ func FuzzTheCountedCopiesAreTheReplacedOnes(f *testing.F) {
 		case d.Kind == DiagMixedEndings:
 			if strict || every <= plain {
 				t.Fatalf("refused %q in %q for its endings, but every copy was counted (%d of %d)", old, file, plain, every)
+			}
+		case d.Kind == DiagSplitCRLF:
+			if strict || plain != n || !splitsACRLF(file, conv(old), conv(repl), n) {
+				t.Fatalf("refused %q -> %q in %q x%d as a split, which it is not (strict %v, count %d)", old, repl, file, n, strict, plain)
 			}
 		default:
 			if plain == n {
