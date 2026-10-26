@@ -274,7 +274,19 @@ the line and the file, counts any lines after it and says they never ran as
 commands. `--json` carries each line in `warnings` either way: its `kind`,
 `mistyped_delimiter`, the patch line, the path, the line, how many payload lines
 follow it, and the sentence. The warnings of rule 1 are there too, as
-`empty_line`, `joined_line` and `no_final_newline`, with the hunk.
+`empty_line`, `joined_line` and `no_final_newline`, with the hunk, and a
+hunk that changed nothing as `no_change`, with its `@@ old`'s first line.
+
+A replacement whose `@@ new` is its `@@ old` matches and changes nothing. It
+applies at exit 0 and its file is not rewritten, but a hunk that changes
+nothing is seldom the one meant, and in a batch its file's row is the other
+hunks', so the report ends with a `warning:` on stderr, under `--quiet` too,
+naming the hunk and its file. Under `--eol auto` the same is true of an
+`@@ old` and `@@ new` that differ only in line endings, since either is
+written in the file's ending, and that warning says so: to change a line's
+ending, pass `--eol strict`. An empty `@@ append` or `@@ prepend` to a file
+that already ends in a newline also changes nothing, and is not warned of: on
+a file without one it adds the final newline, which is a reason to send it.
 
 `hunk format` prints the full grammar and a worked example that applies.
 

@@ -140,7 +140,8 @@ type Result struct {
 	Files []FileResult
 	Hunks int
 	// Slips are the replacements whose ends disagree about a newline
-	// (#111), in hunk order, warned of after the report.
+	// (#111) and those that changed nothing (#118), in hunk order, warned
+	// of after the report.
 	Slips []Slip
 }
 
@@ -582,8 +583,11 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		// A hunk whose new text equals its old text matched, and changed
 		// nothing. Rewriting the file anyway would move its mtime and
 		// invalidate a build cache for no reason, so it does not count as a
-		// change and the file is not listed in the diffstat.
-		if !bytes.Equal(next, f.cur) {
+		// change and the file is not listed in the diffstat. It is warned of
+		// instead (#118).
+		if bytes.Equal(next, f.cur) {
+			x.noteNoChange(n, h, f)
+		} else {
 			f.changed = true
 			f.applied++
 			// The file's lines the replacement changed, per occurrence

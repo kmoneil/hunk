@@ -511,8 +511,10 @@ func TestASuccessReportIsTheDiffstatAndNothingElse(t *testing.T) {
 		},
 		{"a dry run", v, replace, []string{"--dry-run"}, 1},
 		{"a dry run with a verify", v, replace, []string{"--dry-run", "--verify", "true"}, 1},
-		// No rows, so nothing in the report may index the first one.
-		{"a batch that changed nothing", v, "@@ file v.go\n@@ old\n0.3.1\n@@ new\n0.3.1\n", nil, 0},
+		// No rows, so nothing in the report may index the first one. A
+		// replace that changed nothing is warned of since #118
+		// (nochange_test.go), so the batch is an empty append.
+		{"a batch that changed nothing", v, "@@ append v.go\n", nil, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			code, out, errOut := runCLI(t, cliTree(t, c.files), c.args, c.patch)

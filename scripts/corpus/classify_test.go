@@ -744,6 +744,11 @@ var reportGoldens = map[string]int{
 	"cli-slip-dry-run": 0,
 	"cli-slip-json":    0,
 	"cli-each-slip":    0,
+	// #118: a report followed by a warning of a hunk that changed nothing,
+	// which changes no exit either.
+	"cli-no-change":      0,
+	"cli-no-change-json": 0,
+	"cli-each-no-change": 0,
 	// #100: a break set, one file of several patches under "@@ patch"
 	// headings. A heading fault refuses the run at 1, and a heading outside
 	// --each is a parse error.

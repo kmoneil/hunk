@@ -19,6 +19,12 @@ import (
 // warned of, and is the way to mean the empty line. A new ending in a newline
 // at the end of a file that had no final newline gives it one, which is
 // benign. The same disagreement at the payloads' starts has not been seen.
+//
+// A replacement that changed nothing is one too (#118): in the field, a hunk
+// in a batch of twelve whose new text had been left as its old, which the
+// report counted among the hunks and hid in the file's row of the others.
+// Rereading the patch found it. The no-op is decided (the file is not
+// rewritten); the warning says it happened.
 type Slip struct {
 	Kind SlipKind
 	Hunk int    // 1-based, in the patch
@@ -44,15 +50,24 @@ const (
 	SlipJoinedLine
 	// The same, at the end of the file: the file no longer ends in a newline.
 	SlipNoFinalNewline
+	// The new text is the old text, so the hunk matched and changed nothing.
+	SlipNoChange
+	// The new text differs from the old only in line endings, which --eol
+	// auto writes as the file's, so the hunk changed nothing either. The fix
+	// is --eol strict rather than the patch, so it is said apart.
+	SlipLineEndings
 )
 
-// jsonKind is the kind as --json's warnings carry it.
+// jsonKind is the kind as --json's warnings carry it. Both ways of changing
+// nothing are one kind, which says what the hunk did; the message says why.
 func (k SlipKind) jsonKind() string {
 	switch k {
 	case SlipEmptyLine:
 		return "empty_line"
 	case SlipJoinedLine:
 		return "joined_line"
+	case SlipNoChange, SlipLineEndings:
+		return "no_change"
 	default:
 		return "no_final_newline"
 	}
@@ -70,9 +85,12 @@ type noted struct {
 // taken away that no later hunk gave back and that the file's row does not
 // already say, as a create's does (§5.1). An empty or a joined line that a
 // later hunk mended is not seen, and the warning names the hunk that left
-// it.
+// it. A hunk that changed nothing stands whatever came after it, the file's
+// delete included: what it was written to do was not done.
 func (s noted) stands() bool {
 	switch op := s.f.finalOp(); {
+	case s.Kind == SlipNoChange || s.Kind == SlipLineEndings:
+		return true
 	case op == "" || op == "delete":
 		return false
 	case s.Kind == SlipNoFinalNewline:
@@ -128,6 +146,22 @@ func (x *Txn) noteSlips(n int, h Hunk, f *file, old, repl, next []byte) {
 		}
 		s.Count++
 	}
+}
+
+// noteNoChange records hunk n, which matched in f and changed nothing: its
+// old and new are the same once converted for --eol. When the patch's bytes
+// differ, they differ only in line endings, since that is all convert takes
+// away. The line quoted is old's first, which is how the hunk is found in the
+// patch.
+func (x *Txn) noteNoChange(n int, h Hunk, f *file) {
+	kind := SlipNoChange
+	if !bytes.Equal(h.Old, h.New) {
+		kind = SlipLineEndings
+	}
+	x.slips = append(x.slips, noted{Slip{
+		Kind: kind, Hunk: n, Line: h.Line, Path: h.Path, Count: h.Count, Of: h.Count,
+		Text: lineAt(h.Old, 0),
+	}, f})
 }
 
 // slipOf is this hunk's slip of the kind, among those from first on, or nil.
@@ -191,6 +225,12 @@ func slipMessage(patchName string, s Slip, onDisk bool) string {
 	}
 	var msg, fix string
 	switch s.Kind {
+	case SlipNoChange:
+		// Nothing was written for it, so the remedy is the patch's
+		// whatever became of the batch.
+		return fmt.Sprintf("%s changes nothing in %s: its old and new text are the same; if a change was meant, write it under @@ new", where, path)
+	case SlipLineEndings:
+		return fmt.Sprintf("%s changes nothing in %s: its old and new text differ only in line endings, and --eol auto writes the file's; to change a line's ending, pass --eol strict", where, path)
 	case SlipEmptyLine:
 		msg = fmt.Sprintf("%s leaves an empty line after %s in %s", where, line, path)
 		if of != "" {

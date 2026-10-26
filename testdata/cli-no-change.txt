@@ -1,0 +1,5 @@
+M f.txt +1 -1
+1 file, 3 hunks, +1 -1
+
+warning: hunk 2 (patch line 6) changes nothing in f.txt: its old and new text are the same; if a change was meant, write it under @@ new
+warning: hunk 3 (patch line 11) changes nothing in c.txt: its old and new text differ only in line endings, and --eol auto writes the file's; to change a line's ending, pass --eol strict

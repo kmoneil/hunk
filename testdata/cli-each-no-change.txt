@@ -1,0 +1,4 @@
+tried p.hunk  the command exited 1 (0.0s)
+tried 1 patch and put back every file; every command exited nonzero (0.0s)
+
+warning: p.hunk hunk 2 (line 6) changes nothing in a.txt: its old and new text are the same; if a change was meant, write it under @@ new
