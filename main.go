@@ -217,6 +217,7 @@ EXIT CODES
   5  I/O error                                      tree untouched, unless
                                                     the message says otherwise
   6  a file changed on disk between load and commit tree untouched
+     or another hunk run holds the tree
 
 Exit 2 is the one to expect routinely and act on without alarm: fix the patch
 and resend. The report prints the bytes that are actually in the file, so the
@@ -238,11 +239,15 @@ WHAT THIS DOES NOT PROMISE
 Replacing one file is atomic, via rename(2). The batch is not. A write that
 fails part-way through, such as a full disk or a name the filesystem refuses,
 puts the files before it back and exits 5, but a crash part-way through leaves
-them written. Nor is there a lock. Every file is re-read just before writing,
-which catches a writer that finished in between, not one writing at the same
-time: two runs on the same files at once usually both succeed, and can leave
-some files as one wrote them and some as the other did. Both gaps are repaired
-by the version control the tree is already under.
+them written. Two hunk runs in one tree do not overlap: each holds a lock on
+--root and the directories above it from before it reads until it ends, a
+--try, --each or --verify for as long as its command runs, and a run that
+finds one held exits 6 with nothing read or written. The lock is flock(2),
+which leaves nothing on disk and ends with the process, SIGKILL included. It
+keeps hunk from hunk only, and Windows has none. Any other writer is caught by
+a re-read just before writing if it finished in between, not one writing at
+the same time. Both gaps are repaired by the version control the tree is
+already under.
 
 Run "hunk format" for the patch grammar.
 `
@@ -533,6 +538,17 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	// The root descriptor goes away with the process either way, and a close
 	// error here has nothing left to report it to.
 	defer func() { _ = tree.Close() }()
+
+	// The run holds its tree from before it reads until it ends (#128): two
+	// --try runs at once over one file each took the other's batch for the
+	// original, and the second put the first's patch back at exit 0. One that
+	// finds the tree held reads nothing and is exit 6. A dry run only reads,
+	// so dry runs share it, and are refused only by a run that writes.
+	unlock, err := lockTree(tree, !*dryRun)
+	if err != nil {
+		return fail(ExitCode(err), err, "")
+	}
+	defer unlock()
 
 	// A --verify or --try command runs through sh. With no sh to find, the
 	// command cannot start, and the batch would be written only to be rolled

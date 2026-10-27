@@ -405,12 +405,17 @@ func TestHelpCarriesWhatTheSpecCommitsItTo(t *testing.T) {
 		t.Error("--help does not state the batch-atomicity limit (§6.2)")
 	}
 	// And the concurrency limit beside it, which until 2026-09-21 it stated as
-	// a window "narrowed to microseconds". Two runs started together nearly
-	// always both pass the check; TestTwoProcessesOnTheSameFiles counts it.
-	// Compared with the page's whitespace collapsed, so where a line wraps is
-	// not part of the assertion.
-	if flat := strings.Join(strings.Fields(got), " "); !strings.Contains(flat, "not one writing at the same time") {
+	// a window "narrowed to microseconds". Since #128 two hunk runs cannot
+	// both pass the check, where there is a tree lock, and the page says so;
+	// a writer that is not hunk still can. Compared with the page's whitespace
+	// collapsed, so where a line wraps is not part of the assertion.
+	flat := strings.Join(strings.Fields(got), " ")
+	if !strings.Contains(flat, "not one writing at the same time") {
 		t.Error("--help does not state that a concurrent writer is not caught (§6.2)")
+	}
+	if !strings.Contains(flat, "Two hunk runs in one tree do not overlap") ||
+		!strings.Contains(flat, "Windows has none") {
+		t.Error("--help does not state the tree lock and where there is none (#128)")
 	}
 	// §6.3: the flag and the reason together, not just the behaviour.
 	if !strings.Contains(got, "--verify-may-format") ||

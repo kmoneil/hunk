@@ -920,18 +920,21 @@ func TestEveryRewriteKeepsTheModeLoadRead(t *testing.T) {
 	}
 }
 
-// §8.1's concurrency test, as §6.2 can keep it, decided 2026-09-21. Two hunk
-// processes started together on the same files, each replacing the same line in
-// every file with its own tag.
+// §8.1's concurrency test. Two hunk processes started together on the same
+// files, each replacing the same line in every file with its own tag.
 //
 // The check above catches a writer that finished between a run's read and its
 // write. It does not catch one writing at the same time, and two processes
 // started together nearly always both pass it before either renames, after
-// which their renames interleave file by file. So neither "exactly one exits
-// 0" nor "every file came from the same process" is a property this tool has,
-// and a test asserting either would fail at random. What holds on every run is
-// asserted, and the rest is counted and logged.
+// which their renames interleave file by file: 75 blends in 600 pairs, measured
+// 2026-09-21. Since #128 the tree lock keeps them apart, so where hunk takes
+// one, §8.1's own words hold: exactly one exits 0, and the tree is that one's.
+// The other exits 6 when it met the lock, or 2 when it started after the
+// first had finished and read its result. Where hunk takes no lock (Windows,
+// needsTreeLock), neither property holds, so what holds on every run is
+// asserted and the rest is counted and logged, as before the lock.
 func TestTwoProcessesOnTheSameFiles(t *testing.T) {
+	locked := sysFlock != nil
 	exe, err := os.Executable()
 	must(t, err)
 	const nFiles, trials = 4, 40
@@ -991,6 +994,8 @@ func TestTwoProcessesOnTheSameFiles(t *testing.T) {
 		switch {
 		case ea != exitOK && eb != exitOK:
 			t.Fatalf("trial %d: both refused (%d, %d), but a refusal needs a write to be refused for", trial, ea, eb)
+		case locked && ea == exitOK && eb == exitOK:
+			t.Fatalf("trial %d: both exited 0 with the tree lock, and the tree is %v", trial, whose)
 		case ea != exitOK || eb != exitOK:
 			// A refused process wrote nothing, so the tree is the other's.
 			winner := "A"

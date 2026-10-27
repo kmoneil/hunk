@@ -51,9 +51,10 @@ success.
 | exit 4, `was not restored` | Ignore it | The tree is inconsistent. Read which file and why, then repair it before doing anything else |
 | exit 5 | Assume the edit landed | Read the message. Unless it says otherwise, nothing was written, or it was put back. The cause is outside the patch: a missing shell, a name the filesystem refused, a full disk |
 | exit 6, `changed on disk` | Retry the same patch | Something else wrote the tree. Re-read the file and rebuild the patch against what is there now |
+| exit 6, `another hunk run holds` | Rebuild the patch, or retry it at once | Nothing was read. Another `hunk` run is mid-command in that tree, perhaps a `--try` or `--each` you started in the background. Wait for it to end, then send the same patch |
 | exit 0, then `warning: hunk 2 (patch line 7) leaves an empty line after "B"` | Take exit 0 as the edit you meant | The batch applied with that empty line, joined line or missing final newline in it. If you did not mean it, do what the warning ends with, in the file it names |
 | exit 0, then `warning: hunk 2 (patch line 6) changes nothing in f.txt` | Take exit 0 as the edit you meant | That hunk matched and wrote nothing: its new text is its old, or under `--eol auto` differs from it only in line endings. Send the change you meant, or for a line ending, the same hunk with `--eol strict` |
-| exit 1, `patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter` | Pass `--allow-mistyped-delimiter` to get it past | Take the line out of the patch and send it again: nothing was written. If it counts lines after it, they were the rest of your command: take them out too and run them yourself. The flag is for a line you mean as text, as in a document about `hunk`; under it the patch applies and a `warning:` names the line |
+| exit 1, `patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter` | Pass `--allow-mistyped-delimiter` to get it past | The patch was refused and nothing was written: take the line out of the patch and send it again. If it counts lines after it, they were the rest of your command: take them out too and run them yourself. The flag is for a line you mean as text, as in a document about `hunk`; under it the patch applies and a `warning:` names the line |
 
 The near-miss report exists so that a failed match costs zero extra round trips.
 Using it is the whole point.
@@ -419,7 +420,8 @@ mirror of the habit this replaces, and it costs the same thing: round trips.
 ## Exit codes and limits
 
 `0` applied, `1` bad usage or patch, `2` a hunk did not match, `3` verify failed
-and the tree went back, `6` the file changed underneath you. Codes `4` and `5`,
+and the tree went back, `6` the file changed underneath you or another `hunk`
+run holds the tree. Codes `4` and `5`,
 and what the tool does **not** guarantee, are in `references/exit-codes.md`;
 read it if you meet one.
 

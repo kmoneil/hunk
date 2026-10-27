@@ -494,3 +494,17 @@ func longSleep() string {
 	}
 	return "sleep 20"
 }
+
+// needsTreeLock skips a test of the tree lock where hunk takes none (#128).
+// The lock is flock(2) on directories, and Windows has no flock in the
+// standard library: LockFileEx is a DLL call there, and locks a handle that
+// would also have to stay open across the rename that replaces each file. So
+// two runs at once in one tree are there as they were before the lock, which
+// README says. Asked of the build rather than of runtime.GOOS, so a platform
+// the lock does build for cannot skip its test.
+func needsTreeLock(t *testing.T) {
+	t.Helper()
+	if sysFlock == nil {
+		t.Skip("no flock(2) on this platform, so hunk takes no tree lock: #128")
+	}
+}

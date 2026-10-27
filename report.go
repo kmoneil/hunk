@@ -152,6 +152,12 @@ func ExitCode(err error) int {
 	if errors.As(err, &ce) {
 		return exitChanged
 	}
+	// Another run holding the tree is the second writer exit 6 already
+	// names, found before the read rather than after it (#128).
+	var tb *TreeBusyError
+	if errors.As(err, &tb) {
+		return exitChanged
+	}
 	return exitIO
 }
 
