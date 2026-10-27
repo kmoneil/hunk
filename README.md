@@ -680,7 +680,7 @@ and the five-second cut on its output covers what `sh` started.
 | 3 | verify failed, rolled back | the same bytes and mode |
 | 4 | verify failed and rollback was incomplete | **inconsistent** |
 | 5 | I/O error | untouched, unless the message says otherwise |
-| 6 | a file changed on disk between load and commit | untouched |
+| 6 | a file changed on disk between load and commit, or another `hunk` run holds the tree | untouched |
 
 Under `--try` the exit is the command's own status instead, 124 if
 `--timeout` ended it, and 4 if a file could not be put back. A `hunk` ended by a
@@ -707,15 +707,36 @@ refuses, puts back the files written before it and exits 5, naming the file
 that failed. A crash part-way through cannot be undone that way, since undoing
 needs the process alive, so the files before it stay written.
 
-Every target is re-hashed between validation and writing, so a process that
-wrote the tree in between is caught, and the exit is 6 with nothing written.
-One writing at the same time is not. There is no lock file, and two `hunk` runs
-started together on the same files usually both succeed, which can leave some
-files as one wrote them and some as the other did. No file is ever a mix of
-the two.
+**Two `hunk` runs in one tree do not overlap.** Each holds a lock on its
+`--root`, and on every directory above it that you own, from before it reads a
+file until it ends: a `--try`, `--each` or `--verify` holds it for as long as
+its command runs. A run that finds the tree held exits 6 having read and
+written nothing, and names the directory another run holds. Wait for that run
+to end, or stop it, and send the same patch again. Without the lock, a `--try`
+started while another run's batch was on disk took that batch for the file's
+original bytes, and put it back at exit 0; and a run on another file of the
+tree ran its command against the other run's change.
 
-Both gaps are repaired by the version control your tree is already under, which
-is why neither is worth the complexity of closing.
+A run that writes takes its root for itself. A `--dry-run` shares it with
+other dry runs, so only a run that writes refuses one. Runs rooted in sibling
+directories do not meet. One case is let through: a dry run rooted above a run
+that writes shares the directory they meet at, and reads the tree as that run
+has it.
+
+The lock is `flock(2)` on the directories, so it leaves nothing on disk, and
+the kernel lets it go when `hunk` ends, SIGKILL included, even while a command
+it started runs on. It keeps `hunk` from `hunk` and nothing else. It does not
+cover a file outside `--root` under `--allow-outside-root`, or a filesystem
+without `flock(2)`, where the run goes ahead unguarded. Windows has no lock:
+there, two runs at once in one tree are as they were before it.
+
+A writer that is not `hunk` is caught if it wrote between validation and
+writing, since every target is re-hashed in between: the exit is 6 with
+nothing written. One writing at the same time is not.
+
+Both gaps, the crash and the other writer, are repaired by the version control
+your tree is already under, which is why neither is worth the complexity of
+closing.
 
 Every write is a new file renamed over the old one, so a file `hunk` rewrites,
 including one a rollback puts back, keeps its bytes and its mode, setuid,

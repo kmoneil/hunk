@@ -1,0 +1,2 @@
+hunk: another hunk run holds /work/repo or a directory below it; nothing was read or written. A --try, --each or --verify holds its tree until its command ends and the files are back: wait for that, or stop it, then run this again
+hunk: another hunk run holds /work, which this tree is in; nothing was read or written. A --try, --each or --verify holds its tree until its command ends and the files are back: wait for that, or stop it, then run this again

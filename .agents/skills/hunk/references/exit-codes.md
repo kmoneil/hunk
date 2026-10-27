@@ -14,7 +14,7 @@ guarantee.
 | 3 | verify failed, rolled back | the same bytes and mode |
 | 4 | verify failed and rollback was incomplete | **inconsistent** |
 | 5 | I/O error | untouched, unless the message says otherwise |
-| 6 | a file changed on disk between read and write | untouched |
+| 6 | a file changed on disk between read and write, or another `hunk` run holds the tree | untouched |
 
 **Under `--try CMD` the exit is `CMD`'s own status** once every file is back,
 and 4 if one could not be put back. The report starts `tried` when `CMD` ran;
@@ -59,13 +59,17 @@ so a program never has to parse the text.
 Replacing one file is atomic. **The batch is not**: a crash part-way through
 leaves the files before it written. A write that fails part-way, such as a full
 disk or a name the filesystem refuses, is put back instead, at exit 5, and the
-message names the file that failed. **Nor is there a lock.** A writer that
-finished between `hunk`'s read and its write is caught, at exit 6, but one
-writing at the same time is not: two `hunk` runs on the same files at once
-usually both succeed, and can leave some files as one wrote them and some as
-the other did. Both are repaired by the version control the tree is already
-under. Do not build anything on the batch being atomic across a power failure,
-or on two agents editing the same files at once.
+message names the file that failed. **Two `hunk` runs in one tree do not
+overlap.** Each holds a lock on its `--root` and the directories above it from
+before it reads until it ends, a `--try`, `--each` or `--verify` for as long as
+its command runs, and a run that finds one held exits 6 with nothing read or
+written: wait for the other run to end, then send the same patch. A
+`--dry-run` shares the lock with other dry runs. Windows has no lock. It keeps
+`hunk` from `hunk` only: any other writer that finished between `hunk`'s read
+and its write is caught, at exit 6, but one writing at the same time is not.
+Both are repaired by the version control the tree is already under. Do not
+build anything on the batch being atomic across a power failure, or on another
+tool editing the same files at once.
 
 A rewritten file, including one a rollback puts back, keeps its bytes and its
 permission bits, and its group where the user is in that group; where not, the
