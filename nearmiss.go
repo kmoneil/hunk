@@ -52,6 +52,11 @@ const (
 	// but replacing a copy would part a CRLF line ending's carriage return
 	// from its newline (#122).
 	DiagSplitCRLF
+	// DiagJoinedCRLF: under --eol auto, old occurs as many times as claimed,
+	// but replacing a copy would put a carriage return just before a newline
+	// that did not follow it, which reads back as a CRLF line ending the
+	// patch did not write (#126).
+	DiagJoinedCRLF
 )
 
 // A Diagnosis explains why a hunk did not apply. It renders to both the text
@@ -105,8 +110,9 @@ type Diagnosis struct {
 	Column   int
 
 	// Lines are where each match starts (DiagTooMany, DiagOverlap and
-	// DiagMixedEndings), capped, and for DiagSplitCRLF the line of each CRLF
-	// a replacement would split.
+	// DiagMixedEndings), capped, for DiagSplitCRLF the line of each CRLF a
+	// replacement would split, and for DiagJoinedCRLF the line where each
+	// copy would join one.
 	Lines []int
 	// Endings is each listed match's line endings, "CRLF", "LF" or "mixed",
 	// parallel to Lines (DiagMixedEndings only).
@@ -115,8 +121,8 @@ type Diagnosis struct {
 	MoreLines int
 	// Found is the total number of matches: what the suggested "@@ old x N"
 	// needs (DiagTooMany), and the true count where the count missed some
-	// (DiagOverlap, DiagMixedEndings). For DiagSplitCRLF it is how many of
-	// the copies would split one.
+	// (DiagOverlap, DiagMixedEndings). For DiagSplitCRLF and DiagJoinedCRLF
+	// it is how many of the copies would split or join one.
 	Found int
 
 	// Shifted is the number of hunks that changed this file earlier in the same
@@ -382,6 +388,120 @@ func DiagnoseSplitCRLF(file, old, repl []byte, n int) *Diagnosis {
 	return &Diagnosis{
 		Kind: DiagSplitCRLF, Cause: "split line ending", Detail: detail,
 		Found: split, Lines: lineNumbers(file, crs), MoreLines: split - len(crs),
+	}
+}
+
+// DiagnoseJoinedCRLF reports the copies of old in file that replacing with
+// repl would put a carriage return just before a newline that did not follow
+// it, or nil when none would (#126). old and repl are the payloads as --eol
+// auto converted them to eol, the file's dominant ending, and the copies are
+// the first n left to right, the ones bytes.Replace edits.
+//
+// A carriage return meets a newline in three places. The file's, just before
+// a copy, meets new's opening newline, or with new empty the newline just
+// after the copy (or after the run of touching copies it ends). new's closing
+// one meets the newline just after the copy, or the next copy's new when the
+// two touch. And in an LF file, one that new puts before a line break is
+// written just before that break's newline, unless old held as many CRLFs,
+// which is new keeping the ones the file had. A pair the file already had at
+// the same place is kept, not joined. One the replacement would part is
+// DiagnoseSplitCRLF's, which Validate asks first.
+//
+// Only --eol auto asks. There a CRLF is a line ending, so a carriage return
+// that comes to stand before a newline stops being text, and the file gains a
+// line ending the patch did not write. Until 2026-10-27 that applied at exit
+// 0. A payload of "\r\r\n" went into an LF file as "\r\n", which turned the
+// file's majority to CRLF; the inverse then read its text as CRLF and matched
+// the file's own first line, not the line the patch had written, at the right
+// count: the nightly fuzz found that.
+func DiagnoseJoinedCRLF(file, old, repl []byte, n int, eol string) *Diagnosis {
+	if len(old) == 0 {
+		return nil
+	}
+	var starts []int
+	for off := 0; len(starts) < n; {
+		i := bytes.Index(file[off:], old)
+		if i < 0 {
+			break
+		}
+		starts = append(starts, off+i)
+		off += i + len(old)
+	}
+	inside := eol == "\n" && bytes.Count(repl, crlf) > bytes.Count(old, crlf)
+	var at []int
+	joined, run := 0, 0
+	var before, within, after bool
+	for k, s := range starts {
+		e := s + len(old)
+		prevTouches := k > 0 && starts[k-1]+len(old) == s
+		nextTouches := k+1 < len(starts) && starts[k+1] == e
+		if !prevTouches {
+			run = s
+		}
+		site := -1
+		mark := func(off int, how *bool) {
+			if site < 0 {
+				site = off
+			}
+			*how = true
+		}
+		switch {
+		case len(repl) == 0:
+			// Nothing is written, so the byte before the run of touching
+			// copies meets the byte after it.
+			if !nextTouches && run > 0 && e < len(file) && file[run-1] == '\r' && file[e] == '\n' {
+				mark(run-1, &before)
+			}
+		default:
+			kept := s > 0 && file[s-1] == '\r' && file[s] == '\n'
+			if repl[0] == '\n' && !kept {
+				switch {
+				case prevTouches && repl[len(repl)-1] == '\r':
+					mark(s, &after)
+				case !prevTouches && s > 0 && file[s-1] == '\r':
+					mark(s-1, &before)
+				}
+			}
+			if inside {
+				mark(s, &within)
+			}
+			if !nextTouches && e < len(file) && repl[len(repl)-1] == '\r' && file[e] == '\n' && file[e-1] != '\r' {
+				mark(e, &after)
+			}
+		}
+		if site >= 0 {
+			joined++
+			if len(at) < tooManyLimit {
+				at = append(at, site)
+			}
+		}
+	}
+	if joined == 0 {
+		return nil
+	}
+	var how, fix []string
+	if before {
+		how = append(how, "a carriage return comes just before old, and replacing old would put a newline right after it")
+		fix = append(fix, "start old on that carriage return")
+	}
+	if within {
+		how = append(how, "new has a carriage return before a line break, and in this file a line break is a newline")
+		fix = append(fix, "take the carriage return out of new")
+	}
+	if after {
+		how = append(how, "new ends with a carriage return, and a newline would follow it")
+		fix = append(fix, "end new before its carriage return")
+	}
+	pair := "the two"
+	if len(how) > 1 {
+		pair = "each carriage return and its newline"
+	}
+	return &Diagnosis{
+		Kind: DiagJoinedCRLF, Cause: "joined line ending",
+		Detail: strings.Join(how, "; ") + ", so under --eol auto " + pair +
+			" would read as a CRLF line ending the patch did not write; " +
+			strings.Join(fix, ", ") + ", or pass --eol strict to edit the bytes as they are",
+		Found: joined, Lines: lineNumbers(file, at), MoreLines: joined - len(at),
 	}
 }
 
@@ -1260,7 +1380,7 @@ func (d *Diagnosis) Render(indent string) string {
 		fmt.Fprintf(&b, "\n\n%s%s\n", indent, d.Detail)
 		return b.String()
 
-	case DiagSplitCRLF:
+	case DiagSplitCRLF, DiagJoinedCRLF:
 		// Not returned from: the lines are the file's as earlier hunks in
 		// the batch left it, which the note after the switch says.
 		at := make([]string, len(d.Lines))

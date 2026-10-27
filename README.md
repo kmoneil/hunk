@@ -210,6 +210,15 @@ its carriage return on its own, and one that ends on the carriage return, when
 with exit 2, the line of each such CRLF named. `--eol strict` edits the bytes as
 they are.
 
+Nor may it join one. A CRLF is a line ending, so a carriage return that comes to
+stand just before a newline stops being text, and the file gains a line ending
+the patch did not write. That happens when `new` puts one before a line break in
+a file whose line ending is LF, when `new` ends with one where a newline follows
+`old`, when `new` begins with a newline just after one in the file, and when a
+deletion closes one up to a newline. Each is refused with exit 2, the line
+named. A replacement that keeps a CRLF the file had still applies, and
+`--eol strict` edits the bytes as they are.
+
 Three rules worth knowing before the first patch:
 
 1. **A payload never gains a trailing newline.** To match text that ends in a

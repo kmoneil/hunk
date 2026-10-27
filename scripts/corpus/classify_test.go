@@ -637,6 +637,8 @@ var reportGoldens = map[string]int{
 	"report-mixed-endings-json":                       2,
 	"report-split-crlf":                               2,
 	"report-split-crlf-json":                          2,
+	"report-joined-crlf":                              2,
+	"report-joined-crlf-json":                         2,
 	"report-verify-failed":                            3,
 	"report-verify-failed-json":                       3,
 	"cli-path-refused":                                ExitNoMatch,

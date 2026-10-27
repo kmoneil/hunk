@@ -738,7 +738,9 @@ surrounding context to the old text until it is unique. Copies that overlap,
 and under --eol auto copies in a file's other line ending, count as well, and
 are refused rather than edited. Under --eol auto, so is a copy whose replacement
 would split a CRLF: one that begins on its newline, or ends on its carriage
-return, when new does not do the same.
+return, when new does not do the same. And so is one whose replacement would
+put a carriage return just before a newline, which would read as a CRLF line
+ending the patch did not write.
 
 PAYLOADS
 

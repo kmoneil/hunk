@@ -400,10 +400,25 @@ func writeFailureBlocks(w io.Writer, failures []Failure) {
 			default:
 				fmt.Fprintf(w, ", and replacing %d of them would split %s", f.Near.Found, endings)
 			}
+		case DiagJoinedCRLF:
+			// As for a split: the count was right, and the clause says how
+			// many of the copies cannot be edited.
+			pairs := "carriage returns to newlines"
+			if f.Near.Found == 1 {
+				pairs = "a carriage return to a newline"
+			}
+			switch {
+			case f.Found == 1:
+				fmt.Fprint(w, ", and replacing it would join ", pairs)
+			case f.Near.Found == f.Found:
+				fmt.Fprint(w, ", and replacing them would join ", pairs)
+			default:
+				fmt.Fprintf(w, ", and replacing %d of them would join %s", f.Near.Found, pairs)
+			}
 		}
 		fmt.Fprintln(w)
 		switch f.Near.Kind {
-		case DiagTooMany, DiagOverlap, DiagMixedEndings, DiagSplitCRLF:
+		case DiagTooMany, DiagOverlap, DiagMixedEndings, DiagSplitCRLF, DiagJoinedCRLF:
 		default:
 			fmt.Fprintln(w)
 		}
@@ -985,7 +1000,7 @@ func jsonFailureOf(f Failure) jsonFailure {
 		switch d.Kind {
 		case DiagTooMany:
 			jf.Lines = d.Lines
-		case DiagOverlap, DiagMixedEndings, DiagSplitCRLF:
+		case DiagOverlap, DiagMixedEndings, DiagSplitCRLF, DiagJoinedCRLF:
 			// The lines where copies are, as for too many, and the cause
 			// and the remedy, since found alone does not say why a count
 			// that equals the claim was refused.

@@ -1,0 +1,7 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  f.txt  (patch line 2)
+  expected 1 occurrence, found 1, and replacing it would join a carriage return to a newline
+  at line 2
+
+  new has a carriage return before a line break, and in this file a line break is a newline, so under --eol auto the two would read as a CRLF line ending the patch did not write; take the carriage return out of new, or pass --eol strict to edit the bytes as they are
