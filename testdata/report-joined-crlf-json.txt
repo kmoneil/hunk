@@ -1,0 +1,20 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 1,
+      "path": "f.txt",
+      "patch_line": 2,
+      "expected": 1,
+      "found": 1,
+      "lines": [
+        2
+      ],
+      "near_miss": {
+        "cause": "joined line ending",
+        "detail": "new has a carriage return before a line break, and in this file a line break is a newline, so under --eol auto the two would read as a CRLF line ending the patch did not write; take the carriage return out of new, or pass --eol strict to edit the bytes as they are"
+      }
+    }
+  ]
+}

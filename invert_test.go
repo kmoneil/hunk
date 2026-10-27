@@ -687,6 +687,12 @@ func FuzzAnInverseUndoesThePatch(f *testing.F) {
 	f.Add([]byte("\r\n\x00\r\n\n"), []byte("\n\x00"), []byte("\r\n\n"), []byte("\r"), []byte("\n0"), false)
 	f.Add([]byte("a\r\nv\r\nw\r\nx\r\ny\r\nP\nQ\nm\nn\n"), []byte("a"), []byte("P\nQ"),
 		[]byte("Q\r\nv\r\nw\r\nx\r\ny"), []byte("\nR"), false)
+	// #126, the next night's find: d is a carriage return and then a line
+	// break, which went into the file, LF by a tie, as "\r\n". That read as a
+	// CRLF, turned the majority to CRLF, and the inverse's "\r\r\n" then
+	// matched the file's own first line at the right count. Refused now when
+	// the patch is applied, as joining a carriage return to a newline.
+	f.Add([]byte("\r\r\n\x80J\n"), []byte("J"), []byte("0"), []byte("0"), []byte("\r\r\n"), false)
 	f.Fuzz(func(t *testing.T, start, a, b, c, d []byte, strict bool) {
 		n1 := bytes.Count(start, a)
 		if len(a) == 0 || n1 == 0 {

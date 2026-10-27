@@ -580,16 +580,21 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		}
 		repl := x.convert(h.New, f.eol)
 		// Under --eol auto no copy is edited whose replacement would part a
-		// CRLF's two bytes (#122). The diagnosis is attached past §7.2's cap
+		// CRLF's two bytes (#122), or join a carriage return to a newline that
+		// did not follow it (#126). The diagnosis is attached past §7.2's cap
 		// as well: it prints no span to fill a context window, and without it
 		// the failure would read "expected 1 occurrence, found 1".
 		if x.opt.EOL != EOLStrict {
-			if split := DiagnoseSplitCRLF(f.cur, old, repl, h.Count); split != nil {
+			crlfFault := DiagnoseSplitCRLF(f.cur, old, repl, h.Count)
+			if crlfFault == nil {
+				crlfFault = DiagnoseJoinedCRLF(f.cur, old, repl, h.Count, f.eol)
+			}
+			if crlfFault != nil {
 				f.failedAt = n
-				split.Shifted = f.applied
+				crlfFault.Shifted = f.applied
 				failures = append(failures, Failure{
 					Hunk: n, Path: h.Path, PatchLine: h.Line,
-					Expected: h.Count, Found: found, Near: split,
+					Expected: h.Count, Found: found, Near: crlfFault,
 				})
 				continue
 			}
