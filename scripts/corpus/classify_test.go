@@ -432,6 +432,24 @@ func TestHunkExit(t *testing.T) {
 		{"--try --isolated, interrupted", "hunk --try x --isolated -f p", "tried 1 hunk in a copy of the tree; interrupted by SIGINT, the command was ended (0.4s)\n", 130},
 		{"--try --isolated, interrupted while copying", "hunk --try x --isolated -f p", "hunk: interrupted by SIGTERM while copying the tree for --isolated; nothing was run, and the tree is untouched\n", 143},
 		{"--try --isolated, the copy could not be made", "hunk --try x --isolated -f p", "hunk: could not copy the tree for --isolated: mkdir /tmp/x: no space left on device; nothing was run, and the tree is untouched\n", 5},
+		// From 2026-10-28 (#132) the copy, once made, has a line of its own
+		// before anything else: it changes no exit.
+		{
+			"--try --isolated, after the copy line", "hunk --try x --isolated -f p",
+			"copied the tree in 0.0s: 1 file, 4 B, all cloned, in /tmp/hunk-isolated-1\ntried 1 hunk in a copy of the tree; the command exited 1 (2.0s)\n", 0,
+		},
+		{
+			"--try --isolated, interrupted, after the copy line", "hunk --try x --isolated -f p",
+			"copied the tree in 0.0s: 1 file, 4 B, in /tmp/hunk-isolated-1\ntried 1 hunk in a copy of the tree; interrupted by SIGINT, the command was ended (0.4s)\n", 130,
+		},
+		{
+			"--each --isolated, a command exited 0, after the copy line", "hunk --try x --isolated --each a.hunk",
+			"copied the tree in 9.1s: 34,345 files, 61.2 GB, none cloned, in /tmp/hunk-isolated-1\ntried a.hunk  the command exited 0 (0.1s)\ntried 1 patch in a copy of the tree; 1 exited 0 (0.1s)\n", 3,
+		},
+		{
+			"--each --isolated stopped, after the copy line", "hunk --try x --isolated --each a.hunk b.hunk",
+			"copied the tree in 0.0s: 2 files, 8 B, all cloned, in /tmp/hunk-isolated-1\ntried a.hunk  the command exited 1 (0.1s); 1 file left alone\nnot tried: b.hunk\ntried 0 of 2 patches; stopped at a.hunk: 1 file was not restored in the copy; 1 patch not tried\n", 5,
+		},
 		{
 			"--each stopped, the tree changed under the run", "hunk --try x --each a.hunk b.hunk",
 			"tried a.hunk  the command exited 1 (0.1s)\nhunk: b.hunk no longer applies; the preflight matched every patch, so the tree has changed since the run began: by the command, or by another writer\n\nhunk 1  a.go  (patch line 2)\n  expected 1 occurrence, found 0\ntried 1 of 2 patches; stopped at b.hunk\n", 2,

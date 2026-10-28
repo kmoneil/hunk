@@ -83,9 +83,11 @@ FLAGS
                         so nothing else that reads the tree sees a patch. The
                         tree is never written, and its lock is let go once the
                         copy is made. The copy is all of --root, .git and
-                        caches too, with modes and times, and is removed at the
-                        end. A command that reaches outside --root, or names
-                        the tree by its full path, still reaches the tree
+                        caches too, with modes and times, cloned where the
+                        filesystem can (APFS, btrfs, XFS), and is removed at
+                        the end; a line on stderr says how much it was and how
+                        long it took. A command that reaches outside --root, or
+                        names the tree by its full path, still reaches the tree
                         itself. Refused with --verify, --verify-may-format and
                         --allow-outside-root.
   --timeout DURATION    End the --verify or --try command after DURATION, such

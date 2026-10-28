@@ -84,6 +84,8 @@ type eachConfig struct {
 	letGo func()
 	// inCopy is set once the copy is made: the run from there is in it.
 	inCopy bool
+	// copied is that copy (#132), for --json; the text said so as it was made.
+	copied *copyMade
 }
 
 // eachPatch is one patch of the run: the file as the caller spelled it, its
@@ -328,7 +330,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		// Nothing but the command writes in the copy, so a file it rewrote
 		// is put back regardless, as under --verify-may-format, and the next
 		// patch is tried against the copy as it was made.
-		copied, remove, err := isolate(tree, func() os.Signal { return pending(sigs) })
+		copied, made, remove, err := isolate(tree, func() os.Signal { return pending(sigs) })
 		var ci *copyInterrupted
 		switch {
 		case errors.As(err, &ci):
@@ -340,7 +342,10 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 			defer func() { _ = copied.Close() }()
 			cfg.letGo()
 			tree = copied
-			cfg.verifyFormat, cfg.inCopy = true, true
+			cfg.verifyFormat, cfg.inCopy, cfg.copied = true, true, &made
+			if !cfg.quiet {
+				writeCopied(stderr, made)
+			}
 		}
 	}
 	if sig == nil && cfg.build != "" {
@@ -906,7 +911,7 @@ func eachNameWidth(patches []*eachPatch) int {
 // name, and the runs on the tree as it is where they ran. The streamed
 // per-patch lines were stderr's.
 func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code int, stopReason string, stdout, stderr io.Writer) int {
-	out := jsonReport{OK: code == exitOK, Exit: code, DryRun: cfg.dryRun, Isolated: cfg.inCopy}
+	out := jsonReport{OK: code == exitOK, Exit: code, DryRun: cfg.dryRun, Isolated: cfg.inCopy, Copy: jsonCopyOf(cfg.copied)}
 	je := &jsonEach{Command: cfg.command, Build: cfg.build}
 	if bases.build != nil {
 		je.Baseline = eachBuildJSON(bases.build)

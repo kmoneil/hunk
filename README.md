@@ -677,14 +677,38 @@ modification time, since a build that compares times would otherwise take an
 object copied after its source for an up-to-date one. A link to an absolute
 name under the root points at the same name in the copy; named pipes, sockets
 and devices are left out, and so is anything removed while it is being copied,
-as a build's cache can be. It is a plain copy, so a large `node_modules` or
-`target/` makes it slow to make. What it cannot isolate is anything the command
+as a build's cache can be. What it cannot isolate is anything the command
 reaches outside `--root`: a build that reads `../lib`, or names the tree by its
 full path, reads the tree itself, so give a `--root` that holds what the build
 reads. `--isolated` is refused with `--verify`, which keeps its batch in the
 tree; with `--allow-outside-root`, since a file outside the root is not in the
 copy; and with `--verify-may-format`, since nothing but the command writes in
 the copy, so a file it rewrote is put back regardless.
+
+Each file is cloned where the filesystem can clone it. On macOS hunk clones it
+with `fclonefileat` on APFS, and on Linux the kernel does the same through
+`copy_file_range` on btrfs and XFS: the copy shares the tree's blocks until one
+side writes, so a 60 GB build cache is copied in seconds into next to no space,
+and a write in the copy goes to blocks of its own, never to the tree. Anywhere
+else every byte is copied, and a large `node_modules`, `target/` or
+`.zig-cache` makes the copy slow and as big as the tree: on HFS+, exFAT, ext4
+or a network share, in a `/tmp` that is tmpfs, where the copy is held in
+memory, and whenever the temporary directory is on another volume from the
+tree, since a clone cannot cross volumes. In that last case, point `TMPDIR` at
+a directory on the tree's own volume.
+
+Once the copy is made, and before anything runs in it, a line on stderr says
+what it came to, so a run that is slow to start says why:
+
+```
+copied the tree in 9.1s: 34,345 files, 61.2 GB, all cloned, in /tmp/hunk-isolated-2917155247
+```
+
+On macOS it counts the files cloned, and `none cloned` there is a full copy.
+Elsewhere it leaves the count out, since a clone the kernel makes through
+`copy_file_range` is not one hunk can see. `--quiet` leaves the line out, and
+`--json` carries the same as `copy`: its `path`, `files`, `bytes` and
+`seconds`, and on macOS `cloned`.
 
 ### When the command does not end
 

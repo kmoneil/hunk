@@ -13,11 +13,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"math"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -90,6 +93,29 @@ func theCopy(t *testing.T, tmp string) string {
 	return filepath.Join(tmp, left[0])
 }
 
+// reCopied is the line --isolated prints once its copy is made (#132), the
+// copy's path captured. The figures are a live run's, so the shape is what is
+// asserted here and the golden has the words.
+var reCopied = regexp.MustCompile(`^copied the tree in \d+\.\ds: (?:1 file|[\d,]+ files), \d+(?:\.\d)? [kMGTPE]?B(?:, (?:all|none|[\d,]+) cloned)?, in (.+)\n`)
+
+// afterCopied is stderr after the copy line, which it has to start with, and
+// the path the line names, which has to be a copy under tmp. On Windows the
+// path is compared by its last element: the shell the commands run under
+// spells the temporary directory its own way.
+func afterCopied(t *testing.T, tmp, stderr string) (path, rest string) {
+	t.Helper()
+	m := reCopied.FindStringSubmatch(stderr)
+	switch {
+	case m == nil:
+		t.Errorf("stderr does not start with the copy line:\n%s", stderr)
+		return "", stderr
+	case runtime.GOOS == "windows" && !strings.HasPrefix(filepath.Base(m[1]), "hunk-isolated-"),
+		runtime.GOOS != "windows" && !strings.HasPrefix(m[1], tmp+string(filepath.Separator)+"hunk-isolated-"):
+		t.Errorf("the copy line names %s, want a copy under %s", m[1], tmp)
+	}
+	return m[1], stderr[len(m[0]):]
+}
+
 // sh spells a path for a command.
 func sh(path string) string { return "'" + filepath.ToSlash(path) + "'" }
 
@@ -123,9 +149,11 @@ func TestAnIsolatedTryRunsInACopy(t *testing.T) {
 			if code != c.status {
 				t.Fatalf("exit %d, want %d\n%s%s", code, c.status, out, errOut)
 			}
-			report, other := errOut, out
+			// The copy line first, on stderr whatever the exit (#132).
+			path, rest := afterCopied(t, tmp, errOut)
+			report, other := rest, out
 			if c.toOut {
-				report, other = out, errOut
+				report, other = out, rest
 			}
 			want := fmt.Sprintf("tried 1 hunk in a copy of the tree; the command exited %d (", c.status)
 			if !strings.HasPrefix(report, want) || other != "" {
@@ -135,8 +163,8 @@ func TestAnIsolatedTryRunsInACopy(t *testing.T) {
 			if len(got) != 3 || got[1] != "one" || got[2] != "ONE" {
 				t.Fatalf("the command saw %q; want the tree's a.txt unpatched and its own patched", got)
 			}
-			if runtime.GOOS != "windows" && (!strings.HasPrefix(got[0], tmp+string(filepath.Separator)+"hunk-isolated-") || got[0] == root) {
-				t.Errorf("the command ran in %s, want a copy under %s", got[0], tmp)
+			if runtime.GOOS != "windows" && (!strings.HasPrefix(got[0], tmp+string(filepath.Separator)+"hunk-isolated-") || got[0] == root || got[0] != path) {
+				t.Errorf("the command ran in %s, want the copy under %s the line named, %s", got[0], tmp, path)
 			}
 			assertUnchanged(t, root, before)
 			assertNoCopyLeft(t, tmp)
@@ -163,6 +191,11 @@ func TestAnIsolatedEachRunsInACopy(t *testing.T) {
 	if !strings.HasPrefix(out, "tried 3 patches in a copy of the tree; every command exited nonzero (") {
 		t.Errorf("stdout %q", out)
 	}
+	// The copy line before every patch's.
+	path, rest := afterCopied(t, tmp, errOut)
+	if !strings.HasPrefix(rest, "tried ") || strings.Contains(rest, "copied the tree") {
+		t.Errorf("stderr after the copy line: %q", rest)
+	}
 	// The command on the tree as it is, once per patch, and once after.
 	got := logLines(t, seen)
 	if len(got) != 15 {
@@ -179,8 +212,8 @@ func TestAnIsolatedEachRunsInACopy(t *testing.T) {
 			t.Errorf("want 5 commands and 5 builds, got %q", dirs)
 		}
 		for _, d := range dirs {
-			if d != dirs[0] || !strings.HasPrefix(d, tmp+string(filepath.Separator)+"hunk-isolated-") {
-				t.Errorf("ran in %q; want every command and build in the one copy under %s", dirs, tmp)
+			if d != path || !strings.HasPrefix(d, tmp+string(filepath.Separator)+"hunk-isolated-") {
+				t.Errorf("ran in %q; want every command and build in the one copy under %s, the one the line named, %s", dirs, tmp, path)
 				break
 			}
 		}
@@ -314,15 +347,16 @@ func TestAnIsolatedRunWhoseCopyCannotBeMade(t *testing.T) {
 				msg := errOut
 				if asJSON {
 					var r struct {
-						Exit     int    `json:"exit"`
-						Error    string `json:"error"`
-						Isolated bool   `json:"isolated"`
+						Exit     int       `json:"exit"`
+						Error    string    `json:"error"`
+						Isolated bool      `json:"isolated"`
+						Copy     *copyJSON `json:"copy"`
 					}
 					if err := json.Unmarshal([]byte(out), &r); err != nil {
 						t.Fatalf("stdout not JSON: %v\n%s", err, out)
 					}
-					if r.Exit != exitIO || r.Isolated {
-						t.Errorf("json %+v: want exit 5, and no copy to call it isolated", r)
+					if r.Exit != exitIO || r.Isolated || r.Copy != nil {
+						t.Errorf("json %+v: want exit 5, and no copy to call it isolated or to describe", r)
 					}
 					msg = "hunk: " + r.Error + "\n"
 				}
@@ -343,8 +377,9 @@ func TestAnIsolatedRunWhoseCopyCannotBeMade(t *testing.T) {
 // none, since nothing was put back; without --isolated the key is absent.
 func TestIsolatedInJSON(t *testing.T) {
 	type report struct {
-		Exit     int  `json:"exit"`
-		Isolated bool `json:"isolated"`
+		Exit     int       `json:"exit"`
+		Isolated bool      `json:"isolated"`
+		Copy     *copyJSON `json:"copy"`
 		Try      *struct {
 			Status     int `json:"status"`
 			RolledBack int `json:"rolled_back"`
@@ -359,7 +394,7 @@ func TestIsolatedInJSON(t *testing.T) {
 		if err := json.Unmarshal([]byte(out), &r); err != nil {
 			t.Fatalf("not JSON: %v\n%s", err, out)
 		}
-		return r, strings.Contains(out, `"isolated"`)
+		return r, strings.Contains(out, `"isolated"`) || strings.Contains(out, `"copy"`)
 	}
 	t.Run("a --try", func(t *testing.T) {
 		root := cliTree(t, map[string]string{"a.txt": "one\n"})
@@ -369,6 +404,7 @@ func TestIsolatedInJSON(t *testing.T) {
 		if code != 7 || r.Exit != 7 || !r.Isolated || r.Try == nil || r.Try.Status != 7 || r.Try.RolledBack != 0 {
 			t.Errorf("exit %d, %s", code, out)
 		}
+		assertCopyJSON(t, tmp, r.Copy, 1, 4)
 		assertNoCopyLeft(t, tmp)
 		code, out, _ = runCLI(t, root, []string{"--json", "--try", "exit 7"}, vPatch)
 		if _, has := read(t, out); code != 7 || has {
@@ -378,10 +414,15 @@ func TestIsolatedInJSON(t *testing.T) {
 	t.Run("an --each", func(t *testing.T) {
 		root, patches := eachFixture(t)
 		tmp := scratchTemp(t)
-		code, out, _ := runCLI(t, root, append([]string{"--json", "--isolated", "--try", catchesAll, "--each"}, patches...), "")
-		if r, _ := read(t, out); code != exitOK || !r.Isolated || r.Each == nil || len(r.Each.Patches) != 3 {
+		code, out, errOut := runCLI(t, root, append([]string{"--json", "--isolated", "--try", catchesAll, "--each"}, patches...), "")
+		r, _ := read(t, out)
+		if code != exitOK || !r.Isolated || r.Each == nil || len(r.Each.Patches) != 3 {
 			t.Errorf("exit %d, %s", code, out)
 		}
+		// The three files the patches are for, and the stderr line, which
+		// streams under --json as each patch's does.
+		assertCopyJSON(t, tmp, r.Copy, 3, int64(len("alpha\nbeta\ngamma\n")))
+		afterCopied(t, tmp, errOut)
 		assertNoCopyLeft(t, tmp)
 		code, out, _ = runCLI(t, root, append([]string{"--json", "--try", catchesAll, "--each"}, patches...), "")
 		if _, has := read(t, out); code != exitOK || has {
@@ -672,7 +713,13 @@ func TestASignalToAnIsolatedRun(t *testing.T) {
 			if code != 143 || (c.raise && raise != syscall.SIGTERM) {
 				t.Errorf("exit %d, raise %v\n%s%s", code, raise, out.String(), errOut.String())
 			}
-			if got := errOut.String(); !strings.HasSuffix(got, c.say) || (c.patch != "" && got != c.say) {
+			// A signal at the second handler is after the copy was made, and
+			// so after its line; at the first, there is no copy to name.
+			got := errOut.String()
+			if c.at > 1 {
+				_, got = afterCopied(t, tmp, got)
+			}
+			if !strings.HasSuffix(got, c.say) || (c.patch != "" && got != c.say) {
 				t.Errorf("stderr %q\nwant %q", got, c.say)
 			}
 			if n := markerLines(t, mark); n > 0 {
@@ -700,8 +747,9 @@ func TestASignalToAnIsolatedRun(t *testing.T) {
 		signalSelf(t, syscall.SIGTERM)
 		select {
 		case code := <-done:
+			_, rest := afterCopied(t, tmp, errOut.String())
 			if code != 143 || raise != syscall.SIGTERM ||
-				!strings.HasPrefix(errOut.String(), "tried 1 hunk in a copy of the tree; interrupted by SIGTERM, the command was ended (") {
+				!strings.HasPrefix(rest, "tried 1 hunk in a copy of the tree; interrupted by SIGTERM, the command was ended (") {
 				t.Errorf("exit %d, raise %v\n%s%s", code, raise, out.String(), errOut.String())
 			}
 		case <-time.After(15 * time.Second):
@@ -719,7 +767,8 @@ func TestAnIsolatedTryThatTimesOut(t *testing.T) {
 	tmp := scratchTemp(t)
 	before := snapshot(t, root)
 	code, _, errOut := runCLI(t, root, []string{"--isolated", "--timeout", "300ms", "--try", longSleep()}, vPatch)
-	if code != exitTimedOut || !strings.HasPrefix(errOut, "tried 1 hunk in a copy of the tree; the command timed out after 300ms, exit 124\n") {
+	_, rest := afterCopied(t, tmp, errOut)
+	if code != exitTimedOut || !strings.HasPrefix(rest, "tried 1 hunk in a copy of the tree; the command timed out after 300ms, exit 124\n") {
 		t.Errorf("exit %d: %q", code, errOut)
 	}
 	assertUnchanged(t, root, before)
@@ -734,8 +783,9 @@ func TestAnIsolatedTryWhoseCommandCannotStart(t *testing.T) {
 	before := snapshot(t, root)
 	t.Setenv("PATH", brokenShell(t))
 	code, _, errOut := runCLI(t, root, []string{"--isolated", "--try", "true"}, vPatch)
-	if code != exitIO || !strings.HasPrefix(errOut, "hunk: could not run the --try command: ") ||
-		!strings.HasSuffix(errOut, "; it was to run in a copy of the tree, and the tree is untouched\n") {
+	_, rest := afterCopied(t, tmp, errOut)
+	if code != exitIO || !strings.HasPrefix(rest, "hunk: could not run the --try command: ") ||
+		!strings.HasSuffix(rest, "; it was to run in a copy of the tree, and the tree is untouched\n") {
 		t.Errorf("exit %d: %q", code, errOut)
 	}
 	assertUnchanged(t, root, before)
@@ -866,15 +916,26 @@ func TestTheCopyIsTheTree(t *testing.T) {
 	tree, err := OpenTree(given, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	c, remove, err := isolate(tree, func() os.Signal { return nil })
+	c, made, remove, err := isolate(tree, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	dst := c.Root()
+	// Seven regular files and 41 bytes; links, directories, the pipe and the
+	// socket are not files. Where hunk clones, a clone each: the temporary
+	// directory is on the tree's volume, the setuid file and the one in a
+	// 0555 directory among them.
+	want := copyMade{Dir: dst, Files: 7, Bytes: 41, Clones: clones, Seconds: made.Seconds}
+	if clones {
+		want.Cloned = 7
+	}
+	if made != want || made.Seconds <= 0 {
+		t.Errorf("made %+v, want %+v", made, want)
+	}
 
 	if fi, err := os.Stat(dst); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("the copy's own directory: %v, %v; want 0700 whatever the root's", fi.Mode(), err)
 	}
-	var want, got []string
+	var wantLines, got []string
 	describe := func(base string, into *[]string) {
 		must(t, filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 			must(t, err)
@@ -901,23 +962,23 @@ func TestTheCopyIsTheTree(t *testing.T) {
 			return nil
 		}))
 	}
-	describe(root, &want)
+	describe(root, &wantLines)
 	describe(dst, &got)
 	// The source as the copy should hold it: no pipe, no socket, and the two
 	// links to absolute names under the root pointed into the copy.
-	want = slices.DeleteFunc(want, func(s string) bool {
+	wantLines = slices.DeleteFunc(wantLines, func(s string) bool {
 		return strings.HasPrefix(s, "fifo ") || strings.HasPrefix(s, "sock ")
 	})
-	for i, s := range want {
+	for i, s := range wantLines {
 		for _, name := range []string{"absin", "absgiven", "absroot"} {
 			if strings.HasPrefix(s, name+" ") {
 				rest, _ := strings.CutPrefix(links[name], map[bool]string{true: given, false: root}[name == "absgiven"])
-				want[i] = s[:strings.Index(s, " -> ")+4] + "<copy>" + rest
+				wantLines[i] = s[:strings.Index(s, " -> ")+4] + "<copy>" + rest
 			}
 		}
 	}
-	if !slices.Equal(got, want) {
-		t.Errorf("the copy holds\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	if !slices.Equal(got, wantLines) {
+		t.Errorf("the copy holds\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(wantLines, "\n"))
 	}
 	if b, err := os.ReadFile(filepath.Join(dst, "absgiven")); err != nil || string(b) != "d\n" {
 		t.Errorf("absgiven in the copy reads %q, %v", b, err)
@@ -1014,7 +1075,7 @@ func TestWhatEndsACopy(t *testing.T) {
 			must(t, err)
 			t.Cleanup(func() { _ = tree.Close() })
 			asked := 0
-			cp, remove, err := isolate(tree, func() os.Signal {
+			cp, _, remove, err := isolate(tree, func() os.Signal {
 				if asked++; asked == c.n && c.before != nil {
 					return c.before(t, theCopy(t, tmp), root)
 				}
@@ -1077,7 +1138,7 @@ func TestACopyIsNotCopiedIntoItself(t *testing.T) {
 	tree, err := OpenTree(root, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	c, remove, err := isolate(tree, func() os.Signal { return nil })
+	c, _, remove, err := isolate(tree, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	var got []string
@@ -1106,7 +1167,7 @@ func TestACopyAnswersForItsTree(t *testing.T) {
 	tree, err := OpenTree(given, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	c, remove, err := isolate(tree, func() os.Signal { return nil })
+	c, _, remove, err := isolate(tree, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = c.Close(); _ = remove() })
 
@@ -1171,4 +1232,241 @@ func FuzzIntoCopy(f *testing.F) {
 			t.Errorf("intoCopy(%q) = %q", dest, got)
 		}
 	})
+}
+
+// copyJSON is --json's "copy" as a caller reads it, cloned absent where hunk
+// makes no clones.
+type copyJSON struct {
+	Path    string  `json:"path"`
+	Files   int     `json:"files"`
+	Bytes   int64   `json:"bytes"`
+	Cloned  *int    `json:"cloned"`
+	Seconds float64 `json:"seconds"`
+}
+
+// assertCopyJSON is a "copy" that names a copy under tmp holding files files
+// of bytes bytes, every one cloned where hunk clones and cloned absent where
+// it does not.
+func assertCopyJSON(t *testing.T, tmp string, c *copyJSON, files int, bytes int64) {
+	t.Helper()
+	switch {
+	case c == nil:
+		t.Error(`no "copy" in the report`)
+	case c.Files != files || c.Bytes != bytes || c.Seconds <= 0:
+		t.Errorf("copy %+v, want %d files of %d bytes, and the time it took", c, files, bytes)
+	case !strings.HasPrefix(filepath.Base(c.Path), "hunk-isolated-") ||
+		runtime.GOOS != "windows" && filepath.Dir(c.Path) != tmp:
+		t.Errorf("copy at %s, want one under %s", c.Path, tmp)
+	case clones && (c.Cloned == nil || *c.Cloned != files):
+		t.Errorf("cloned %v, want %d", c.Cloned, files)
+	case !clones && c.Cloned != nil:
+		t.Errorf("cloned %d on a system that makes no clones", *c.Cloned)
+	}
+}
+
+// The line an --isolated run prints once its copy is made (#132), in every
+// shape it takes: each file cloned, none, some, a system that makes no clones,
+// one file, an empty tree, and a temporary directory with a line break in its
+// name. §8.1: a reworded line is a contract change.
+func TestTheCopyLineReads(t *testing.T) {
+	const dir = "/tmp/hunk-isolated-2917155247"
+	var w bytes.Buffer
+	for _, m := range []copyMade{
+		{Dir: dir, Files: 34345, Bytes: 61_234_567_890, Cloned: 34345, Clones: true, Seconds: 9.14},
+		{Dir: dir, Files: 34345, Bytes: 61_234_567_890, Clones: true, Seconds: 41.04},
+		{Dir: dir, Files: 34345, Bytes: 61_234_567_890, Cloned: 30001, Clones: true, Seconds: 12.3},
+		{Dir: dir, Files: 34345, Bytes: 61_234_567_890, Seconds: 41.04},
+		{Dir: dir, Files: 1, Bytes: 4, Cloned: 1, Clones: true, Seconds: 0.01},
+		{Dir: dir, Clones: true},
+		{Dir: "/tmp/odd\nname/hunk-isolated-1", Files: 2, Bytes: 1500, Cloned: 2, Clones: true, Seconds: 0.2},
+	} {
+		writeCopied(&w, m)
+	}
+	golden(t, "isolated-copied", w.String())
+}
+
+// A size and a count as the copy line prints them, at each edge: the units
+// change where a size would print as 1000.0, and the thousands are marked
+// from the right.
+func TestSizesAndCountsRead(t *testing.T) {
+	for _, c := range []struct {
+		n    int64
+		want string
+	}{
+		{0, "0 B"},
+		{999, "999 B"},
+		{1000, "1.0 kB"},
+		{1500, "1.5 kB"},
+		{999_949, "999.9 kB"},
+		{999_950, "1.0 MB"},
+		{61_234_567_890, "61.2 GB"},
+		{999_949_000_000, "999.9 GB"},
+		{999_951_000_000, "1.0 TB"},
+		{2_500_000_000_000_000, "2.5 PB"},
+		{math.MaxInt64, "9.2 EB"},
+	} {
+		if got := byteSize(c.n); got != c.want {
+			t.Errorf("byteSize(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		n    int
+		want string
+	}{
+		{0, "0"}, {7, "7"}, {999, "999"}, {1000, "1,000"}, {34345, "34,345"}, {100000, "100,000"}, {1234567, "1,234,567"},
+	} {
+		if got := grouped(c.n); got != c.want {
+			t.Errorf("grouped(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}
+
+// --quiet leaves the copy line out with the rest of a clean run's report: a
+// --try that passed, and an --each whose every patch was caught, print
+// nothing.
+func TestQuietLeavesTheCopyLineOut(t *testing.T) {
+	root, patches := eachFixture(t)
+	tmp := scratchTemp(t)
+	for _, args := range [][]string{
+		{"--quiet", "--isolated", "--try", "true", "-f", patches[0]},
+		append([]string{"--quiet", "--isolated", "--try", catchesAll, "--each"}, patches...),
+	} {
+		code, out, errOut := runCLI(t, root, args, "")
+		if code != exitOK || out != "" || errOut != "" {
+			t.Errorf("%q: exit %d\nstdout %q\nstderr %q", args, code, out, errOut)
+		}
+	}
+	assertNoCopyLeft(t, tmp)
+}
+
+// A clone is taken only when it is the file (#132). One that fails, one that
+// made nothing, one of the wrong size, a directory, and a link to the tree's
+// own file, which a Stat would have passed and which would have sent the
+// command's writes into the tree, are each taken away and the file copied
+// instead. One that is the file counts as a clone. A wrong thing that cannot
+// be taken away ends the copy at exit 5 rather than staying in it.
+func TestACloneIsTakenOnlyWhenItIsTheFile(t *testing.T) {
+	const body = "abc\n"
+	for _, c := range []struct {
+		name   string
+		clone  func(root string) func(*os.File, string) error
+		cloned int
+		err    bool
+	}{
+		{"fails", func(string) func(*os.File, string) error {
+			return func(*os.File, string) error { return syscall.ENOTSUP }
+		}, 0, false},
+		{"makes nothing", func(string) func(*os.File, string) error {
+			return func(*os.File, string) error { return nil }
+		}, 0, false},
+		{"makes the wrong size", func(string) func(*os.File, string) error {
+			return func(_ *os.File, to string) error { return os.WriteFile(to, []byte("x"), 0o644) }
+		}, 0, false},
+		{"makes a directory", func(string) func(*os.File, string) error {
+			return func(_ *os.File, to string) error { return os.Mkdir(to, 0o755) }
+		}, 0, false},
+		{"makes a link to the tree's file", func(root string) func(*os.File, string) error {
+			return func(_ *os.File, to string) error { return os.Symlink(filepath.Join(root, "a.txt"), to) }
+		}, 0, false},
+		// A link's size is its destination's length, so this one is the
+		// file's size, and only its not being a regular file refuses it.
+		{"makes a link the file's size", func(string) func(*os.File, string) error {
+			return func(_ *os.File, to string) error { return os.Symlink("wxyz", to) }
+		}, 0, false},
+		{"makes the file", func(string) func(*os.File, string) error {
+			return func(in *os.File, to string) error {
+				b, err := io.ReadAll(io.NewSectionReader(in, 0, 1<<20))
+				if err != nil {
+					return err
+				}
+				return os.WriteFile(to, b, 0o644)
+			}
+		}, 1, false},
+		{"makes what cannot be taken away", func(string) func(*os.File, string) error {
+			return func(_ *os.File, to string) error { return os.MkdirAll(filepath.Join(to, "x"), 0o755) }
+		}, 0, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"a.txt": body})
+			tmp := scratchTemp(t)
+			orig := cloneFile
+			cloneFile = c.clone(root)
+			t.Cleanup(func() { cloneFile = orig })
+			tree, err := OpenTree(root, false)
+			must(t, err)
+			t.Cleanup(func() { _ = tree.Close() })
+			cp, made, remove, err := isolate(tree, func() os.Signal { return nil })
+			if c.err {
+				// The error is the open's: "file exists" on Unix, "is a
+				// directory" on Windows.
+				var ce *copyError
+				if !errors.As(err, &ce) || ExitCode(err) != exitIO || !strings.Contains(err.Error(), "a.txt") {
+					t.Errorf("err = %v, want exit 5 naming a.txt", err)
+				}
+				assertNoCopyLeft(t, tmp)
+				return
+			}
+			must(t, err)
+			t.Cleanup(func() { _ = closeAndRemove(cp, remove) })
+			fi, err := os.Lstat(filepath.Join(cp.Root(), "a.txt"))
+			must(t, err)
+			b, err := os.ReadFile(filepath.Join(cp.Root(), "a.txt"))
+			must(t, err)
+			if !fi.Mode().IsRegular() || string(b) != body {
+				t.Errorf("the copy holds %v %q, want a file of %q", fi.Mode(), b, body)
+			}
+			if made.Files != 1 || made.Bytes != int64(len(body)) || made.Cloned != c.cloned {
+				t.Errorf("made %+v, want 1 file of %d bytes, %d cloned", made, len(body), c.cloned)
+			}
+		})
+	}
+}
+
+// --json's copy says cloned only where hunk clones: absent is "this system
+// makes no clones", which is not the same as making none, and no copy is no
+// key at all.
+func TestTheCopyInJSON(t *testing.T) {
+	for _, c := range []struct {
+		m    *copyMade
+		want string
+	}{
+		{nil, "null"},
+		{&copyMade{Dir: "/t/c", Files: 2, Bytes: 9, Seconds: 0.5}, `{"path":"/t/c","files":2,"bytes":9,"seconds":0.5}`},
+		{&copyMade{Dir: "/t/c", Files: 2, Bytes: 9, Clones: true, Seconds: 0.5}, `{"path":"/t/c","files":2,"bytes":9,"cloned":0,"seconds":0.5}`},
+		{&copyMade{Dir: "/t/c", Files: 2, Bytes: 9, Cloned: 2, Clones: true, Seconds: 0.5}, `{"path":"/t/c","files":2,"bytes":9,"cloned":2,"seconds":0.5}`},
+	} {
+		b, err := json.Marshal(jsonCopyOf(c.m))
+		if must(t, err); string(b) != c.want {
+			t.Errorf("%+v: %s, want %s", c.m, b, c.want)
+		}
+	}
+}
+
+// A write to the copy, clone or not, is the copy's alone: the tree's file
+// keeps its bytes. Where hunk clones, this is the copy-on-write the issue
+// counted on, against the real filesystem, with a file big enough to span
+// many blocks.
+func TestAWriteToTheCopyLeavesTheTreeAlone(t *testing.T) {
+	big := strings.Repeat("0123456789abcdef", 1<<16)
+	root := cliTree(t, map[string]string{"big.bin": big})
+	scratchTemp(t)
+	tree, err := OpenTree(root, false)
+	must(t, err)
+	t.Cleanup(func() { _ = tree.Close() })
+	cp, made, remove, err := isolate(tree, func() os.Signal { return nil })
+	must(t, err)
+	t.Cleanup(func() { _ = closeAndRemove(cp, remove) })
+	if want := map[bool]int{true: 1, false: 0}[clones]; made.Cloned != want {
+		t.Errorf("cloned %d, want %d", made.Cloned, want)
+	}
+	f, err := os.OpenFile(filepath.Join(cp.Root(), "big.bin"), os.O_WRONLY, 0)
+	must(t, err)
+	_, err = f.WriteAt([]byte("WRITTEN IN THE COPY"), int64(len(big)/2))
+	must(t, errors.Join(err, f.Close()))
+	if b, err := os.ReadFile(filepath.Join(root, "big.bin")); err != nil || string(b) != big {
+		t.Errorf("the tree's file changed with the copy's: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(cp.Root(), "big.bin")); err != nil || !strings.Contains(string(b), "WRITTEN IN THE COPY") {
+		t.Errorf("the copy's file does not hold the write: %v", err)
+	}
 }

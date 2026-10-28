@@ -532,12 +532,18 @@ build that ships ships it. `--isolated` copies `--root` once, after every patch
 is known to apply, and applies, builds and runs everything in the copy, so the
 tree is never written, and another `hunk` call can edit it as soon as the copy
 is made. The command's working directory is the copy, so its output names the
-copy's paths. The copy is all of `--root`, caches included, so a large
-`node_modules` or `target/` makes it slow to make; and a build that reaches
-outside `--root` (`../lib`, a `replace` in `go.mod`) or names the tree by its
-full path still reaches the tree itself, so give a `--root` that holds what
-the build reads. Under `--each --isolated`, 5 rather than 4 means the copy
-could not be put back between patches, and the tree is untouched.
+copy's paths. The copy is all of `--root`, caches included, cloned where the
+filesystem can (APFS, btrfs, XFS), which costs seconds and next to no space;
+elsewhere a large `node_modules`, `target/` or `.zig-cache` makes it slow and
+as big as the tree. Its first line on stderr, `copied the tree in 9.1s: 34,345
+files, 61.2 GB, all cloned, in /tmp/hunk-isolated-...`, says which you got:
+`none cloned` on macOS is a full copy, often because the temporary directory
+is on another volume from the tree (point `TMPDIR` at one on the tree's). A
+build that reaches outside `--root` (`../lib`, a `replace` in `go.mod`) or
+names the tree by its full path still reaches the tree itself, so give a
+`--root` that holds what the build reads. Under `--each --isolated`, 5 rather
+than 4 means the copy could not be put back between patches, and the tree is
+untouched.
 
 **Pass `--timeout` whenever the command could run long**, below your tool's own
 limit for the call: `--timeout 90s` under a two-minute limit. It ends the

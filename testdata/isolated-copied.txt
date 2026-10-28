@@ -1,0 +1,7 @@
+copied the tree in 9.1s: 34,345 files, 61.2 GB, all cloned, in /tmp/hunk-isolated-2917155247
+copied the tree in 41.0s: 34,345 files, 61.2 GB, none cloned, in /tmp/hunk-isolated-2917155247
+copied the tree in 12.3s: 34,345 files, 61.2 GB, 30,001 cloned, in /tmp/hunk-isolated-2917155247
+copied the tree in 41.0s: 34,345 files, 61.2 GB, in /tmp/hunk-isolated-2917155247
+copied the tree in 0.0s: 1 file, 4 B, all cloned, in /tmp/hunk-isolated-2917155247
+copied the tree in 0.0s: 0 files, 0 B, in /tmp/hunk-isolated-2917155247
+copied the tree in 0.2s: 2 files, 1.5 kB, all cloned, in /tmp/odd<U+000A>name/hunk-isolated-1
