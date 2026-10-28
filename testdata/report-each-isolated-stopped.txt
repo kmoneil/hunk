@@ -1,0 +1,8 @@
+tried breaks/01-shadow-reach.hunk  the command exited 1 (41.2s); 1 file left alone in the copy
+
+src/reach.zig was not restored in the copy.
+  hunk wrote 1a2b3c4d there, and it is now a directory, which hunk did not make,
+  so restoring would replace it with a file.
+  The copy is removed at the end, and the tree's own file was never written.
+not tried: breaks/02-texture.hunk
+tried 0 of 2 patches; stopped at breaks/01-shadow-reach.hunk: 1 file was not restored in the copy; 1 patch not tried

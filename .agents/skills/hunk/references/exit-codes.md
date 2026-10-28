@@ -28,7 +28,8 @@ when a command exited 0 or timed out, which a deliberate-break run reads as a
 missed break or a hang, or, under `--build`, a patch did not build, which
 tested nothing, or the command or `--build` failed with no patch applied after
 the last patch, which leaves every catch in doubt (5 if it could not start);
-4 when a file was not put back, and the run stopped there; 1,
+4 when a file was not put back, and the run stopped there (5 under
+`--isolated`, where the file is in the copy and the tree was never written); 1,
 2 or 5 when the preflight refused ("could not be read", "would not apply",
 "could not be checked"), or a patch stopped applying mid-run (2, "no longer
 applies": the tree changed under the run); 1 when `--build` or the command
@@ -51,6 +52,13 @@ command and everything it started, puts the batch back, and then ends `hunk` by
 the same signal: a shell sees 130, 143 or 129. 4 means a file could not be put
 back. SIGKILL cannot be caught, and leaves the batch applied.
 
+**Under `--isolated` the tree is never written**: the batch, or each patch, is
+applied and run in a copy of `--root`, which is removed at the end, so no code
+above ever means the tree is inconsistent. A single `--try` puts nothing back,
+since the copy goes, and its exit is `CMD`'s status. A copy that cannot be made
+is 5, nothing run; a signal while it is made ends `hunk` by that signal.
+SIGKILL leaves the copy in the temporary directory, and the tree unchanged.
+
 `--json` gives the same information as one object, including the near-miss span,
 so a program never has to parse the text.
 
@@ -62,8 +70,9 @@ disk or a name the filesystem refuses, is put back instead, at exit 5, and the
 message names the file that failed. **Two `hunk` runs in one tree do not
 overlap.** Each holds a lock on its `--root` and the directories above it from
 before it reads until it ends, a `--try`, `--each` or `--verify` for as long as
-its command runs, and a run that finds one held exits 6 with nothing read or
-written: wait for the other run to end, then send the same patch. A
+its command runs and an `--isolated` one until its copy is made, and a run that
+finds one held exits 6 with nothing read or written: wait for the other run to
+end, then send the same patch. A
 `--dry-run` shares the lock with other dry runs. Windows has no lock. It keeps
 `hunk` from `hunk` only: any other writer that finished between `hunk`'s read
 and its write is caught, at exit 6, but one writing at the same time is not.

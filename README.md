@@ -641,6 +641,51 @@ has to compile what the tests compile: `go vet ./...` or `go test -run '^$'
 `-f` given twice is refused rather than read as the last one, which it
 silently was before `--each` existed.
 
+### Trying in a copy: `--isolated`
+
+`--try` and `--each` put each patch into the tree itself and take it out
+again, so anything else that reads the tree meanwhile reads the patch as if it
+were real: a build in another terminal, an editor's language server, a test
+watcher, a sync to another machine. A long mutation run beside a long build is
+the case that found it: the build compiled one of the mutants and failed, and
+a build that had shipped would have shipped it. The lock below keeps other
+`hunk` runs out, and nothing else.
+
+`--isolated` runs the whole of it in a copy:
+
+```sh
+hunk --try 'zig build test' --build 'zig build' --isolated --each breaks/*.hunk
+```
+
+Every patch is matched against the tree itself first, so one that would not
+apply is refused as it would be without the flag, and nothing is copied for it.
+Then `--root` is copied once into the temporary directory, and every patch is
+applied, built, run and put back there, with the copy as the command's working
+directory. The tree is read once and never written, and its lock is let go as
+soon as the copy is made, so it can be edited while the run goes on. The copy
+is removed at the end, after a Ctrl-C too; only SIGKILL leaves it behind. A
+single `--try --isolated` works the same way, and its report says where the
+batch was rather than what was put back:
+
+```
+tried 1 hunk in a copy of the tree; the command exited 1 (2.0s)
+```
+
+The copy is all of `--root`, `.git` and build caches included, so that the
+command sees the tree it would have seen, with every file's mode and
+modification time, since a build that compares times would otherwise take an
+object copied after its source for an up-to-date one. A link to an absolute
+name under the root points at the same name in the copy; named pipes, sockets
+and devices are left out, and so is anything removed while it is being copied,
+as a build's cache can be. It is a plain copy, so a large `node_modules` or
+`target/` makes it slow to make. What it cannot isolate is anything the command
+reaches outside `--root`: a build that reads `../lib`, or names the tree by its
+full path, reads the tree itself, so give a `--root` that holds what the build
+reads. `--isolated` is refused with `--verify`, which keeps its batch in the
+tree; with `--allow-outside-root`, since a file outside the root is not in the
+copy; and with `--verify-may-format`, since nothing but the command writes in
+the copy, so a file it rewrote is put back regardless.
+
 ### When the command does not end
 
 `--timeout DURATION` (`90s`, `5m`) ends the `--verify` or `--try` command after
@@ -690,7 +735,10 @@ patch was tried and put back and every command exited nonzero, 3 when a
 command exited 0 or timed out or, under `--build`, a patch did not build, 4
 when a file was not put back, the table's codes when the run refused or
 stopped, 1 among them when the build or the command failed before the first
-patch.
+patch. Under `--isolated` the tree is never written, so no code means it is
+inconsistent: a single `--try` puts nothing back and exits with the command's
+status, and an `--each` that could not put the copy back between patches stops
+at 5 rather than 4.
 
 **Exit 2 is not an error condition to route around.** It is the tool working,
 and it is the one to expect routinely: fix the patch and resend. Exit 4 is the
@@ -710,7 +758,8 @@ needs the process alive, so the files before it stay written.
 **Two `hunk` runs in one tree do not overlap.** Each holds a lock on its
 `--root`, and on every directory above it that you own, from before it reads a
 file until it ends: a `--try`, `--each` or `--verify` holds it for as long as
-its command runs. A run that finds the tree held exits 6 having read and
+its command runs, and an `--isolated` run until its copy is made, sharing it
+as a dry run does. A run that finds the tree held exits 6 having read and
 written nothing, and names the directory another run holds. Wait for that run
 to end, or stop it, and send the same patch again. Without the lock, a `--try`
 started while another run's batch was on disk took that batch for the file's

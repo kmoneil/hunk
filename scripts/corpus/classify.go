@@ -145,8 +145,9 @@ var (
 	// is not hunk's verdict, so it is classified by what hunk did: the tree put
 	// back is 0, and a file left alone is 4, as it is after a verify. The JSON
 	// form is found by its "try" object before "exit" is read, since that exit
-	// is the command's.
-	reExitTried          = regexp.MustCompile(`(?m)^(?:hunk: )?tried \d+ hunks? and put back`)
+	// is the command's. Under --isolated, from 2026-10-28 (#130), the batch was
+	// in a copy, nothing was put back, and the line says where it was instead.
+	reExitTried          = regexp.MustCompile(`(?m)^(?:hunk: )?tried \d+ hunks? (?:and put back|in a copy of the tree)`)
 	reExitTriedAlone     = regexp.MustCompile(`(?m)^(?:hunk: )?tried \d+ hunks? and put back .*left alone`)
 	reTryJSON            = regexp.MustCompile(`(?m)^\s*"try":\s*\{`)
 	reTryJSONNotRestored = regexp.MustCompile(`"not_restored"`)
@@ -155,9 +156,12 @@ var (
 	// to one, so the code is read off the summary, the stop's story or the
 	// refusal header, never off a command's own status, which under --each
 	// never passes through as the exit.
-	reEachVerdict     = regexp.MustCompile(`(?m)^tried \d+ patch(?:es)? and put back every file; (.*)$`)
+	// Under --isolated the summary says the run was in a copy where it would
+	// say every file was put back, and a file not restored is in the copy,
+	// which is 5 rather than 4: the tree was never written.
+	reEachVerdict     = regexp.MustCompile(`(?m)^tried \d+ patch(?:es)? (?:and put back every file|in a copy of the tree); (.*)$`)
 	reEachStopped     = regexp.MustCompile(`(?m)^tried \d+ of \d+ patch(?:es)?; `)
-	reEachNotRestored = regexp.MustCompile(`(?m)^tried \d+ of \d+ patch(?:es)?; stopped at .*: \d+ files? (?:was|were) not restored`)
+	reEachNotRestored = regexp.MustCompile(`(?m)^tried \d+ of \d+ patch(?:es)?; stopped at .*: \d+ files? (?:was|were) not restored( in the copy)?`)
 	reEachInterrupted = regexp.MustCompile(`(?m)^tried \d+ of \d+ patch(?:es)?; interrupted by (SIG[A-Z]+)`)
 	reEachDrift       = regexp.MustCompile(`(?m)^hunk: .* no longer applies; the preflight matched every patch`)
 	reEachRefused     = regexp.MustCompile(`(?m)^hunk: (?:\d+ of )?\d+ patch(?:es)? (could not be read|would not apply|could not be checked); nothing was tried`)
@@ -178,7 +182,8 @@ var (
 	// was refused before writing (no sh) or rolled back after (an sh that
 	// would not run). Since 2026-09-22 both leave the tree as it was. Under
 	// --each the same sentence follows the stopping patch's name.
-	reExitCannotStart  = regexp.MustCompile(`(?m)^hunk: (?:at .*: )?(?:could not run the (?:verify|--try|--build) command|--(?:verify|try) runs its command with sh, which was not found)`)
+	// An --isolated run whose copy could not be made is 5 too, nothing run.
+	reExitCannotStart  = regexp.MustCompile(`(?m)^hunk: (?:at .*: )?(?:could not run the (?:verify|--try|--build) command|--(?:verify|try) runs its command with sh, which was not found|could not copy the tree for --isolated)`)
 	reExitVerifyFailed = regexp.MustCompile(`(?m)^hunk: applied .*verify (?:failed|timed out)`)
 	// A signal to hunk while its command ran, from 2026-10-06: the batch went
 	// back and hunk died of the signal, which a shell reports as 128 plus it.
@@ -187,7 +192,7 @@ var (
 	// it before "tried" can claim it, and since #73's fix it has no `hunk: `
 	// prefix, which transcripts from before keep, so both are read. The JSON
 	// form carries interrupted_by.
-	reExitInterrupted        = regexp.MustCompile(`(?m)^(?:hunk: (?:applied \d+ hunks?, )?|(?:hunk: )?tried \d+ hunks? and put back .*; )interrupted by (SIG[A-Z]+)`)
+	reExitInterrupted        = regexp.MustCompile(`(?m)^(?:hunk: (?:applied \d+ hunks?, )?|(?:hunk: )?tried \d+ hunks? (?:and put back .*|in a copy of the tree); )interrupted by (SIG[A-Z]+)`)
 	reExitInterruptedNotBack = regexp.MustCompile(`(?m)^hunk: interrupted by SIG[A-Z]+ before .* could not be put back`)
 	reTryJSONInterrupted     = regexp.MustCompile(`"interrupted_by"`)
 	reExitChanged            = regexp.MustCompile(`changed on disk between being read and being written`)
@@ -399,9 +404,13 @@ func HunkExit(cmd, result string) int {
 	// single run counts hunks, so the two sets of rules cannot claim each
 	// other's reports.
 	if reEachStopped.MatchString(result) {
-		switch {
-		case reEachNotRestored.MatchString(result):
+		if m := reEachNotRestored.FindStringSubmatch(result); m != nil {
+			if m[1] != "" {
+				return 5
+			}
 			return 4
+		}
+		switch {
 		case reExitCannotStart.MatchString(result):
 			return 5
 		case reEachDrift.MatchString(result):

@@ -524,6 +524,21 @@ too: `go vet ./...` or `go test -run '^$' ./...`, `zig test --test-no-exec
 FILE`, `cargo test --no-run`; `go build ./...` and `cargo build` leave them
 out.
 
+**When anything else reads the tree while you try, add `--isolated`.** `--try`
+and `--each` put each patch into the tree itself, and the tree lock keeps out
+only other `hunk` runs: a build in another terminal, an editor's language
+server, a test watcher or a sync reads the break as if it were real, and a
+build that ships ships it. `--isolated` copies `--root` once, after every patch
+is known to apply, and applies, builds and runs everything in the copy, so the
+tree is never written, and another `hunk` call can edit it as soon as the copy
+is made. The command's working directory is the copy, so its output names the
+copy's paths. The copy is all of `--root`, caches included, so a large
+`node_modules` or `target/` makes it slow to make; and a build that reaches
+outside `--root` (`../lib`, a `replace` in `go.mod`) or names the tree by its
+full path still reaches the tree itself, so give a `--root` that holds what
+the build reads. Under `--each --isolated`, 5 rather than 4 means the copy
+could not be put back between patches, and the tree is untouched.
+
 **Pass `--timeout` whenever the command could run long**, below your tool's own
 limit for the call: `--timeout 90s` under a two-minute limit. It ends the
 command and everything it started, then rolls back (exit 3) or, under `--try`,

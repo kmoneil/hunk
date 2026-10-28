@@ -1,0 +1,3 @@
+tried 1 hunk in a copy of the tree; the command timed out after 1m30s, exit 124
+
+$ zig build test

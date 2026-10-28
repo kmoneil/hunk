@@ -76,6 +76,12 @@ type Verify struct {
 	TimedOut time.Duration
 	Signal   os.Signal
 	Cut      bool
+
+	// Isolated means --try ran in a copy of the tree (#130), which is removed
+	// at the end: the tree was never written. A single --try puts nothing back
+	// there, so it has nothing left alone; under --each, a file left alone is
+	// in the copy, and the report says so.
+	Isolated bool
 }
 
 // A NotRestored is a file rollback left alone because something rewrote it
@@ -448,12 +454,18 @@ func (r *Report) writeVerifyFailure(w io.Writer) {
 }
 
 // writeTry is --try's report: what was tried, what was put back, and what
-// the command said, which is the whole reason it ran.
+// the command said, which is the whole reason it ran. Under --isolated
+// nothing was put back, since the copy is removed, and where the batch was is
+// what the line says instead (#130).
 func (r *Report) writeTry(w io.Writer) {
 	v := r.Verify
-	fmt.Fprintf(w, "tried %s and put back %s", count(v.Applied, "hunk"), count(v.RolledBack, "file"))
-	if len(v.NotRestored) > 0 {
-		fmt.Fprintf(w, ", %s left alone", count(len(v.NotRestored), "file"))
+	if v.Isolated {
+		fmt.Fprintf(w, "tried %s in a copy of the tree", count(v.Applied, "hunk"))
+	} else {
+		fmt.Fprintf(w, "tried %s and put back %s", count(v.Applied, "hunk"), count(v.RolledBack, "file"))
+		if len(v.NotRestored) > 0 {
+			fmt.Fprintf(w, ", %s left alone", count(len(v.NotRestored), "file"))
+		}
 	}
 	switch {
 	case v.Signal != nil:
@@ -653,12 +665,24 @@ func writeAftermath(w io.Writer, v *Verify) {
 		// destination is. Printed raw until 2026-10-08.
 		fmt.Fprintf(w, "\n%s, which hunk made as a directory, %s, so hunk left it.\n", showControls(d.Path), d.State)
 	}
-	writeNotRestored(w, v.NotRestored)
+	writeNotRestoredIn(w, v.NotRestored, v.Isolated)
 }
 
 func writeNotRestored(w io.Writer, notRestored []NotRestored) {
+	writeNotRestoredIn(w, notRestored, false)
+}
+
+// writeNotRestoredIn names each file rollback left alone, and why. inCopy is
+// a file in --isolated's copy (#130), which goes at the end of the run: the
+// tree's own file was never written, so there is nothing to recover, and the
+// block says that instead.
+func writeNotRestoredIn(w io.Writer, notRestored []NotRestored, inCopy bool) {
 	for _, n := range notRestored {
-		fmt.Fprintf(w, "\n%s was not restored.\n", withResolved(n.Path, n.Resolved))
+		where := ""
+		if inCopy {
+			where = " in the copy"
+		}
+		fmt.Fprintf(w, "\n%s was not restored%s.\n", withResolved(n.Path, n.Resolved), where)
 		// A reason can name a directory on the path, which is the tree's
 		// name too. Printed raw until 2026-10-08.
 		for _, line := range strings.Split(n.Reason, "\n") {
@@ -666,7 +690,11 @@ func writeNotRestored(w io.Writer, notRestored []NotRestored) {
 		}
 		// Until 2026-10-20 this said they "are in version control", which no
 		// run checks and which is false outside a repository (#106).
-		fmt.Fprintln(w, "  hunk did not write its original bytes back, and keeps no copy of them.")
+		if inCopy {
+			fmt.Fprintln(w, "  The copy is removed at the end, and the tree's own file was never written.")
+		} else {
+			fmt.Fprintln(w, "  hunk did not write its original bytes back, and keeps no copy of them.")
+		}
 	}
 }
 
@@ -712,6 +740,10 @@ type jsonReport struct {
 	Failures []jsonFailure `json:"failures,omitempty"`
 	Error    string        `json:"error,omitempty"`
 	DryRun   bool          `json:"dry_run,omitempty"`
+	// Isolated says the --try command ran in a copy of the tree (#130), so
+	// the tree itself was never written: under --each, once the copy was
+	// made, and for one --try, once the batch was in it.
+	Isolated bool `json:"isolated,omitempty"`
 	// NotRestored is what a commit that failed part-way could not put back.
 	// The verify's own list is inside Verify.
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
@@ -949,6 +981,7 @@ func (r *Report) JSON(w io.Writer) error {
 			out.Files = append(out.Files, jsonFile{f.Path, f.Resolved, f.Op, f.Added, f.Removed, f.SeamAdded, f.NoFinalNewline})
 		}
 	}
+	out.Isolated = r.Verify != nil && r.Verify.Isolated
 	if v := r.Verify; v != nil && v.Try {
 		jt := &jsonTry{
 			Ran: v.Ran, Status: v.Status, Seconds: v.Seconds, Command: v.Command,

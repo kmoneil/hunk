@@ -1,0 +1,3 @@
+tried 1 hunk in a copy of the tree; interrupted by SIGTERM, the command was ended (0.4s)
+
+$ zig build test
