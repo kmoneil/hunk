@@ -40,6 +40,25 @@ func scratchTemp(t *testing.T) string {
 	return dir
 }
 
+// noTemp points the temporary directory at one that does not exist under
+// root, so that a copy tried is exit 5. Windows reads TMP and TEMP, not
+// TMPDIR; a test that set TMPDIR alone made its copy there after all.
+func noTemp(t *testing.T, root string) {
+	t.Helper()
+	missing := filepath.Join(root, "no such directory")
+	for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(name, missing)
+	}
+}
+
+// closeAndRemove closes the copy's tree and then removes it, the order
+// invoke and eachRun take: Windows will not remove a directory that a
+// handle, an os.Root's included, still holds open.
+func closeAndRemove(c *Tree, remove func() error) error {
+	_ = c.Close()
+	return remove()
+}
+
 // copiesLeft is every copy --isolated made in tmp that is still there.
 func copiesLeft(t *testing.T, tmp string) []string {
 	t.Helper()
@@ -250,7 +269,7 @@ func TestAnIsolatedRunIsRefusedAsTheTreeWouldBe(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			root := cliTree(t, map[string]string{"a.txt": "one\n"})
 			plain, plainOut, plainErr := runCLI(t, root, c.args, c.patch)
-			t.Setenv("TMPDIR", filepath.Join(root, "no such directory"))
+			noTemp(t, root)
 			args := append([]string{"--isolated"}, c.args...)
 			code, out, errOut := runCLI(t, root, args, c.patch)
 			if code != exitNoMatch || code != plain || out != plainOut || errOut != plainErr {
@@ -260,7 +279,7 @@ func TestAnIsolatedRunIsRefusedAsTheTreeWouldBe(t *testing.T) {
 	}
 	t.Run("a dry run copies nothing either", func(t *testing.T) {
 		root := cliTree(t, map[string]string{"a.txt": "one\n"})
-		t.Setenv("TMPDIR", filepath.Join(root, "no such directory"))
+		noTemp(t, root)
 		code, out, errOut := runCLI(t, root, []string{"--dry-run", "--try", "true", "--isolated"}, vPatch)
 		if code != exitOK || !strings.Contains(out, "(dry run: nothing written, command not run)") {
 			t.Errorf("exit %d\n%s%s", code, out, errOut)
@@ -284,7 +303,7 @@ func TestAnIsolatedRunWhoseCopyCannotBeMade(t *testing.T) {
 			t.Run(fmt.Sprintf("%s, json %v", c.name, asJSON), func(t *testing.T) {
 				root := cliTree(t, map[string]string{"a.txt": "one\n"})
 				mark := pidFile(t, "ran")
-				t.Setenv("TMPDIR", filepath.Join(root, "no such directory"))
+				noTemp(t, root)
 				before := snapshot(t, root)
 				args := slices.Clone(c.args)
 				args[2] = counted(mark, "true")
@@ -904,7 +923,7 @@ func TestTheCopyIsTheTree(t *testing.T) {
 		t.Errorf("absgiven in the copy reads %q, %v", b, err)
 	}
 
-	must(t, remove())
+	must(t, closeAndRemove(c, remove))
 	assertNoCopyLeft(t, tmp)
 }
 
@@ -1024,7 +1043,7 @@ func TestWhatEndsACopy(t *testing.T) {
 				if !slices.Equal(names, c.left) {
 					t.Errorf("the copy holds %q, want %q", names, c.left)
 				}
-				must(t, remove())
+				must(t, closeAndRemove(cp, remove))
 			}
 			assertNoCopyLeft(t, tmp)
 		})
@@ -1070,7 +1089,7 @@ func TestACopyIsNotCopiedIntoItself(t *testing.T) {
 	if want := []string{".", "a.txt", "tmp", "tmp/other.txt"}; !slices.Equal(got, want) {
 		t.Errorf("the copy holds %q, want %q", got, want)
 	}
-	must(t, remove())
+	must(t, closeAndRemove(c, remove))
 	assertNoCopyLeft(t, tmp)
 }
 
