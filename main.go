@@ -183,9 +183,11 @@ FLAGS
                         so nothing else that reads the tree sees a patch. The
                         tree is never written, and its lock is let go once the
                         copy is made. The copy is all of --root, .git and
-                        caches too, with modes and times, and is removed at the
-                        end. A command that reaches outside --root, or names
-                        the tree by its full path, still reaches the tree
+                        caches too, with modes and times, cloned where the
+                        filesystem can (APFS, btrfs, XFS), and is removed at
+                        the end; a line on stderr says how much it was and how
+                        long it took. A command that reaches outside --root, or
+                        names the tree by its full path, still reaches the tree
                         itself. Refused with --verify, --verify-may-format and
                         --allow-outside-root.
   --timeout DURATION    End the --verify or --try command after DURATION, such
@@ -626,14 +628,15 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	}
 	stop := Stop{Timeout: timeout, Signals: sigs}
 	var res *Result
-	work := tree // the tree the batch goes into: the copy, under --isolated
+	work := tree       // the tree the batch goes into: the copy, under --isolated
+	var made *copyMade // the copy, once --isolated has made it
 	if *isolated && !*dryRun {
 		// The preflight is on the tree itself, so that a patch that would
 		// not apply is refused as it would be without --isolated, and
 		// nothing is copied for it. Then the copy, which the rest is in.
 		if res, err = NewTxn(tree, opt).Preview(p); err == nil {
 			notifyInterrupts(sigs)
-			copied, remove, copyErr := isolate(tree, func() os.Signal { return pending(sigs) })
+			copied, m, remove, copyErr := isolate(tree, func() os.Signal { return pending(sigs) })
 			var ci *copyInterrupted
 			if errors.As(copyErr, &ci) {
 				if interrupted != nil {
@@ -647,7 +650,10 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 			defer removeOrWarn(remove, stderr)
 			defer func() { _ = copied.Close() }()
 			unlock()
-			work = copied
+			work, made = copied, &m
+			if !*quiet {
+				writeCopied(stderr, m)
+			}
 		}
 	}
 	txn := NewTxn(work, opt)
@@ -699,6 +705,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 
 	rep := NewReport(res, err, v, *dryRun, len(p.Hunks))
 	rep.Strays = p.Strays
+	rep.Copy = made
 	if *asJSON {
 		// --json wins over --quiet: a caller that asked for machine output
 		// asked for it on every path. It is alone on stdout.

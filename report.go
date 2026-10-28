@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -118,6 +119,9 @@ type Report struct {
 	// Strays are the patch's lines that look like a mistyped heredoc
 	// delimiter (#92), warned of after the report whatever the outcome.
 	Strays []Stray
+	// Copy is the copy a --try --isolated made, once it was made (#132). The
+	// text has said so already, as the copy was made; --json says it here.
+	Copy *copyMade
 }
 
 // count is the summary form: "1 file", "3 files". Distinct from plural, which
@@ -616,6 +620,58 @@ func signalExit(sig os.Signal) int {
 	return 128 + int(syscall.SIGTERM)
 }
 
+// writeCopied is the line --isolated prints once its copy is made, before
+// anything runs in it (#132): how long the copy took, how many files and
+// bytes it was, and on a system that clones, how many of the files were
+// cloned, which is what says whether a slow copy was a full one. The path is
+// where to look while the run goes on, and what to delete if a SIGKILL
+// leaves it there.
+func writeCopied(w io.Writer, m copyMade) {
+	files := grouped(m.Files) + " files"
+	if m.Files == 1 {
+		files = "1 file"
+	}
+	fmt.Fprintf(w, "copied the tree in %.1fs: %s, %s", m.Seconds, files, byteSize(m.Bytes))
+	if m.Clones && m.Files > 0 {
+		switch m.Cloned {
+		case m.Files:
+			fmt.Fprint(w, ", all cloned")
+		case 0:
+			fmt.Fprint(w, ", none cloned")
+		default:
+			fmt.Fprintf(w, ", %s cloned", grouped(m.Cloned))
+		}
+	}
+	fmt.Fprintf(w, ", in %s\n", showControls(m.Dir))
+}
+
+// grouped is a count with its thousands marked, 34,345, as a count of a
+// tree's files is read.
+func grouped(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}
+
+// byteSize is a size as a person reads one, 512 B, 1.5 kB, 61.2 GB: in
+// powers of 1000, as a disk is sold and as df -H counts. A size that would
+// print as 1000.0 of one unit is 1.0 of the next. An int64 ends at 9.2 EB, so
+// the units do not run out.
+func byteSize(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d B", n)
+	}
+	const units = "kMGTPE"
+	f, i := float64(n)/1000, 0
+	for f >= 999.95 {
+		f /= 1000
+		i++
+	}
+	return fmt.Sprintf("%.1f %cB", f, units[i])
+}
+
 // shortDuration prints a duration as somebody would type it: 2m, not 2m0s.
 func shortDuration(d time.Duration) string {
 	s := d.String()
@@ -744,6 +800,8 @@ type jsonReport struct {
 	// the tree itself was never written: under --each, once the copy was
 	// made, and for one --try, once the batch was in it.
 	Isolated bool `json:"isolated,omitempty"`
+	// Copy is that copy, once it was made (#132).
+	Copy *jsonCopy `json:"copy,omitempty"`
 	// NotRestored is what a commit that failed part-way could not put back.
 	// The verify's own list is inside Verify.
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`
@@ -752,6 +810,30 @@ type jsonReport struct {
 	// and the lines that look like a mistyped heredoc delimiter (#92),
 	// whatever the outcome.
 	Warnings []jsonWarning `json:"warnings,omitempty"`
+}
+
+// jsonCopy is the copy --isolated made (#132), as its line has it: where it
+// is, how many regular files and bytes, how many of the files were cloned,
+// and how long it took. Cloned is absent where hunk makes no clones, which is
+// not the same as making none.
+type jsonCopy struct {
+	Path    string  `json:"path"`
+	Files   int     `json:"files"`
+	Bytes   int64   `json:"bytes"`
+	Cloned  *int    `json:"cloned,omitempty"`
+	Seconds float64 `json:"seconds"`
+}
+
+func jsonCopyOf(m *copyMade) *jsonCopy {
+	if m == nil {
+		return nil
+	}
+	j := &jsonCopy{Path: m.Dir, Files: m.Files, Bytes: m.Bytes, Seconds: m.Seconds}
+	if m.Clones {
+		cloned := m.Cloned
+		j.Cloned = &cloned
+	}
+	return j
 }
 
 // jsonWarning is one warning, and kind says which. A stray line,
@@ -982,6 +1064,7 @@ func (r *Report) JSON(w io.Writer) error {
 		}
 	}
 	out.Isolated = r.Verify != nil && r.Verify.Isolated
+	out.Copy = jsonCopyOf(r.Copy)
 	if v := r.Verify; v != nil && v.Try {
 		jt := &jsonTry{
 			Ran: v.Ran, Status: v.Status, Seconds: v.Seconds, Command: v.Command,
