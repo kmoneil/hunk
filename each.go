@@ -79,6 +79,11 @@ type eachConfig struct {
 	asJSON       bool
 	quiet        bool
 	allowStrays  bool // --allow-mistyped-delimiter: warn of strays (#92) rather than refuse (#97)
+	isolated     bool // --isolated: every patch is tried in a copy of the tree (#130)
+	// letGo lets the tree's lock go, once an --isolated run has its copy.
+	letGo func()
+	// inCopy is set once the copy is made: the run from there is in it.
+	inCopy bool
 }
 
 // eachPatch is one patch of the run: the file as the caller spelled it, its
@@ -317,7 +322,28 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 	// own process group, and would run on after a Ctrl-C that killed hunk.
 	notifyInterrupts(sigs)
 	var bases eachBaselines
-	if cfg.build != "" {
+	if cfg.isolated {
+		// Every patch has matched the tree itself, and from here the run is
+		// in a copy of it (#130), the runs on the tree as it is included.
+		// Nothing but the command writes in the copy, so a file it rewrote
+		// is put back regardless, as under --verify-may-format, and the next
+		// patch is tried against the copy as it was made.
+		copied, remove, err := isolate(tree, func() os.Signal { return pending(sigs) })
+		var ci *copyInterrupted
+		switch {
+		case errors.As(err, &ci):
+			sig, stopAt, todo = ci.sig, 0, nil
+		case err != nil:
+			return eachBaselineRefused(cfg, patches, bases, nil, err.Error(), ExitCode(err), stdout, stderr)
+		default:
+			defer removeOrWarn(remove, stderr)
+			defer func() { _ = copied.Close() }()
+			cfg.letGo()
+			tree = copied
+			cfg.verifyFormat, cfg.inCopy = true, true
+		}
+	}
+	if sig == nil && cfg.build != "" {
 		// The build on the tree as it is, before any patch: one that fails
 		// here fails under every patch, and "did not build" would be true of
 		// each line and false about each patch.
@@ -376,6 +402,11 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 			break
 		}
 		tryErr := tryOne(cfg, ep, txn, tree, sigs, stop)
+		for _, v := range []*Verify{ep.v, ep.build} {
+			if v != nil {
+				v.Isolated = cfg.inCopy
+			}
+		}
 		writeEachLine(cfg, stderr, width, ep)
 		if tryErr != nil {
 			// The command or the build could not start. The batch is back
@@ -406,7 +437,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 	}
 	o := eachOutcome{
 		tried: tried, zeros: zeros, timeouts: timeouts, notBuilt: notBuilt,
-		stopAt: stopAt, stopErr: stopErr, sig: sig,
+		stopAt: stopAt, stopErr: stopErr, sig: sig, inCopy: cfg.inCopy,
 	}
 	if stopAt < 0 && o.caught() > 0 {
 		// The tree as it is once more, the last patch back (#110). The runs
@@ -601,6 +632,7 @@ type eachOutcome struct {
 	seconds                float64
 	bases                  eachBaselines     // the runs on the tree as it is, before and after
 	afterErr               *afterCannotStart // a run after the last patch that could not start
+	inCopy                 bool              // the run was in a copy of the tree, under --isolated (#130)
 }
 
 // caught is how many patches the command caught: tried, and neither passed,
@@ -613,6 +645,12 @@ func (o eachOutcome) caught() int {
 func eachExit(patches []*eachPatch, o eachOutcome) int {
 	switch {
 	case o.stopAt >= 0 && patches[o.stopAt].outcome() != nil && len(patches[o.stopAt].outcome().NotRestored) > 0:
+		if o.inCopy {
+			// The copy could not be put back, so no later patch could be
+			// tried alone in it; but it is removed, and the tree was never
+			// written, which is what 4 would deny.
+			return exitIO
+		}
 		return exitRollbackFailed
 	case o.sig != nil:
 		return signalExit(o.sig)
@@ -682,14 +720,18 @@ func writeEachEnd(cfg eachConfig, patches []*eachPatch, o eachOutcome, code int,
 	}
 	switch {
 	case o.stopAt >= 0:
-		fmt.Fprintf(w, "tried %d of %s; %s", o.tried, patchCount(len(patches)), eachStopClause(patches, o.stopAt, o.sig, o.stopErr))
+		fmt.Fprintf(w, "tried %d of %s; %s", o.tried, patchCount(len(patches)), eachStopClause(patches, o))
 		if n := len(eachNotTried(patches)); n > 0 {
 			fmt.Fprintf(w, "; %s not tried", patchCount(n))
 		}
 		fmt.Fprintln(w)
 	default:
-		fmt.Fprintf(w, "tried %s and put back every file; %s%s (%.1fs)\n",
-			patchCount(o.tried), eachVerdict(o.tried, o.zeros, o.timeouts, o.notBuilt), eachAfterClause(o), o.seconds)
+		where := "and put back every file"
+		if o.inCopy {
+			where = "in a copy of the tree"
+		}
+		fmt.Fprintf(w, "tried %s %s; %s%s (%.1fs)\n",
+			patchCount(o.tried), where, eachVerdict(o.tried, o.zeros, o.timeouts, o.notBuilt), eachAfterClause(o), o.seconds)
 	}
 }
 
@@ -732,6 +774,9 @@ func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 	}
 	if len(v.NotRestored) > 0 {
 		fmt.Fprintf(w, "; %s left alone", count(len(v.NotRestored), "file"))
+		if v.Isolated {
+			fmt.Fprint(w, " in the copy")
+		}
 	}
 	fmt.Fprintln(w)
 	if notBuilt || (v.Ran && (v.TimedOut > 0 || v.Status == 0 || (cfg.everyTail && what == "command"))) {
@@ -742,15 +787,19 @@ func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 
 // eachStopClause is the summary's reason for stopping, after the full story
 // has been told above it.
-func eachStopClause(patches []*eachPatch, stopAt int, sig os.Signal, stopErr error) string {
-	ep := patches[stopAt]
+func eachStopClause(patches []*eachPatch, o eachOutcome) string {
+	ep := patches[o.stopAt]
 	name := showControls(ep.name)
-	switch {
+	where := ""
+	if o.inCopy {
+		where = " in the copy"
+	}
+	switch sig := o.sig; {
 	case ep.outcome() != nil && len(ep.outcome().NotRestored) > 0:
 		if n := len(ep.outcome().NotRestored); n > 1 {
-			return fmt.Sprintf("stopped at %s: %d files were not restored", name, n)
+			return fmt.Sprintf("stopped at %s: %d files were not restored%s", name, n, where)
 		}
-		return fmt.Sprintf("stopped at %s: 1 file was not restored", name)
+		return fmt.Sprintf("stopped at %s: 1 file was not restored%s", name, where)
 	case sig != nil && ep.outcome() == nil:
 		return "interrupted by " + signalName(sig)
 	case sig != nil:
@@ -774,7 +823,7 @@ func eachStopReason(patches []*eachPatch, o eachOutcome) string {
 	case o.stopErr != nil:
 		return fmt.Sprintf("at %s: %v", ep.name, o.stopErr)
 	}
-	return eachStopClause(patches, o.stopAt, o.sig, o.stopErr)
+	return eachStopClause(patches, o)
 }
 
 // eachAfterClause is the summary's word on the run on the tree as it is after
@@ -857,7 +906,7 @@ func eachNameWidth(patches []*eachPatch) int {
 // name, and the runs on the tree as it is where they ran. The streamed
 // per-patch lines were stderr's.
 func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code int, stopReason string, stdout, stderr io.Writer) int {
-	out := jsonReport{OK: code == exitOK, Exit: code, DryRun: cfg.dryRun}
+	out := jsonReport{OK: code == exitOK, Exit: code, DryRun: cfg.dryRun, Isolated: cfg.inCopy}
 	je := &jsonEach{Command: cfg.command, Build: cfg.build}
 	if bases.build != nil {
 		je.Baseline = eachBuildJSON(bases.build)

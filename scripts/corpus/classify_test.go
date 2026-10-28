@@ -409,6 +409,29 @@ func TestHunkExit(t *testing.T) {
 			"--each stopped, a file not restored", "hunk --try x --each a.hunk b.hunk",
 			"tried a.hunk  the command exited 0 (0.1s); 1 file left alone\nnot tried: b.hunk\ntried 0 of 2 patches; stopped at a.hunk: 1 file was not restored; 1 patch not tried\n", 4,
 		},
+		// --isolated (#130), from 2026-10-28: the run is in a copy, the
+		// summary says so where it would say every file was put back, and a
+		// file not restored in the copy is 5, the tree never written.
+		{
+			"--each --isolated, every command exited nonzero", "hunk --try x --isolated --each a.hunk b.hunk",
+			"tried a.hunk  the command exited 1 (0.1s)\ntried b.hunk  the command exited 2 (0.1s)\ntried 2 patches in a copy of the tree; every command exited nonzero (0.2s)\n", 0,
+		},
+		{
+			"--each --isolated, a command exited 0", "hunk --try x --isolated --each a.hunk",
+			"tried a.hunk  the command exited 0 (0.1s)\ntried 1 patch in a copy of the tree; 1 exited 0 (0.1s)\n", 3,
+		},
+		{
+			"--each --isolated stopped, a file not restored in the copy", "hunk --try x --isolated --each a.hunk b.hunk",
+			"tried a.hunk  the command exited 1 (0.1s); 1 file left alone\nnot tried: b.hunk\ntried 0 of 2 patches; stopped at a.hunk: 1 file was not restored in the copy; 1 patch not tried\n", 5,
+		},
+		{
+			"--each --isolated, the copy could not be made", "hunk --try x --isolated --each a.hunk",
+			"hunk: could not copy the tree for --isolated: open x: permission denied; nothing was run, and the tree is untouched\n", 5,
+		},
+		{"--try --isolated, the command exited 1", "hunk --try x --isolated -f p", "tried 1 hunk in a copy of the tree; the command exited 1 (2.0s)\n", 0},
+		{"--try --isolated, interrupted", "hunk --try x --isolated -f p", "tried 1 hunk in a copy of the tree; interrupted by SIGINT, the command was ended (0.4s)\n", 130},
+		{"--try --isolated, interrupted while copying", "hunk --try x --isolated -f p", "hunk: interrupted by SIGTERM while copying the tree for --isolated; nothing was run, and the tree is untouched\n", 143},
+		{"--try --isolated, the copy could not be made", "hunk --try x --isolated -f p", "hunk: could not copy the tree for --isolated: mkdir /tmp/x: no space left on device; nothing was run, and the tree is untouched\n", 5},
 		{
 			"--each stopped, the tree changed under the run", "hunk --try x --each a.hunk b.hunk",
 			"tried a.hunk  the command exited 1 (0.1s)\nhunk: b.hunk no longer applies; the preflight matched every patch, so the tree has changed since the run began: by the command, or by another writer\n\nhunk 1  a.go  (patch line 2)\n  expected 1 occurrence, found 0\ntried 1 of 2 patches; stopped at b.hunk\n", 2,
@@ -704,6 +727,11 @@ var reportGoldens = map[string]int{
 	"report-each-after":                               3,
 	"report-each-after-build":                         3,
 	"report-each-after-json":                          3,
+	"report-try-isolated":                             0,
+	"report-try-isolated-timed-out":                   0,
+	"report-try-isolated-interrupted":                 143,
+	"report-each-isolated":                            0,
+	"report-each-isolated-stopped":                    5,
 	"cli-rollback-incomplete":                         4,
 	"cli-rollback-left-a-directory":                   3,
 	"cli-rollback-left-a-directory-json":              3,

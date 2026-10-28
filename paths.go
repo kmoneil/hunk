@@ -182,6 +182,9 @@ type Tree struct {
 	// as text on Windows, walked on POSIX (see cleanDots). A field rather than
 	// a constant so a test on either can ask for the other's rule.
 	dotsAsText bool
+	// copyOf is the tree this one is a copy of, made by --isolated (#130), and
+	// nil for any other. The copy answers for it: see Shown and Resolve.
+	copyOf *Tree
 }
 
 // OpenTree opens root for confined access. The root is resolved once, because
@@ -233,7 +236,13 @@ func (t *Tree) Root() string { return t.root }
 // /private/tmp/x", which looks like exactly that mistake. So the root as the
 // caller gave it, from --root or its working directory, and the resolved form
 // after it when the two differ.
+//
+// A copy names the tree it was made from: the caller never named the copy,
+// and its place in the temporary directory is nothing to act on.
 func (t *Tree) Shown() string {
+	if t.copyOf != nil {
+		return t.copyOf.Shown()
+	}
 	if t.given == t.root {
 		return t.root
 	}
@@ -273,6 +282,20 @@ func (t *Tree) Resolve(p string) (Target, error) {
 			Path: p, Root: t.Shown(),
 			Reason: "the path contains " + name +
 				", a control character, which hunk does not allow in a file name; remove it from the patch",
+		}
+	}
+	// In a copy, an absolute path under the tree it was made from is the same
+	// name under the copy, and the preflight on that tree has already passed
+	// it. Still the path the patch wrote in every report and refusal.
+	if t.copyOf != nil && filepath.IsAbs(p) {
+		if rest, ok := t.copyOf.underRoot(p); ok {
+			tg, err := t.Resolve(strings.Join(rest, string(filepath.Separator)))
+			var pr *PathRefusal
+			if errors.As(err, &pr) {
+				pr.Path = p
+			}
+			tg.orig = p
+			return tg, err
 		}
 	}
 	// A ".." the patch wrote that cancels a symlink has two readings, the

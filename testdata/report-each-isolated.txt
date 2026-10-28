@@ -1,0 +1,3 @@
+tried breaks/01-shadow-reach.hunk  the command exited 1 (41.2s)
+tried breaks/02-texture.hunk       the command exited 1 (41.2s)
+tried 2 patches in a copy of the tree; every command exited nonzero (83.1s)

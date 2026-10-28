@@ -1,0 +1,5 @@
+tried 2 hunks in a copy of the tree; the command exited 1 (2.0s)
+
+$ zig build test
+error: 'faults.test.a shadow ray stops at the first hit' failed
+(last 1 of 1 lines)

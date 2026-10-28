@@ -1172,21 +1172,27 @@ func TestEachEndWritesACommitFailure(t *testing.T) {
 // row reaches: one failed try that leaves two files changed. It was the one
 // statement of each.go no test ran, at 88.9% of eachStopClause, from #84's
 // merge until 2026-10-15, though the card said 100%.
+//
+// Under --isolated the files are in the copy (#130), and the clause says so:
+// the run stopped, and the tree itself was never written.
 func TestEachStopClauseCountsFiles(t *testing.T) {
 	for _, c := range []struct {
-		n    int
-		want string
+		n      int
+		inCopy bool
+		want   string
 	}{
-		{1, "stopped at breaks/01.hunk: 1 file was not restored"},
-		{2, "stopped at breaks/01.hunk: 2 files were not restored"},
+		{1, false, "stopped at breaks/01.hunk: 1 file was not restored"},
+		{2, false, "stopped at breaks/01.hunk: 2 files were not restored"},
+		{1, true, "stopped at breaks/01.hunk: 1 file was not restored in the copy"},
+		{2, true, "stopped at breaks/01.hunk: 2 files were not restored in the copy"},
 	} {
 		nr := make([]NotRestored, c.n)
 		for i := range nr {
 			nr[i] = NotRestored{Path: fmt.Sprintf("f%d.txt", i), Reason: "changed"}
 		}
 		patches := []*eachPatch{{name: "breaks/01.hunk", v: &Verify{Ran: true, Try: true, NotRestored: nr}}}
-		if got := eachStopClause(patches, 0, nil, nil); got != c.want {
-			t.Errorf("%d files: %q, want %q", c.n, got, c.want)
+		if got := eachStopClause(patches, eachOutcome{stopAt: 0, inCopy: c.inCopy}); got != c.want {
+			t.Errorf("%d files, in a copy %v: %q, want %q", c.n, c.inCopy, got, c.want)
 		}
 	}
 }

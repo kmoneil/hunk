@@ -78,6 +78,16 @@ FLAGS
                         refuses the run, exit 1, and so does one whose last
                         pipeline ends in tail, head, tee or cat, or in a grep
                         -v: a patch that does not build would read as caught.
+  --isolated            With --try: copy --root to a temporary directory once
+                        every patch is known to apply, and apply and run there,
+                        so nothing else that reads the tree sees a patch. The
+                        tree is never written, and its lock is let go once the
+                        copy is made. The copy is all of --root, .git and
+                        caches too, with modes and times, and is removed at the
+                        end. A command that reaches outside --root, or names
+                        the tree by its full path, still reaches the tree
+                        itself. Refused with --verify, --verify-may-format and
+                        --allow-outside-root.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put
@@ -142,12 +152,14 @@ fails part-way through, such as a full disk or a name the filesystem refuses,
 puts the files before it back and exits 5, but a crash part-way through leaves
 them written. Two hunk runs in one tree do not overlap: each holds a lock on
 --root and the directories above it from before it reads until it ends, a
---try, --each or --verify for as long as its command runs, and a run that
-finds one held exits 6 with nothing read or written. The lock is flock(2),
-which leaves nothing on disk and ends with the process, SIGKILL included. It
-keeps hunk from hunk only, and Windows has none. Any other writer is caught by
-a re-read just before writing if it finished in between, not one writing at
-the same time. Both gaps are repaired by the version control the tree is
-already under.
+--try, --each or --verify for as long as its command runs and an --isolated
+one until its copy is made, and a run that finds one held exits 6 with
+nothing read or written. The lock is flock(2), which leaves nothing on disk
+and ends with the process, SIGKILL included. It keeps hunk from hunk only,
+and Windows has none. Any other writer is caught by a re-read just before
+writing if it finished in between, not one writing at the same time. Both
+gaps are repaired by the version control the tree is already under. Nor does
+the lock keep a patch from anything else that reads the tree while a --try
+has it on disk, a build or an editor; --isolated does.
 
 Run "hunk format" for the patch grammar.

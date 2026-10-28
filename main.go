@@ -20,6 +20,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -177,6 +178,16 @@ FLAGS
                         refuses the run, exit 1, and so does one whose last
                         pipeline ends in tail, head, tee or cat, or in a grep
                         -v: a patch that does not build would read as caught.
+  --isolated            With --try: copy --root to a temporary directory once
+                        every patch is known to apply, and apply and run there,
+                        so nothing else that reads the tree sees a patch. The
+                        tree is never written, and its lock is let go once the
+                        copy is made. The copy is all of --root, .git and
+                        caches too, with modes and times, and is removed at the
+                        end. A command that reaches outside --root, or names
+                        the tree by its full path, still reaches the tree
+                        itself. Refused with --verify, --verify-may-format and
+                        --allow-outside-root.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put
@@ -241,13 +252,15 @@ fails part-way through, such as a full disk or a name the filesystem refuses,
 puts the files before it back and exits 5, but a crash part-way through leaves
 them written. Two hunk runs in one tree do not overlap: each holds a lock on
 --root and the directories above it from before it reads until it ends, a
---try, --each or --verify for as long as its command runs, and a run that
-finds one held exits 6 with nothing read or written. The lock is flock(2),
-which leaves nothing on disk and ends with the process, SIGKILL included. It
-keeps hunk from hunk only, and Windows has none. Any other writer is caught by
-a re-read just before writing if it finished in between, not one writing at
-the same time. Both gaps are repaired by the version control the tree is
-already under.
+--try, --each or --verify for as long as its command runs and an --isolated
+one until its copy is made, and a run that finds one held exits 6 with
+nothing read or written. The lock is flock(2), which leaves nothing on disk
+and ends with the process, SIGKILL included. It keeps hunk from hunk only,
+and Windows has none. Any other writer is caught by a re-read just before
+writing if it finished in between, not one writing at the same time. Both
+gaps are repaired by the version control the tree is already under. Nor does
+the lock keep a patch from anything else that reads the tree while a --try
+has it on disk, a build or an editor; --isolated does.
 
 Run "hunk format" for the patch grammar.
 `
@@ -299,6 +312,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		try          = fs.String("try", "", "")
 		each         = fs.Bool("each", false, "")
 		build        = fs.String("build", "", "")
+		isolated     = fs.Bool("isolated", false, "")
 		verifyFormat = fs.Bool("verify-may-format", false, "")
 		verifyLines  = fs.Int("verify-lines", 40, "")
 		keepOnFail   = fs.Bool("keep-on-fail", false, "")
@@ -448,6 +462,24 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	if *keepOnFail && *verify == "" {
 		return fail(exitUsage, errors.New("--keep-on-fail does nothing without --verify"), "")
 	}
+	// --isolated moves --try into a copy of the tree (#130). A --verify keeps
+	// its batch in the tree itself, a path outside the root is not in the
+	// copy, and nothing but the command writes in the copy, so there is no
+	// other writer for --verify-may-format to vouch for.
+	if *isolated {
+		switch {
+		case *verify != "":
+			return fail(exitUsage, errors.New("--isolated runs --try in a copy of the tree, and a --verify keeps the batch that passes, in the tree itself"), "")
+		case *try == "":
+			return fail(exitUsage, errors.New("--isolated runs --try in a copy of the tree and does nothing without --try CMD"), "")
+		case *allowOutside:
+			return fail(exitUsage, errors.New("--isolated and --allow-outside-root cannot both be set; "+
+				"a path outside the root is not in the copy, and would be edited where it is"), "")
+		case *verifyFormat:
+			return fail(exitUsage, errors.New("--isolated and --verify-may-format cannot both be set; "+
+				"nothing but the command writes in the copy, so whatever it wrote there is undone without asking"), "")
+		}
+	}
 	// --verify-may-format governs putting files back, which --try does too.
 	if *verifyFormat && *verify == "" && *try == "" {
 		return fail(exitUsage, errors.New("--verify-may-format does nothing without --verify or --try"), "")
@@ -543,11 +575,14 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	// --try runs at once over one file each took the other's batch for the
 	// original, and the second put the first's patch back at exit 0. One that
 	// finds the tree held reads nothing and is exit 6. A dry run only reads,
-	// so dry runs share it, and are refused only by a run that writes.
-	unlock, err := lockTree(tree, !*dryRun)
+	// so dry runs share it, and are refused only by a run that writes. So
+	// does an --isolated run, which reads the tree to copy it and lets it go
+	// once the copy is made (#130).
+	unlock, err := lockTree(tree, !*dryRun && !*isolated)
 	if err != nil {
 		return fail(ExitCode(err), err, "")
 	}
+	unlock = sync.OnceFunc(unlock)
 	defer unlock()
 
 	// A --verify or --try command runs through sh. With no sh to find, the
@@ -573,28 +608,58 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		return runEach(eachConfig{
 			names: fs.Args(), command: *try, build: *build, marker: *marker, opt: opt, allowStrays: *allowStrays,
 			timeout: timeout, verifyLines: *verifyLines, everyTail: linesGiven, verifyFormat: *verifyFormat,
-			dryRun: *dryRun, asJSON: *asJSON, quiet: *quiet,
+			dryRun: *dryRun, asJSON: *asJSON, quiet: *quiet, isolated: *isolated, letGo: unlock,
 		}, tree, stdout, stderr, interrupted)
 	}
 
-	txn := NewTxn(tree, opt)
 	// A signal while the batch is on disk ends the command and puts the batch
 	// back, rather than killing hunk where it stands with the batch applied,
 	// which is what it did until 2026-10-06, --try's included. The handler goes
 	// in once nothing can stop the commit but a signal, and comes out when the
 	// batch is kept or back: before then, a signal kills a load that writes
 	// nothing, as it always has, and after, it kills a hunk that has finished.
+	// Under --isolated it goes in before the copy, which writes.
 	var sigs chan os.Signal
 	if _, cmd := commandFlag(*verify, *try); cmd != "" && !*dryRun {
 		sigs = make(chan os.Signal, 1)
-		txn.beforeCommit = func() { notifyInterrupts(sigs) }
 		defer signal.Stop(sigs)
 	}
 	stop := Stop{Timeout: timeout, Signals: sigs}
 	var res *Result
-	if *dryRun {
+	work := tree // the tree the batch goes into: the copy, under --isolated
+	if *isolated && !*dryRun {
+		// The preflight is on the tree itself, so that a patch that would
+		// not apply is refused as it would be without --isolated, and
+		// nothing is copied for it. Then the copy, which the rest is in.
+		if res, err = NewTxn(tree, opt).Preview(p); err == nil {
+			notifyInterrupts(sigs)
+			copied, remove, copyErr := isolate(tree, func() os.Signal { return pending(sigs) })
+			var ci *copyInterrupted
+			if errors.As(copyErr, &ci) {
+				if interrupted != nil {
+					*interrupted = ci.sig
+				}
+				return fail(signalExit(ci.sig), copyErr, "")
+			}
+			if copyErr != nil {
+				return fail(ExitCode(copyErr), copyErr, "")
+			}
+			defer removeOrWarn(remove, stderr)
+			defer func() { _ = copied.Close() }()
+			unlock()
+			work = copied
+		}
+	}
+	txn := NewTxn(work, opt)
+	if sigs != nil {
+		txn.beforeCommit = func() { notifyInterrupts(sigs) }
+	}
+	switch {
+	case err != nil:
+		// The preflight on the tree itself refused it.
+	case *dryRun:
 		res, err = txn.Preview(p)
-	} else {
+	default:
 		res, err = txn.Run(p)
 	}
 
@@ -606,10 +671,17 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		// §4: --dry-run writes nothing and runs no verify. The report says so
 		// rather than leaving the caller to assume it passed.
 		v = &Verify{Command: *verify}
+	case err == nil && pending(sigs) != nil && *isolated:
+		// The same in a copy, where there is nothing to put back.
+		v = &Verify{Command: *try, Try: true, Signal: pending(sigs), Applied: txn.Applied()}
+		err = fmt.Errorf("interrupted by %s before the --try command ran; the batch was in a copy of the tree, and the tree is untouched",
+			signalName(v.Signal))
 	case err == nil && pending(sigs) != nil:
 		// The signal came while the batch was being written. Commit finished,
 		// and the command never starts.
 		v, err = interruptedBeforeTheCommand(txn, *verify, *try, pending(sigs), *verifyFormat)
+	case err == nil && *try != "" && *isolated:
+		v, err = runTryInACopy(txn, work, *try, *verifyLines, stop)
 	case err == nil && *try != "":
 		v, err = runTry(txn, tree, *try, *verifyLines, *verifyFormat, stop)
 	case err == nil && *verify != "":
@@ -617,6 +689,9 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	}
 	if sigs != nil {
 		signal.Stop(sigs)
+	}
+	if v != nil && *isolated && !*dryRun {
+		v.Isolated = true
 	}
 	if v != nil && v.Signal != nil && interrupted != nil && len(v.NotRestored) == 0 {
 		*interrupted = v.Signal
@@ -688,6 +763,23 @@ func runTry(txn *Txn, tree *Tree, command string, lines int, mayFormat bool, sto
 	}
 	v.Applied = txn.Applied()
 	v.RolledBack, v.NotRestored, v.Gone, v.Left = txn.Rollback(mayFormat)
+	return v, nil
+}
+
+// runTryInACopy is --try --isolated: the command runs in the copy, and nothing
+// is put back, since the copy goes whatever the command said. A command that
+// cannot start is exit 5 through the error, as runTry's is.
+func runTryInACopy(txn *Txn, tree *Tree, command string, lines int, stop Stop) (*Verify, error) {
+	v, err := RunVerify(command, tree.Root(), lines, stop)
+	if err != nil {
+		v = &Verify{Command: command, Try: true, Applied: txn.Applied()}
+		return v, fmt.Errorf("could not run the --try command: %w; it was to run in a copy of the tree, and the tree is untouched", err)
+	}
+	v.Try = true
+	if v.TimedOut > 0 {
+		v.Status = exitTimedOut
+	}
+	v.Applied = txn.Applied()
 	return v, nil
 }
 
