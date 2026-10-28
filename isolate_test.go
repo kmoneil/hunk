@@ -1397,8 +1397,11 @@ func TestACloneIsTakenOnlyWhenItIsTheFile(t *testing.T) {
 			t.Cleanup(func() { _ = tree.Close() })
 			cp, made, remove, err := isolate(tree, func() os.Signal { return nil })
 			if c.err {
-				if !errors.Is(err, fs.ErrExist) || ExitCode(err) != exitIO {
-					t.Errorf("err = %v, want exit 5 for the file that exists", err)
+				// The error is the open's: "file exists" on Unix, "is a
+				// directory" on Windows.
+				var ce *copyError
+				if !errors.As(err, &ce) || ExitCode(err) != exitIO || !strings.Contains(err.Error(), "a.txt") {
+					t.Errorf("err = %v, want exit 5 naming a.txt", err)
 				}
 				assertNoCopyLeft(t, tmp)
 				return
