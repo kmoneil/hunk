@@ -21,6 +21,13 @@ import "bytes"
 //
 // Each occurrence is found as bytes.Replace finds it, left to right and not
 // overlapping, which Validate has shown are exactly n of them.
+//
+// So the bounds of each one's lines are found by cursors that only move
+// forward, and cur is read a few times over however many occurrences share a
+// line. Until #134 each occurrence looked back from itself to its line's start
+// and on to its line's end, which on one line is the whole file each time:
+// 207,002 copies on one 220 KB line took 11 seconds on a laptop, and on a CI
+// runner more than the 60 the fuzzer allows one input.
 func replaceCounts(cur, old, repl []byte, n int) (added, removed int) {
 	start, stop, at := 0, 0, 0 // the region open in cur, and where the last match ended
 	var after []byte
@@ -29,16 +36,33 @@ func replaceCounts(cur, old, repl []byte, n int) (added, removed int) {
 		a, r := regionCounts(cur[start:stop], after)
 		added, removed = added+a, removed+r
 	}
+	// lineAt is where the line holding at starts, and nl the first newline
+	// at or past where one was last looked for, or len(cur) if there is none.
+	lineAt, nl := 0, -1
+	oldNL := bytes.LastIndexByte(old, '\n')
+	lineEnd := func(end int) int { // past the newline ending end's line, or len(cur)
+		if nl < end {
+			nl = len(cur)
+			if i := bytes.IndexByte(cur[end:], '\n'); i >= 0 {
+				nl = end + i
+			}
+		}
+		return min(nl+1, len(cur))
+	}
 	for k := range n {
 		p := at + bytes.Index(cur[at:], old)
 		end := p + len(old)
-		ls := bytes.LastIndexByte(cur[:p], '\n') + 1
+		ls := lineAt
+		if i := bytes.LastIndexByte(cur[at:p], '\n'); i >= 0 {
+			ls = at + i + 1
+		}
+		lineAt = ls
+		if oldNL >= 0 {
+			lineAt = p + oldNL + 1
+		}
 		le := end
 		if cur[end-1] != '\n' {
-			le = len(cur)
-			if i := bytes.IndexByte(cur[end:], '\n'); i >= 0 {
-				le = end + i + 1
-			}
+			le = lineEnd(end)
 		}
 		if k > 0 && ls < stop {
 			// On a line of the open region: it grows to take this one in.
@@ -53,10 +77,7 @@ func replaceCounts(cur, old, repl []byte, n int) (added, removed int) {
 		if le == end && end < len(cur) && len(after) > 0 && after[len(after)-1] != '\n' {
 			// The match ended its line and the replacement did not: the next
 			// line is joined on, and changed.
-			le = len(cur)
-			if i := bytes.IndexByte(cur[end:], '\n'); i >= 0 {
-				le = end + i + 1
-			}
+			le = lineEnd(end)
 		}
 		at, stop = end, le
 	}

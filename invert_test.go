@@ -693,6 +693,13 @@ func FuzzAnInverseUndoesThePatch(f *testing.F) {
 	// matched the file's own first line at the right count. Refused now when
 	// the patch is applied, as joining a carriage return to a newline.
 	f.Add([]byte("\r\r\n\x80J\n"), []byte("J"), []byte("0"), []byte("0"), []byte("\r\r\n"), false)
+	// #134, a find of time and not of bytes: one line of 3,449 copies of a,
+	// each made 64 bytes with 62 zeros in them, and then every zero replaced.
+	// Counting the lines of 213,838 copies on one line looked back from each
+	// to the line's start, and the worker passed the fuzzer's 60-second limit.
+	f.Add(bytes.Repeat([]byte("\xb0"), 3449), []byte("\xb0"),
+		[]byte("010101000000000000000000000000000000d000000000000000000000000000"),
+		[]byte("0"), []byte("\xcb"), false)
 	f.Fuzz(func(t *testing.T, start, a, b, c, d []byte, strict bool) {
 		n1 := bytes.Count(start, a)
 		if len(a) == 0 || n1 == 0 {

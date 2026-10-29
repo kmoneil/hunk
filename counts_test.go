@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The shapes the counts have a rule for, a file each, and what git says of
@@ -147,6 +148,14 @@ func TestTheCountsRegions(t *testing.T) {
 		{"a CRLF line made LF", "a\r\nb\r\n", "a\r\n", "a\n", 1, 1, 1},
 		{"the whole file", "a\nb\n", "a\nb\n", "c\n", 1, 1, 2},
 		{"nothing in common", "a\n", "a\n", "b\nc\n", 1, 2, 1},
+		// #134's cursors. A line with no newline at all, ended by the file.
+		// Then two copies whose regions meet, which one region would count
+		// +1 -1 by the "q" and "p" the two have in common across the seam:
+		// the next copy's line starts where old's newline left it, or, when
+		// old has none, just past the gap's one newline.
+		{"x3 on a file of one line and no newline", "1 1 1", "1", "2", 3, 1, 1},
+		{"x2 that each end their lines are two regions", "p\nq\np\nq\n", "p\nq\n", "q\np\n", 2, 2, 2},
+		{"x2 on the lines just after each other are two regions", "p\nq\np\nq\n", "p\nq", "q\np", 2, 2, 2},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a, r := replaceCounts([]byte(c.cur), []byte(c.old), []byte(c.repl), c.n)
@@ -204,6 +213,109 @@ func TestTheCountsRegions(t *testing.T) {
 			t.Errorf("%v, want +2 -2: one line, rewritten twice", got)
 		}
 	})
+}
+
+// #134: the nightly's FuzzAnInverseUndoesThePatch worker was stopped by the
+// fuzzer's 60-second limit on one input, 207,002 copies on one 220 KB line,
+// because replaceCounts looked back from each copy to its line's start and on
+// to its end. The cursors make that linear, and nothing else would notice them
+// taken out again: the counts are the same either way.
+//
+// It is timed, where TestTheNearMissSearchIsLinearInEachDimension counts
+// bytes, because the quadratic work allocated nothing. What makes a clock safe
+// here is the margin, both ways. Four million copies on one line take 42 ms on
+// the machine it was written on, and 310 ms under -race. Looking forward from
+// each copy alone, with IndexByte's vector loop, took 90 seconds there, and
+// the code before #134 took nine minutes at half the size, so over half an
+// hour at this one. The limit is 10 seconds.
+func TestCountingOneLinesCopiesIsLinear(t *testing.T) {
+	const copies = 1 << 22
+	cur := bytes.Repeat([]byte("x"), copies)
+	done := make(chan [2]int, 1)
+	go func() {
+		a, r := replaceCounts(cur, []byte("x"), []byte("y"), copies)
+		done <- [2]int{a, r}
+	}()
+	select {
+	case got := <-done:
+		if got != [2]int{1, 1} {
+			t.Errorf("+%d -%d, want +1 -1: one line, changed", got[0], got[1])
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("counting %d copies on one line took more than 10 s: each copy's line is being looked for again (#134)", copies)
+	}
+}
+
+// FuzzTheCursorsCountAsLookingDid: replaceCounts' cursors find the same lines
+// for every copy as looking from the copy did, so the counts are equal.
+func FuzzTheCursorsCountAsLookingDid(f *testing.F) {
+	for _, c := range countShapes {
+		if strings.HasPrefix(c.patch, "@@ old") {
+			p, err := Parse([]byte("@@ file f\n"+c.patch), DefaultMarker)
+			if err == nil {
+				f.Add([]byte(c.before), p.Hunks[0].Old, p.Hunks[0].New)
+			}
+		}
+	}
+	f.Add([]byte("1 1 1"), []byte("1"), []byte("2"))
+	f.Add([]byte("p\nq\np\nq\n"), []byte("p\nq\n"), []byte("q\np\n"))
+	f.Add([]byte("p\nq\np\nq\n"), []byte("p\nq"), []byte("q\np"))
+	f.Add([]byte("a\na\nb\n"), []byte("a\n"), []byte("A"))
+	f.Add([]byte("a1\nb1 1\nc"), []byte("1\nb"), []byte("x"))
+	f.Fuzz(func(t *testing.T, cur, old, repl []byte) {
+		n := bytes.Count(cur, old)
+		if len(old) == 0 || n == 0 {
+			return
+		}
+		a, r := replaceCounts(cur, old, repl, n)
+		wa, wr := replaceCountsByLooking(cur, old, repl, n)
+		if a != wa || r != wr {
+			t.Errorf("+%d -%d, and looking from each copy +%d -%d\ncur %q old %q new %q", a, r, wa, wr, cur, old, repl)
+		}
+	})
+}
+
+// replaceCountsByLooking is replaceCounts as it was before #134, each copy's
+// lines looked for from the copy: quadratic on a long line, plainly right, and
+// kept as the cursors' differential.
+func replaceCountsByLooking(cur, old, repl []byte, n int) (added, removed int) {
+	start, stop, at := 0, 0, 0
+	var after []byte
+	flush := func() {
+		after = append(after, cur[at:stop]...)
+		a, r := regionCounts(cur[start:stop], after)
+		added, removed = added+a, removed+r
+	}
+	for k := range n {
+		p := at + bytes.Index(cur[at:], old)
+		end := p + len(old)
+		ls := bytes.LastIndexByte(cur[:p], '\n') + 1
+		le := end
+		if cur[end-1] != '\n' {
+			le = len(cur)
+			if i := bytes.IndexByte(cur[end:], '\n'); i >= 0 {
+				le = end + i + 1
+			}
+		}
+		if k > 0 && ls < stop {
+			after = append(after, cur[at:p]...)
+		} else {
+			if k > 0 {
+				flush()
+			}
+			start, after = ls, append([]byte(nil), cur[ls:p]...)
+		}
+		after = append(after, repl...)
+		if le == end && end < len(cur) && len(after) > 0 && after[len(after)-1] != '\n' {
+			le = len(cur)
+			if i := bytes.IndexByte(cur[end:], '\n'); i >= 0 {
+				le = end + i + 1
+			}
+		}
+		at, stop = end, le
+	}
+	flush()
+	return added, removed
 }
 
 // FuzzTheCountsAreTheFilesLines: whatever the file and the payloads, a
