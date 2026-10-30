@@ -351,10 +351,68 @@ func TestEachFlagRefusals(t *testing.T) {
 			[]string{"--try", "true", "--each", patches[0], "--timeout", "5s"},
 			`argument "--timeout" begins with "-": flags come before --each's patch files`,
 		},
+		// A flag after the files is not parsed, so it is refused before
+		// anything reads the flags: until #136, a --try after the files was
+		// refused as missing, and so was a --verify.
+		{
+			"--try after the files",
+			[]string{"--each", patches[0], "--try", "true"},
+			`argument "--try" begins with "-": flags come before --each's patch files`,
+		},
+		{
+			"--try= after the files",
+			[]string{"--each", patches[0], patches[1], "--try=true"},
+			`argument "--try=true" begins with "-": flags come before --each's patch files`,
+		},
+		{
+			"a single-dash -try after the files",
+			[]string{"--each", patches[0], "-try", "true"},
+			`argument "-try" begins with "-": flags come before --each's patch files`,
+		},
+		{
+			"--verify after the files",
+			[]string{"--each", patches[0], "--verify", "true"},
+			`argument "--verify" begins with "-": flags come before --each's patch files`,
+		},
+		{
+			"--try and --verify after the files",
+			[]string{"--each", patches[0], "--try", "true", "--verify", "true"},
+			`argument "--try" begins with "-": flags come before --each's patch files`,
+		},
+		{
+			"--build then --try after the files: the first is named",
+			[]string{"--each", patches[0], "--build", "true", "--try", "true"},
+			`argument "--build" begins with "-": flags come before --each's patch files`,
+		},
+		{
+			"--try after the files under --isolated",
+			[]string{"--isolated", "--each", patches[0], "--try", "true"},
+			`argument "--try" begins with "-": flags come before --each's patch files`,
+		},
+		{
+			"-f before and a flag after the files",
+			[]string{"--try", "true", "-f", patches[0], "--each", patches[1], "--timeout", "5s"},
+			`argument "--timeout" begins with "-": flags come before --each's patch files`,
+		},
+		{
+			"a flag after the files and no --try anywhere",
+			[]string{"--each", patches[0], "--timeout", "5s"},
+			`argument "--timeout" begins with "-": flags come before --each's patch files`,
+		},
+		{
+			"--each itself before its files, --try after them",
+			[]string{"--each", "--isolated", patches[0], "--try", "true"},
+			`argument "--try" begins with "-": flags come before --each's patch files`,
+		},
 		{
 			"a patch listed twice",
 			[]string{"--try", "true", "--each", patches[0], patches[0]},
 			"is listed twice",
+		},
+		{
+			"a patch listed twice without --try: --try's refusal first",
+			[]string{"--each", patches[0], patches[0]},
+			"--each tries each patch alone and does nothing without --try CMD",
 		},
 		{
 			"-f twice, without --each",

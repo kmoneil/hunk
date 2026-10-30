@@ -400,6 +400,18 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	case *each:
 		// --each's patches are the positional arguments, so its refusals
 		// stand where "unexpected argument" otherwise would (§4.3).
+		//
+		// The flag package stops reading flags at the first file, so a
+		// flag after one would be read as a patch named like one, and a
+		// run of forty would be one patch short with nothing said. That is
+		// refused before anything reads the flags, since every check here
+		// reads a parse cut short at the first file: until #136 a --try
+		// after the files was refused as missing.
+		for _, name := range fs.Args() {
+			if strings.HasPrefix(name, "-") {
+				return fail(exitUsage, fmt.Errorf("argument %q begins with \"-\": flags come before --each's patch files", name), "")
+			}
+		}
 		switch {
 		case *try == "" && *verify != "":
 			return fail(exitUsage, errors.New("--each needs --try, not --verify: a verify keeps the batch that passes, and --each puts every patch back"), "")
@@ -412,12 +424,6 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		}
 		seen := make(map[string]bool, fs.NArg())
 		for _, name := range fs.Args() {
-			// The flag package stops reading flags at the first file, so a
-			// flag after one would be read as a patch named like one, and a
-			// run of forty would be one patch short with nothing said.
-			if strings.HasPrefix(name, "-") {
-				return fail(exitUsage, fmt.Errorf("argument %q begins with \"-\": flags come before --each's patch files", name), "")
-			}
 			if seen[name] {
 				return fail(exitUsage, fmt.Errorf("%s is listed twice", name), "")
 			}
