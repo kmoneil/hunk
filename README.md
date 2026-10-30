@@ -541,6 +541,11 @@ against a broken tree.
 hunk --try 'zig build test' --timeout 170s --each breaks/*.hunk
 ```
 
+The patches are the arguments after the flags, so the files come last: an
+argument after the first patch that begins with `-` is refused, exit 1,
+nothing tried, and named, since it is not read as a flag. `--each` itself may
+go anywhere among the flags.
+
 Every patch is read, parsed and validated before the first try, and one that
 fails refuses the lot, nothing tried, so the typo in patch 19 is found before
 the first command runs. Then the command runs once on the tree as it is, with
