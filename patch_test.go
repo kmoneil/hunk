@@ -113,11 +113,13 @@ func TestParse(t *testing.T) {
 		// "@@old is payload: no separator" stood here until 2026-10-18: a
 		// directive missing its space is refused now, wherever it is (#96),
 		// and its rows are in TestParseErrors. Glued to a word that is not a
-		// directive, it is still payload.
+		// directive, it is payload in an old. Until 2026-10-31 this row had
+		// "@@filename", "@@file:" and "@@fileb.go" under its new as well; a
+		// payload that writes refuses them now (#138), in TestParseErrors.
 		{
-			name: "@@olds is payload: no separator, and not a keyword",
-			in:   "@@ file a.go\n@@ old\n@@olds\n@@ new\n@@filename\n@@file:\n@@fileb.go\n",
-			want: []Hunk{rep("a.go", 2, 1, "@@olds", "@@filename\n@@file:\n@@fileb.go")},
+			name: "@@olds is payload in an old: no separator, and not a keyword",
+			in:   "@@ file a.go\n@@ old\n@@olds\n@@filename\n@@file:\n@@ new\nz\n",
+			want: []Hunk{rep("a.go", 2, 1, "@@olds\n@@filename\n@@file:", "z")},
 		},
 		{
 			name: "@@ oldx is payload: not a keyword",
@@ -262,10 +264,48 @@ func TestParse(t *testing.T) {
 		{
 			// Two faults, which neither rule takes: the space, and a second CR,
 			// which is a byte of the line. Fuzzing found the parser refusing it
-			// for its space, having taken off both CRs.
+			// for its space, having taken off both CRs. In an old since
+			// 2026-10-31: in a create it is "@@" glued to "old\r", a word
+			// that is no directive, which a payload that writes refuses
+			// (#138), in TestParseErrors.
 			name: "a directive missing its space, with a second CR, is payload",
-			in:   "@@ create a.txt\n@@old\r\r\n",
-			want: []Hunk{body(OpCreate, "a.txt", 1, "@@old\r\r")},
+			in:   "@@ file a.txt\n@@ old\n@@old\r\r\n@@ new\nz\n",
+			want: []Hunk{rep("a.txt", 2, 1, "@@old\r\r", "z")},
+		},
+		// "@@" and a letter where a payload writes is refused (#138), and
+		// these are what it leaves: an old, a line the old holds, which is
+		// carried over, a placeholder closed by the marker, any other marker,
+		// and "@@" followed by anything but an ASCII letter.
+		{
+			name: "an unknown word in an old is payload, which has to be in the file",
+			in:   "@@ file a.go\n@@ old\n@@include x\n@@ new\nz\n",
+			want: []Hunk{rep("a.go", 2, 1, "@@include x", "z")},
+		},
+		{
+			name: "one the old holds is carried over, not written",
+			in:   "@@ file a.moon\n@@ old\n@@var = 1\nx\n@@ new\n@@var = 1\ny\n",
+			want: []Hunk{rep("a.moon", 2, 1, "@@var = 1\nx", "@@var = 1\ny")},
+		},
+		{
+			name: "and in a CRLF patch, without the CR that ends its line",
+			in:   "@@ file a.rb\r\n@@ old\r\n@@count = 0\r\nx\r\n@@ new\r\n@@count = 0\r\ny\r\n",
+			want: []Hunk{rep("a.rb", 2, 1, "@@count = 0\r\nx\r", "@@count = 0\r\ny\r")},
+		},
+		{
+			name: "a placeholder closed by the marker",
+			in:   "@@ create Tests.swift.tmpl\n@@UNIT_TEST_BODY@@\n@@TEMPLATE_KEYS@@ and after\n@@a1_b2@@\n",
+			want: []Hunk{body(OpCreate, "Tests.swift.tmpl", 1, "@@UNIT_TEST_BODY@@\n@@TEMPLATE_KEYS@@ and after\n@@a1_b2@@")},
+		},
+		{
+			name:   "under another marker, the default's and its own",
+			marker: "%%",
+			in:     "%% create a.ps\n@@include x\n%%EOF\n%%BoundingBox: 0 0 1 1\n",
+			want:   []Hunk{body(OpCreate, "a.ps", 1, "@@include x\n%%EOF\n%%BoundingBox: 0 0 1 1")},
+		},
+		{
+			name: "@@ and no ASCII letter",
+			in:   "@@ append a.txt\n@@\n@@_foo\n@@1abc\n@@-1,2\n@@@ -1 +1 @@@\n@@ include x\n@@\u00e9t\u00e9\n@@\u00a0include\n @@include\n",
+			want: []Hunk{body(OpAppend, "a.txt", 1, "@@\n@@_foo\n@@1abc\n@@-1,2\n@@@ -1 +1 @@@\n@@ include x\n@@\u00e9t\u00e9\n@@\u00a0include\n @@include")},
 		},
 		{
 			// A path is not a separator, so a no-break space in one is a byte
@@ -404,6 +444,32 @@ func TestParseErrors(t *testing.T) {
 		// own message, which is asked first.
 		{"a form feed for the separator is a control character still", "", "@@ create a.go\n@@\ffile b\n", 2, `"@@ file" but for U+000C in it, a control character`},
 		{"and so is NEL, a space and a C1 control", "", "@@ create a.go\n@@\u0085file b\n", 2, `"@@ file" but for U+0085 in it, a control character`},
+
+		// "@@" glued to a word that is no directive, in a payload that writes,
+		// was a line of text until 2026-10-31 (#138): "@@include other.txt",
+		// written for a directive hunk does not have, went into the file.
+		{"the issue's repro", "", "@@ file f.txt\n@@ old\na\n@@ new\na\n@@include other.txt\n", 6, `"@@include other.txt" starts like a directive, but "include" is not one, so the line would be payload for f.txt; if it is meant as text, choose another directive prefix with --marker, and to take a payload from a file, use hunk quote --new FILE`},
+		{"in a create payload", "", "@@ create a.go\nx\n@@include y\n", 3, `"include" is not one, so the line would be payload for a.go;`},
+		{"in an append payload", "", "@@ append a.go\n@@Include y\n", 2, `"Include" is not one, so the line would be payload for a.go;`},
+		{"in a prepend payload", "", "@@ prepend a.go\n@@INCLUDE\n", 2, `"@@INCLUDE" starts like a directive, but "INCLUDE" is not one`},
+		{"the file in effect is the one named", "", "@@ file a.go\n@@ old\np\n@@ new\nq\n@@ file b.go\n@@ old\nr\n@@ new\n@@x\n", 10, `payload for b.go;`},
+		{"a Ruby class variable the old does not hold", "", "@@ file a.rb\n@@ old\nx\n@@ new\n@@count = 0\n", 5, `"count" is not one`},
+		{"a T-SQL global", "", "@@ create q.sql\nSELECT\n@@ROWCOUNT\n", 3, `"ROWCOUNT" is not one`},
+		{"glued to a longer word", "", "@@ create a.go\n@@files b.go\n", 2, `"files" is not one`},
+		{"glued to a word and a name", "", "@@ file a.go\n@@ old\nx\n@@ new\n@@fileb.go\n", 5, `"fileb.go" is not one`},
+		{"glued to a word and a colon", "", "@@ file a.go\n@@ old\nx\n@@ new\n@@file:\n", 5, `"file:" is not one`},
+		{"glued to a name and a path", "", "@@ file a.go\n@@ old\nx\n@@ new\n@@filename\n", 5, `"filename" is not one`},
+		{"the word ends at a tab", "", "@@ create a.go\n@@foo.bar(x)\ty\n", 2, `"foo.bar(x)" is not one`},
+		{"or at a no-break space", "", "@@ create a.go\n@@include\u00a0y\n", 2, `"include" is not one`},
+		{"a second CR is a byte of the word", "", "@@ create a.txt\n@@old\r\r\n", 2, `"@@old\r" starts like a directive, but "old\r" is not one`},
+		{"a control character is named, not printed", "", "@@ create a.txt\n@@inc\x1blude\n", 2, `"inc\x1blude" is not one`},
+		{"in a CRLF patch, without its CR", "", "@@ create a.go\r\nx\r\n@@include y\r\n", 3, `"@@include y" starts like a directive, but "include" is not one`},
+		{"a placeholder needs the marker after it", "", "@@ create a.tmpl\n@@NAME@ x\n", 2, `"NAME@" is not one`},
+		{"held by its own old only, line for line", "", "@@ file a.moon\n@@ old\n@@var\n@@ new\n@@var\n@@var2\n", 6, `"var2" is not one`},
+		{"not by another hunk's", "", "@@ file a.go\n@@ old\n@@x\n@@ new\ny\n@@ old\nz\n@@ new\n@@x\n", 9, `"x" is not one`},
+		{"the first of two is named", "", "@@ create a.go\n@@one\n@@two\n", 2, `"one" is not one`},
+		{"named before a structural fault after it", "", "@@ create a.go\n@@Old\nx\n@@ new\ny\n", 2, `"Old" is not one`},
+		{"a long word is cut", "", "@@ create a.go\n@@" + strings.Repeat("w", 80) + "\n", 2, `"` + strings.Repeat("w", 60) + `"... is not one`},
 
 		{"an empty marker", "%%%", "", 0, "marker"},
 	}
@@ -587,6 +653,8 @@ func FuzzParse(f *testing.F) {
 	f.Add("@@ file a\n@@ old\n  HUNK\n@@ new\n  HUNK\nHUHUNK\n\nls\n\n@@ create b\nHUN\n")
 	f.Add("@@ file a\n@@ old\nx\n@@ new\ny\n@@file b\n@@ old\nx\n@@ new\nz\n")
 	f.Add("@@ create a\n@@files\n@@\u00a0end\n")
+	f.Add("@@ file a\n@@ old\n@@var\nx\n@@ new\n@@var\n@@include b\n")
+	f.Add("@@ create a\n@@UNIT_TEST_BODY@@\n@@NAME@ x\n")
 
 	f.Fuzz(func(t *testing.T, s string) {
 		// Total: every input is either a Patch or a *ParseError, never a panic.
@@ -610,6 +678,17 @@ func FuzzParse(f *testing.F) {
 					t.Errorf("%v: line %q is not one separatorFault takes", pe, lines[pe.Line-1])
 				}
 			}
+			// And one refused as "@@" glued to a word (#138) is one that
+			// rule takes.
+			if strings.Contains(pe.Msg, "starts like a directive, but") {
+				lines := splitLines([]byte(s))
+				if pe.Line < 1 || pe.Line > len(lines) {
+					t.Fatalf("%v names a line the patch does not have", pe)
+				}
+				if _, ok := unknownWord(lines[pe.Line-1], DefaultMarker); !ok {
+					t.Errorf("%v: line %q is not one unknownWord takes", pe, lines[pe.Line-1])
+				}
+			}
 		} else {
 			if len(p.Hunks) == 0 {
 				t.Fatal("a successful parse with no hunks")
@@ -627,6 +706,20 @@ func FuzzParse(f *testing.F) {
 				// Nor empty as --eol auto reads a CRLF patch's old.
 				if h.Op == OpReplace && p.CRLF && len(stripCR(h.Old)) == 0 {
 					t.Errorf("replace at line %d has an old that --eol auto reads as empty: %q", h.Line, h.Old)
+				}
+				// No line it writes is "@@" glued to a word that is no
+				// directive (#138), but one its own old holds.
+				writes, held := h.Body, map[string]bool{}
+				if h.Op == OpReplace {
+					writes = h.New
+					for _, l := range bytes.Split(h.Old, lf) {
+						held[string(p.lineText(l))] = true
+					}
+				}
+				for _, l := range bytes.Split(writes, lf) {
+					if _, ok := unknownWord(l, DefaultMarker); ok && !held[string(p.lineText(l))] {
+						t.Errorf("hunk at line %d writes %q, which starts like a directive and is none", h.Line, l)
+					}
 				}
 			}
 			// Every stray (#92) is a line of the patch that the rule takes,

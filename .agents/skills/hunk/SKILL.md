@@ -129,7 +129,10 @@ control character anywhere else in a directive line is refused and named: in a
 path with exit 2, stuck to a directive word with exit 1. So is a directive
 missing its space, `@@file b.go`, or with a no-break space for one, wherever
 the line is, with exit 1: as payload it would have sent every hunk after it to
-the file before it. `--marker` writes such a line as text.
+the file before it. `--marker` writes such a line as text. So is `@@` glued to
+a word that is no directive, `@@include lib.zig`, where a payload would write
+it: hunk has no such directive, and the line would land in the file as text.
+To take a payload from a file, use `hunk quote --new FILE`.
 
 ## The five directives
 

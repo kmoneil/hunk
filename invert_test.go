@@ -163,6 +163,21 @@ func TestInvertPrints(t *testing.T) {
 			"@@ file f.txt\n@@ old\nA\n@@ new\na\n",
 		},
 		{
+			// "@@" glued to a word the inverse writes back is refused (#138),
+			// but not one its old, this hunk's new, holds, nor any under
+			// another marker.
+			"an old line the new holds too is carried over by the inverse",
+			nil,
+			"@@ file f.rb\n@@ old\n@@count = 0\nx\n@@ new\n@@count = 0\ny\n",
+			"@@ file f.rb\n@@ old\n@@count = 0\ny\n@@ new\n@@count = 0\nx\n",
+		},
+		{
+			"and under another marker, such a line is text",
+			[]string{"--marker", "%%"},
+			"%% file f.rb\n%% old\n@@count = 0\nx\n%% new\nx\n",
+			"%% file f.rb\n%% old\nx\n%% new\n@@count = 0\nx\n",
+		},
+		{
 			"a hunk that changes nothing is its own inverse",
 			nil,
 			"@@ file f.txt\n@@ old\na\n@@ new\na\n",
@@ -268,6 +283,22 @@ func TestInvertRefuses(t *testing.T) {
 		{"a patch that does not parse", nil, "@@ old\na\n@@ new\nb\n", "", []string{"hunk invert: patch line 1: no file is in effect"}},
 		{"a break set", nil, "@@ patch one\n@@ file f.txt\n@@ old\na\n@@ new\nb\n", "", []string{"heads one patch of a break set"}},
 		{"no patch", nil, "", "", []string{"hunk invert: the patch is empty"}},
+		{
+			// The inverse writes the old back, where the parser refuses "@@"
+			// glued to a word that is no directive (#138); printed, it was
+			// refused when applied, and --marker could not help.
+			"an old the inverse would write that starts like a directive", nil,
+			"@@ file f.rb\n@@ old\n@@count = 0\nx\n@@ new\nx\n", "",
+			[]string{
+				"hunk invert: 1 hunk has no inverse, so the patch was not inverted\n\nhunk 1  f.rb  (patch line 2)\n",
+				`  its inverse would write "@@count = 0" back, which starts like a directive and is none, and a patch refuses such a line where it is written; to invert it, write the patch under another --marker`,
+			},
+		},
+		{
+			"and in a CRLF patch", nil,
+			"@@ file f.rb\r\n@@ old\r\n@@count = 0\r\nx\r\n@@ new\r\nx\r\n", "",
+			[]string{`its inverse would write "@@count = 0" back`},
+		},
 		{
 			"a mistyped delimiter", nil, "@@ file f.txt\n@@ old\na\n@@ new\nA\nHUHUNK\n", "",
 			[]string{`patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter`, "pass " + allowMistypedFlag},
@@ -613,6 +644,8 @@ func FuzzInvert(f *testing.F) {
 		"@@ delete f.txt\n@@ append f.txt\nx\n@@ prepend f.txt\n",
 		"@@ file f.txt\n@@ old\na\n@@ new\nA\nHUHUNK\n",
 		"@@ file f.txt\n@@ old\na\n@@ new\nA",
+		"@@ file f.rb\n@@ old\n@@count = 0\nx\n@@ new\nx\n",
+		"@@ file f.rb\n@@ old\n@@count = 0\nx\n@@ new\n@@count = 0\ny\n",
 		"@@ create n.txt\n",
 		"",
 	} {
@@ -627,7 +660,7 @@ func FuzzInvert(f *testing.F) {
 			if err != nil {
 				t.Fatalf("inverted a patch that does not parse: %v\n%q", err, src)
 			}
-			want, _ := invertPatch(p)
+			want, _ := invertPatch(p, DefaultMarker)
 			q, err := Parse(out.Bytes(), DefaultMarker)
 			if err != nil {
 				t.Fatalf("the inverse does not parse: %v\nsrc %q\ninverse %q", err, src, out.Bytes())
@@ -636,7 +669,7 @@ func FuzzInvert(f *testing.F) {
 				t.Fatalf("printed %+v (crlf %v), want %+v (crlf %v)\nsrc %q\ninverse %q", q.Hunks, q.CRLF, want, p.CRLF, src, out.Bytes())
 			}
 			if !slices.ContainsFunc(p.Hunks, func(h Hunk) bool { return h.Op != OpReplace }) {
-				back, faults := invertPatch(q)
+				back, faults := invertPatch(q, DefaultMarker)
 				if faults != nil || !sameHunks(back, asPrinted(p.Hunks, p.CRLF)) {
 					t.Fatalf("inverted twice is not the patch: %+v\nsrc %q", back, src)
 				}
@@ -723,10 +756,14 @@ func FuzzAnInverseUndoesThePatch(f *testing.F) {
 		}
 		after, err := os.ReadFile(filepath.Join(root, "a.txt"))
 		must(t, err)
-		inv, faults := invertPatch(p)
+		inv, faults := invertPatch(p, DefaultMarker)
 		if faults != nil {
-			if len(b) > 0 && len(d) > 0 {
-				t.Fatalf("refused %+v with no empty new", faults)
+			// Or with an old the inverse would write that starts like a
+			// directive and is none (#138), which the parser refuses there.
+			for _, f := range faults {
+				if len(f.h.New) > 0 && !strings.Contains(f.why, "starts like a directive and is none") {
+					t.Fatalf("refused %+v with no empty new", faults)
+				}
 			}
 			return
 		}

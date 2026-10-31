@@ -390,6 +390,9 @@ func quoteLines(path string, file []byte, start, end int, repl []byte, hasNew bo
 		if r := refuseDirectives(repl, newName, 1, marker); r != nil {
 			return nil, r
 		}
+		if r := refuseUnknownWords(repl, old, newName, marker); r != nil {
+			return nil, r
+		}
 	}
 
 	var b bytes.Buffer
@@ -403,6 +406,36 @@ func quoteLines(path string, file []byte, start, end int, repl []byte, hasNew bo
 	}
 	q.Patch = b.Bytes()
 	return q, nil
+}
+
+// refuseUnknownWords refuses a line of the replacement that the parser refuses
+// in a payload that writes (#138): "@@" glued to a word that is no directive,
+// "@@include x", which unknownWord takes, unless the range holds it, since
+// the hunk then carries it over. Lines compared whole, as the parser compares
+// them in the patch quote prints, which no CRLF reading applies to: its
+// directive lines end in LF alone. Line numbers are the replacement file's.
+func refuseUnknownWords(repl, old []byte, name, marker string) *quoteRefusal {
+	var held map[string]bool
+	for i, line := range bytes.Split(repl, lf) {
+		word, ok := unknownWord(line, marker)
+		if !ok {
+			continue
+		}
+		if held == nil {
+			held = make(map[string]bool)
+			for _, l := range bytes.Split(old, lf) {
+				held[string(l)] = true
+			}
+		}
+		if held[string(line)] {
+			continue
+		}
+		return &quoteRefusal{exitNoMatch, fmt.Sprintf(
+			"%s line %d is %s, which starts like a directive, but %s is not one, and a patch refuses such a line where it would be written; "+
+				"pass --marker with a prefix that no line quoted starts with, here and to the hunk that applies the patch",
+			name, 1+i, shownLine(line), quoteCut(word))}
+	}
+	return nil
 }
 
 // refuseDirectives refuses a payload with a line the parser would not read as

@@ -353,6 +353,108 @@ func separatorMessage(bad badSeparator, marker string) string {
 		marker+" "+bad.word, but, fix)
 }
 
+// unknownWord reports the word of a line that is the default marker glued to
+// a word that is no directive (#138), "@@include other.txt". In the field it
+// was written under "@@ new" for a directive hunk does not have, a payload
+// taken from a file, and went into the file as a line of text at exit 0. A
+// line separatorFault takes is its own, so "@@file b.go" keeps its sentence.
+// nearDirective takes none of these: a control character read as nothing or
+// as a space leaves the letter glued to the marker, which no directive is.
+// FuzzUnknownWord asserts both.
+//
+// The rule is narrow on what real text holds. Over 401.7M lines of local text
+// on 2026-10-31, 19 had "@@" and a letter at column 0, a directive word not
+// counted: 15 a template placeholder closed by the marker, "@@NAME@@", which
+// is left alone, three JavaScript symbol names wrapped to the margin in prose
+// ("@@replace"), and a MoonScript class variable ("@@var"; Ruby's are the same
+// token). So the marker has to be the default: "%%" and a letter, the prefix a
+// patch chooses to make such lines text, began 10,572 of them, PostScript's
+// "%%EOF" and IPython's "%%time" among them, and --marker is the way out this
+// refusal names. "@@ word", with the space, is out of reach too: Lua's
+// luaconf.h starts 51 comment lines that way. Parse asks it only of a line a
+// payload writes, not of one its old holds.
+func unknownWord(line []byte, marker string) (string, bool) {
+	if marker != DefaultMarker {
+		return "", false
+	}
+	// separatorFault takes off the CR that ends the line itself, and given a
+	// line without it would take a second, as Parse's comment on it says.
+	if _, ok := separatorFault(line, marker); ok {
+		return "", false
+	}
+	line = bytes.TrimSuffix(line, cr)
+	rest, ok := bytes.CutPrefix(line, []byte(marker))
+	if !ok || len(rest) == 0 || !isASCIILetter(rest[0]) {
+		return "", false
+	}
+	// A placeholder, "@@UNIT_TEST_BODY@@", is a name between two markers.
+	name := 0
+	for name < len(rest) && isNameByte(rest[name]) {
+		name++
+	}
+	if bytes.HasPrefix(rest[name:], []byte(marker)) {
+		return "", false
+	}
+	// The word runs to the first separator as separatorFault reads one, a
+	// space, a tab or a space that is not ASCII, so the sentence quotes what
+	// was typed as the directive. A control character is no separator: a
+	// second CR, "@@old" and two of them, is "old\r", which is not "old".
+	end := bytes.IndexFunc(rest, func(r rune) bool {
+		return r == ' ' || r == '\t' || r >= utf8.RuneSelf && unicode.IsSpace(r) && !isControl(r)
+	})
+	if end < 0 {
+		end = len(rest)
+	}
+	return string(rest[:end]), true
+}
+
+func isASCIILetter(c byte) bool { return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' }
+
+func isNameByte(c byte) bool { return isASCIILetter(c) || c >= '0' && c <= '9' || c == '_' }
+
+// unknownWordMessage is the refusal of a line unknownWord took, in a payload
+// for path.
+func unknownWordMessage(line []byte, word, path string) string {
+	return fmt.Sprintf(
+		"%s starts like a directive, but %s is not one, so the line would be payload for %s; if it is meant as text, choose another directive prefix with --marker, and to take a payload from a file, use hunk quote --new FILE",
+		shownLine(line), quoteCut(word), showControls(path))
+}
+
+// refuseUnknownWords refuses the first line of lines[start:end], a payload
+// that writes, that unknownWord takes and the hunk's old does not hold, by
+// unknownWordIn. old is nil for create, append and prepend.
+func (p *Patch) refuseUnknownWords(lines [][]byte, start, end int, path string, old [][]byte, marker string) error {
+	if i, word, ok := p.unknownWordIn(lines[start:end], old, marker); ok {
+		return &ParseError{start + i + 1, unknownWordMessage(lines[start+i], word, path)}
+	}
+	return nil
+}
+
+// unknownWordIn is the index and word of the first of writes, the lines of a
+// payload that writes, that unknownWord takes, unless old, the hunk's old
+// payload as lines, holds it: such a line is carried over rather than
+// written, and an edit beside a line the file has is no typo. Compared as
+// noteStrays compares, without the CR that ends a CRLF patch's line.
+func (p *Patch) unknownWordIn(writes, old [][]byte, marker string) (int, string, bool) {
+	var held map[string]bool
+	for i, line := range writes {
+		word, ok := unknownWord(line, marker)
+		if !ok {
+			continue
+		}
+		if held == nil {
+			held = make(map[string]bool, len(old))
+			for _, l := range old {
+				held[string(p.lineText(l))] = true
+			}
+		}
+		if !held[string(p.lineText(line))] {
+			return i, word, true
+		}
+	}
+	return 0, "", false
+}
+
 // splitLines splits on \n. A final \n terminates the last line rather than
 // starting a new one (§3.3), so "a\nb\n" and "a\nb" are both two lines. That
 // is what every heredoc and every editor produces, so the agent never has to
@@ -523,6 +625,9 @@ loop:
 			}
 			cur, curLine = path, ln
 			body, next := collectPayload(lines, i, marker)
+			if err := p.refuseUnknownWords(lines, i, next, path, nil, marker); err != nil {
+				return nil, err
+			}
 			p.noteStrays(lines, i, next, path, nil)
 			i = next
 			op := OpCreate
@@ -594,6 +699,12 @@ loop:
 			}
 			i++
 			replacement, next := collectPayload(lines, i, marker)
+			// A line that starts like a directive and is none (#138) is
+			// refused in a payload that writes, not in an old, which has to
+			// be in the file and so is never written in silence.
+			if err := p.refuseUnknownWords(lines, i, next, cur, lines[oldStart:oldEnd], marker); err != nil {
+				return nil, err
+			}
 			p.noteStrays(lines, i, next, cur, lines[oldStart:oldEnd])
 			i = next
 			p.Hunks = append(p.Hunks, Hunk{
@@ -705,7 +816,10 @@ form feed, with exit 1. A directive missing its space, as "@@file b.go" for
 no-break space, is refused at exit 1 too, wherever the line is, payload
 included: as payload, the directive it was meant to be would not happen, and
 the hunks after it would apply to the file before it. --marker writes such a
-line as text.
+line as text. So is "@@" glued to a word that is no directive, "@@include x",
+where a payload writes it, unless its old holds the line or it is a
+placeholder, "@@NAME@@"; that rule is "@@"'s alone. To take a payload from a
+file, use hunk quote --new FILE.
 
 The heredoc around a patch has a rule of its own, which is the shell's: a
 payload line that is exactly the heredoc's delimiter (HUNK in the example
