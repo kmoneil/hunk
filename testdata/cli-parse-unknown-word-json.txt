@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "exit": 1,
+  "error": "patch line 6: \"@@include other.txt\" starts like a directive, but \"include\" is not one, so the line would be payload for f.txt; if it is meant as text, choose another directive prefix with --marker, and to take a payload from a file, use hunk quote --new FILE"
+}

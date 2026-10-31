@@ -248,7 +248,9 @@ Three rules worth knowing before the first patch:
    wherever it is, since as payload the directive it was meant to be would not
    happen, and the hunks after it would apply to the file before it. If your
    payload really does contain a line like `@@ old` or `@@file`, `--marker`
-   picks a different prefix for the whole patch.
+   picks a different prefix for the whole patch. `@@` glued to another word,
+   `@@include x`, is refused too where a payload writes it, unless its `@@ old`
+   holds the line or it is a placeholder, `@@NAME@@`.
 
 A patch may end its lines with CRLF, as PowerShell does when it pipes text: one
 carriage return at the end of a directive line is the line's ending, not part
@@ -346,6 +348,8 @@ M src/main.go  +1 -1
 ```
 
 `--new FILE` adds `@@ new` and FILE's content, so the range is replaced by it.
+It is the way to take a payload from a file: a patch has no directive for one,
+and a line such as `@@include lib.zig` in a payload is refused.
 Without it the hunk stops after the old text, and you write `@@ new` and the
 replacement yourself, as the second one above does. Either way what comes out
 is a patch like any other: concatenate it with other hunks, pipe it in, and it
@@ -442,6 +446,10 @@ refused with exit 1, every such hunk named:
   `--eol` it was applied with.
 - a replacement with an empty `@@ new`, which took text out: nothing is left in
   the file to find its place by.
+- a replacement whose `@@ old` has a line that is `@@` glued to a word that is
+  no directive, such as `@@include x`, which its `@@ new` does not: the inverse
+  would write it back, and a patch refuses that. Under another `--marker` it
+  is text.
 
 As with `hunk quote`, a refusal is written to stdout as well, as an `@@ end`
 line, so the `hunk` it is piped into stops at exit 1 rather than applying

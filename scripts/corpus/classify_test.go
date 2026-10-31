@@ -776,6 +776,8 @@ var reportGoldens = map[string]int{
 	"cli-parse-missing-space-json":              1,
 	"cli-parse-not-ascii-space":                 1,
 	"cli-parse-not-ascii-space-json":            1,
+	"cli-parse-unknown-word":                    1,
+	"cli-parse-unknown-word-json":               1,
 	"cli-parse-not-a-directive":                 1,
 	"cli-parse-not-a-directive-json":            1,
 	"cli-parse-not-a-directive-from-a-file":     1,

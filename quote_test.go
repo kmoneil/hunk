@@ -163,12 +163,27 @@ func TestQuoteLines(t *testing.T) {
 		{
 			// Rule 3 of §3.2: none of these is a directive, so none is refused.
 			// "@@old" was among them until 2026-10-18, when the parser began to
-			// refuse a directive missing its space (#96).
+			// refuse a directive missing its space (#96). The replacement had
+			// "@@newer" until 2026-10-31, when the parser began to refuse "@@"
+			// glued to a word where it would be written (#138); "@@olds" is
+			// in the range, so the hunk carries it over.
 			name: "lines that only look like directives are text",
 			file: "@@ -1,3 +1,4 @@\n@@olds\n @@ old\n@@ older\n@@\n", start: 1, end: 5,
-			repl: "@@ -1 +1 @@\n@@newer\n", hasNew: true,
-			want:  "@@ file f.txt\n@@ old\n@@ -1,3 +1,4 @@\n@@olds\n @@ old\n@@ older\n@@\n@@ new\n@@ -1 +1 @@\n@@newer\n",
+			repl: "@@ -1 +1 @@\n@@olds\n", hasNew: true,
+			want:  "@@ file f.txt\n@@ old\n@@ -1,3 +1,4 @@\n@@olds\n @@ old\n@@ older\n@@\n@@ new\n@@ -1 +1 @@\n@@olds\n",
 			first: "@@ -1,3 +1,4 @@", last: "@@",
+		},
+		{
+			name: "a placeholder in the replacement, closed by the marker",
+			file: "a\n", start: 1, end: 1, repl: "@@UNIT_TEST_BODY@@\n", hasNew: true,
+			want:  "@@ file f.txt\n@@ old\na\n@@ new\n@@UNIT_TEST_BODY@@\n",
+			first: "a", last: "a",
+		},
+		{
+			name: "under another marker, @@ glued to a word is text, and so is that marker's",
+			file: "a\n", start: 1, end: 1, repl: "@@include x\n%%EOF\n", hasNew: true, marker: "%%",
+			want:  "%% file f.txt\n%% old\na\n%% new\n@@include x\n%%EOF\n",
+			first: "a", last: "a",
 		},
 		{
 			name: "under another marker, a directive missing its space under the default is text",
@@ -332,6 +347,27 @@ func TestQuoteLinesRefuses(t *testing.T) {
 			name: "under another marker, that marker's",
 			file: "a\n%%old\n", start: 1, end: 2, marker: "%%", code: exitNoMatch,
 			want: []string{`f.txt line 2 is "%%old"`, "missing its space"},
+		},
+		{
+			// "@@" glued to a word that is no directive is refused where a
+			// payload writes it (#138), so in the replacement and not in the
+			// range, and not when the range holds it.
+			name: "@@ glued to a word in the replacement",
+			file: "a\n", start: 1, end: 1, repl: "x\n@@include lib.zig\n", hasNew: true, code: exitNoMatch,
+			want: []string{
+				`new.txt line 2 is "@@include lib.zig", which starts like a directive, but "include" is not one, and a patch refuses such a line where it would be written; ` +
+					"pass --marker with a prefix that no line quoted starts with, here and to the hunk that applies the patch",
+			},
+		},
+		{
+			name: "held by the range only line for line",
+			file: "@@var\n", start: 1, end: 1, repl: "@@var\n@@var2\n", hasNew: true, code: exitNoMatch,
+			want: []string{`new.txt line 2 is "@@var2"`, `"var2" is not one`},
+		},
+		{
+			name: "and with the same ending: a CRLF replacement for an LF range is not held",
+			file: "@@var\n", start: 1, end: 1, repl: "@@var\r\nx\r\n", hasNew: true, code: exitNoMatch,
+			want: []string{`new.txt line 1 is "@@var"`},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -1127,6 +1163,10 @@ func FuzzAQuoteReadsBackAsTheRange(f *testing.F) {
 	f.Add([]byte(tenLines), 2, 3, []byte(""), true, "@@")
 	f.Add([]byte(tenLines), 2, 3, []byte("intro\n@@ delete b.txt\n"), true, "@@")
 	f.Add([]byte("a\nb\n"), 1, 3, []byte("x\n"), true, "@@")
+	// "@@" glued to a word in the replacement (#138): one the range holds,
+	// carried over, one it does not, and the same under a CRLF replacement.
+	f.Add([]byte("@@var\nb\n"), 1, 2, []byte("@@var\n@@include x\n"), true, "@@")
+	f.Add([]byte("@@var\r\nb\r\n"), 1, 1, []byte("@@var\r\n"), true, "@@")
 
 	f.Fuzz(func(t *testing.T, file []byte, start, end int, repl []byte, hasNew bool, marker string) {
 		// What runQuote has refused before quoteLines is asked.

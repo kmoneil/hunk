@@ -74,6 +74,9 @@ A patch with any of these is refused, every one named:
   @@ prepend      the line ending it may have added is the file's, under the
                   --eol it was applied with; the patch holds neither
   an empty new    the text it took out has nothing left to find its place by
+  an @@word old   the inverse would write back an old line such as
+                  "@@include x", which a patch refuses where it is written,
+                  unless the new holds it too; under another --marker it is text
 
 FLAGS
 
@@ -189,7 +192,7 @@ func runInvert(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return refuse(exitUsage, (&MistypedDelimiters{Strays: p.Strays}).Error())
 	}
 
-	inv, faults := invertPatch(p)
+	inv, faults := invertPatch(p, marker)
 	if len(faults) > 0 {
 		has := " have"
 		if len(faults) == 1 {
@@ -211,7 +214,7 @@ func runInvert(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 // invertPatch is the hunks that undo p, last first, or every hunk of p that
 // has no inverse, in patch order.
-func invertPatch(p *Patch) ([]Hunk, []noInverse) {
+func invertPatch(p *Patch, marker string) ([]Hunk, []noInverse) {
 	var faults []noInverse
 	for i, h := range p.Hunks {
 		var why string
@@ -237,6 +240,17 @@ func invertPatch(p *Patch) ([]Hunk, []noInverse) {
 			// ending.
 			if emptyPayload(h.New, p.CRLF) {
 				why = "its new text is empty, so it took text out, and nothing is left in the file to find the place to put it back by"
+				break
+			}
+			// The inverse writes the old back, and the parser refuses "@@"
+			// glued to a word that is no directive where a payload writes it
+			// (#138), unless the inverse's old, this hunk's new, holds it.
+			// Printed, the inverse was refused when applied, and --marker
+			// could not help, since the inverse is written under the patch's.
+			olds := bytes.Split(h.Old, lf)
+			if n, _, ok := p.unknownWordIn(olds, bytes.Split(h.New, lf), marker); ok {
+				why = fmt.Sprintf("its inverse would write %s back, which starts like a directive and is none, and a patch refuses such a line where it is written; to invert it, write the patch under another --marker",
+					shownLine(olds[n]))
 			}
 		}
 		if why != "" {

@@ -42,6 +42,9 @@ A patch with any of these is refused, every one named:
   @@ prepend      the line ending it may have added is the file's, under the
                   --eol it was applied with; the patch holds neither
   an empty new    the text it took out has nothing left to find its place by
+  an @@word old   the inverse would write back an old line such as
+                  "@@include x", which a patch refuses where it is written,
+                  unless the new holds it too; under another --marker it is text
 
 FLAGS
 
