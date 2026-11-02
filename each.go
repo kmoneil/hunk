@@ -80,6 +80,8 @@ type eachConfig struct {
 	quiet        bool
 	allowStrays  bool // --allow-mistyped-delimiter: warn of strays (#92) rather than refuse (#97)
 	isolated     bool // --isolated: every patch is tried in a copy of the tree (#130)
+	// links is what --isolated-link names, checked, to link beside the copy (#140).
+	links []besideLink
 	// letGo lets the tree's lock go, once an --isolated run has its copy.
 	letGo func()
 	// inCopy is set once the copy is made: the run from there is in it.
@@ -330,7 +332,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		// Nothing but the command writes in the copy, so a file it rewrote
 		// is put back regardless, as under --verify-may-format, and the next
 		// patch is tried against the copy as it was made.
-		copied, made, remove, err := isolate(tree, func() os.Signal { return pending(sigs) })
+		copied, made, remove, err := isolate(tree, cfg.links, func() os.Signal { return pending(sigs) })
 		var ci *copyInterrupted
 		switch {
 		case errors.As(err, &ci):
@@ -362,7 +364,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		case b.Signal != nil:
 			sig, stopAt, todo = b.Signal, 0, nil
 		case !b.OK:
-			return eachBaselineRefused(cfg, patches, bases, b, baselineFailure("the build", b, "not built"), exitUsage, stdout, stderr)
+			return eachBaselineRefused(cfg, patches, bases, b, cfg.inACopy(baselineFailure("the build", b, "not built")), exitUsage, stdout, stderr)
 		}
 	}
 	if sig == nil {
@@ -379,9 +381,9 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		case c.Signal != nil:
 			sig, stopAt, todo = c.Signal, 0, nil
 		case c.TimedOut > 0:
-			return eachBaselineRefused(cfg, patches, bases, c, baselineFailure("the command", c, "timed out"), exitUsage, stdout, stderr)
+			return eachBaselineRefused(cfg, patches, bases, c, cfg.inACopy(baselineFailure("the command", c, "timed out")), exitUsage, stdout, stderr)
 		case !c.OK:
-			return eachBaselineRefused(cfg, patches, bases, c, baselineFailure("the command", c, "caught"), exitUsage, stdout, stderr)
+			return eachBaselineRefused(cfg, patches, bases, c, cfg.inACopy(baselineFailure("the command", c, "caught")), exitUsage, stdout, stderr)
 		}
 	}
 
@@ -598,6 +600,18 @@ func endedHow(b *Verify) string {
 // how it ended, and what every patch would have read as.
 func baselineFailure(who string, b *Verify, reads string) string {
 	return who + " " + endedHow(b) + " with no patch applied, so every patch would read as " + reads + "; nothing was tried"
+}
+
+// inACopy is why, the refusal of a run whose build or command failed on the
+// tree as it is, with what an --isolated run adds (#140): it ran in a copy,
+// whose ".." is not the tree's, so a command that reads a sibling of the tree
+// by a relative path fails there under every patch and with none. That was
+// the issue: the copy line named the copy, and nothing said why it mattered.
+func (cfg eachConfig) inACopy(why string) string {
+	if !cfg.inCopy {
+		return why
+	}
+	return why + "; it ran in a copy of the tree, where a relative path out of --root, such as ../lib, finds nothing unless --isolated-link names it"
 }
 
 // afterFailure is why the run on the tree as it is after the last patch leaves

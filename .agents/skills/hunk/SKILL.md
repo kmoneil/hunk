@@ -542,11 +542,15 @@ as big as the tree. Its first line on stderr, `copied the tree in 9.1s: 34,345
 files, 61.2 GB, all cloned, in /tmp/hunk-isolated-...`, says which you got:
 `none cloned` on macOS is a full copy, often because the temporary directory
 is on another volume from the tree (point `TMPDIR` at one on the tree's). A
-build that reaches outside `--root` (`../lib`, a `replace` in `go.mod`) or
-names the tree by its full path still reaches the tree itself, so give a
-`--root` that holds what the build reads. Under `--each --isolated`, 5 rather
-than 4 means the copy could not be put back between patches, and the tree is
-untouched.
+command that names the tree by its full path still reaches the tree itself.
+One that reads a sibling by a relative path (`../lib`, a `replace` in
+`go.mod`, a `.path` in `build.zig.zon`) finds nothing, since the copy's `..`
+is the temporary directory: the run is refused at exit 1 before the first
+patch, and the refusal says it ran in a copy. Name each such path with
+`--isolated-link ../lib`, once per path, and the real one is linked beside the
+copy. A link reaches the real path for writing too, so name only what the
+command reads. Under `--each --isolated`, 5 rather than 4 means the copy could
+not be put back between patches, and the tree is untouched.
 
 **Pass `--timeout` whenever the command could run long**, below your tool's own
 limit for the call: `--timeout 90s` under a two-minute limit. It ends the

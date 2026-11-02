@@ -167,6 +167,19 @@ func needsPOSIXNames(t *testing.T) {
 	}
 }
 
+// needsSymlinks skips a test of --isolated-link (#140) where this process
+// cannot make a symbolic link to a directory, which Windows allows only to an
+// account with the privilege or in developer mode. There hunk refuses the run
+// at exit 5, which TestALinkThatCannotBeMadeEndsTheRun asserts everywhere by
+// standing in a link that fails; what goes untested here is the link itself.
+func needsSymlinks(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Symlink(dir, filepath.Join(dir, "probe")); err != nil {
+		t.Skipf("this process cannot make a symbolic link to a directory: %v", err)
+	}
+}
+
 // needsShellSymlinks skips a test whose verify command makes a symbolic link
 // with ln -s. That is the realistic shape of a build rewiring a tree, and the
 // rollback tests use it on purpose; but Git for Windows' ln -s copies the file

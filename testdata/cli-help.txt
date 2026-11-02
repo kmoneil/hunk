@@ -86,10 +86,20 @@ FLAGS
                         caches too, with modes and times, cloned where the
                         filesystem can (APFS, btrfs, XFS), and is removed at
                         the end; a line on stderr says how much it was and how
-                        long it took. A command that reaches outside --root, or
-                        names the tree by its full path, still reaches the tree
-                        itself. Refused with --verify, --verify-may-format and
-                        --allow-outside-root.
+                        long it took. A command that names the tree by its
+                        full path still reaches the tree itself, and a relative
+                        path out of --root, such as ../lib, finds nothing in
+                        the copy unless --isolated-link names it. Refused with
+                        --verify, --verify-may-format and --allow-outside-root.
+  --isolated-link PATH  With --isolated: link PATH, a path out of --root such
+                        as ../lib, beside the copy, so that the command finds
+                        it there as it would beside the tree. Once per path, as
+                        the command names it from --root. The copy keeps the
+                        names of --root and of the directories above it, as
+                        many as the deepest PATH climbs. A link reaches the
+                        real path, for writing too, so name what the command
+                        reads. Refused when PATH is absolute, missing, or is,
+                        holds or is in the tree.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put

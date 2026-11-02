@@ -100,8 +100,9 @@ var reCopied = regexp.MustCompile(`^copied the tree in \d+\.\ds: (?:1 file|[\d,]
 
 // afterCopied is stderr after the copy line, which it has to start with, and
 // the path the line names, which has to be a copy under tmp. On Windows the
-// path is compared by its last element: the shell the commands run under
-// spells the temporary directory its own way.
+// path is known by the element MkdirTemp named, which is the last but for the
+// copy --isolated-link nests (#140): the shell the commands run under spells
+// the temporary directory its own way.
 func afterCopied(t *testing.T, tmp, stderr string) (path, rest string) {
 	t.Helper()
 	m := reCopied.FindStringSubmatch(stderr)
@@ -109,7 +110,7 @@ func afterCopied(t *testing.T, tmp, stderr string) (path, rest string) {
 	case m == nil:
 		t.Errorf("stderr does not start with the copy line:\n%s", stderr)
 		return "", stderr
-	case runtime.GOOS == "windows" && !strings.HasPrefix(filepath.Base(m[1]), "hunk-isolated-"),
+	case runtime.GOOS == "windows" && !slices.ContainsFunc(splitPath(m[1]), func(e string) bool { return strings.HasPrefix(e, "hunk-isolated-") }),
 		runtime.GOOS != "windows" && !strings.HasPrefix(m[1], tmp+string(filepath.Separator)+"hunk-isolated-"):
 		t.Errorf("the copy line names %s, want a copy under %s", m[1], tmp)
 	}
@@ -916,7 +917,7 @@ func TestTheCopyIsTheTree(t *testing.T) {
 	tree, err := OpenTree(given, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	c, made, remove, err := isolate(tree, func() os.Signal { return nil })
+	c, made, remove, err := isolate(tree, nil, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	dst := c.Root()
@@ -1075,7 +1076,7 @@ func TestWhatEndsACopy(t *testing.T) {
 			must(t, err)
 			t.Cleanup(func() { _ = tree.Close() })
 			asked := 0
-			cp, _, remove, err := isolate(tree, func() os.Signal {
+			cp, _, remove, err := isolate(tree, nil, func() os.Signal {
 				if asked++; asked == c.n && c.before != nil {
 					return c.before(t, theCopy(t, tmp), root)
 				}
@@ -1138,7 +1139,7 @@ func TestACopyIsNotCopiedIntoItself(t *testing.T) {
 	tree, err := OpenTree(root, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	c, _, remove, err := isolate(tree, func() os.Signal { return nil })
+	c, _, remove, err := isolate(tree, nil, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	var got []string
@@ -1167,7 +1168,7 @@ func TestACopyAnswersForItsTree(t *testing.T) {
 	tree, err := OpenTree(given, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	c, _, remove, err := isolate(tree, func() os.Signal { return nil })
+	c, _, remove, err := isolate(tree, nil, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = c.Close(); _ = remove() })
 
@@ -1395,7 +1396,7 @@ func TestACloneIsTakenOnlyWhenItIsTheFile(t *testing.T) {
 			tree, err := OpenTree(root, false)
 			must(t, err)
 			t.Cleanup(func() { _ = tree.Close() })
-			cp, made, remove, err := isolate(tree, func() os.Signal { return nil })
+			cp, made, remove, err := isolate(tree, nil, func() os.Signal { return nil })
 			if c.err {
 				// The error is the open's: "file exists" on Unix, "is a
 				// directory" on Windows.
@@ -1453,7 +1454,7 @@ func TestAWriteToTheCopyLeavesTheTreeAlone(t *testing.T) {
 	tree, err := OpenTree(root, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	cp, made, remove, err := isolate(tree, func() os.Signal { return nil })
+	cp, made, remove, err := isolate(tree, nil, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = closeAndRemove(cp, remove) })
 	if want := map[bool]int{true: 1, false: 0}[clones]; made.Cloned != want {
