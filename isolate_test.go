@@ -100,8 +100,9 @@ var reCopied = regexp.MustCompile(`^copied the tree in \d+\.\ds: (?:1 file|[\d,]
 
 // afterCopied is stderr after the copy line, which it has to start with, and
 // the path the line names, which has to be a copy under tmp. On Windows the
-// path is compared by its last element: the shell the commands run under
-// spells the temporary directory its own way.
+// path is known by the element MkdirTemp named, which is the last but for the
+// copy --isolated-link nests (#140): the shell the commands run under spells
+// the temporary directory its own way.
 func afterCopied(t *testing.T, tmp, stderr string) (path, rest string) {
 	t.Helper()
 	m := reCopied.FindStringSubmatch(stderr)
@@ -109,7 +110,7 @@ func afterCopied(t *testing.T, tmp, stderr string) (path, rest string) {
 	case m == nil:
 		t.Errorf("stderr does not start with the copy line:\n%s", stderr)
 		return "", stderr
-	case runtime.GOOS == "windows" && !strings.HasPrefix(filepath.Base(m[1]), "hunk-isolated-"),
+	case runtime.GOOS == "windows" && !slices.ContainsFunc(splitPath(m[1]), func(e string) bool { return strings.HasPrefix(e, "hunk-isolated-") }),
 		runtime.GOOS != "windows" && !strings.HasPrefix(m[1], tmp+string(filepath.Separator)+"hunk-isolated-"):
 		t.Errorf("the copy line names %s, want a copy under %s", m[1], tmp)
 	}
