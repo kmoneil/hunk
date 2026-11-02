@@ -690,13 +690,13 @@ modification time, since a build that compares times would otherwise take an
 object copied after its source for an up-to-date one. A link to an absolute
 name under the root points at the same name in the copy; named pipes, sockets
 and devices are left out, and so is anything removed while it is being copied,
-as a build's cache can be. What it cannot isolate is anything the command
-reaches outside `--root`: a build that reads `../lib`, or names the tree by its
-full path, reads the tree itself, so give a `--root` that holds what the build
-reads. `--isolated` is refused with `--verify`, which keeps its batch in the
-tree; with `--allow-outside-root`, since a file outside the root is not in the
-copy; and with `--verify-may-format`, since nothing but the command writes in
-the copy, so a file it rewrote is put back regardless.
+as a build's cache can be. A command that names the tree by its full path
+reaches the tree itself, not the copy, and one that reaches out of `--root` by
+a relative path finds nothing (below). `--isolated` is refused with
+`--verify`, which keeps its batch in the tree; with `--allow-outside-root`,
+since a file outside the root is not in the copy; and with
+`--verify-may-format`, since nothing but the command writes in the copy, so a
+file it rewrote is put back regardless.
 
 Each file is cloned where the filesystem can clone it. On macOS hunk clones it
 with `fclonefileat` on APFS, and on Linux the kernel does the same through
@@ -722,6 +722,47 @@ Elsewhere it leaves the count out, since a clone the kernel makes through
 `copy_file_range` is not one hunk can see. `--quiet` leaves the line out, and
 `--json` carries the same as `copy`: its `path`, `files`, `bytes` and
 `seconds`, and on macOS `cloned`.
+
+#### What is outside the copy: `--isolated-link`
+
+The copy's `..` is the temporary directory, not the tree's parent. So a
+command that reads a sibling of the tree by a relative path finds nothing
+there: a path dependency in `build.zig.zon`, a `replace` in `go.mod`, a test
+that reads `../fixtures`. It fails on the tree as it is, before any patch, and
+the run is refused at exit 1, the refusal saying the run was in a copy:
+
+```
+copied the tree in 0.0s: 214 files, 3.1 MB, all cloned, in /tmp/hunk-isolated-1840313802
+hunk: the command exited 1 with no patch applied, so every patch would read as caught; nothing was tried; it ran in a copy of the tree, where a relative path out of --root, such as ../lib, finds nothing unless --isolated-link names it
+```
+
+An absolute path outside the root is not affected: it names the same place
+from the copy as from the tree.
+
+`--isolated-link PATH` names a path the command reads outside `--root`, as the
+command names it from `--root`, once per path:
+
+```sh
+hunk --isolated --isolated-link ../typo.zig-0.1.0 --try 'zig build test' --each breaks/*.hunk
+```
+
+The copy then keeps the names of `--root` and of the directories above it, as
+many as the deepest `PATH` climbs, and each `PATH` is a link beside it at the
+place the command climbs to. For a root `app`, the copy is
+`/tmp/hunk-isolated-NNN/app`, the command runs there, and
+`/tmp/hunk-isolated-NNN/typo.zig-0.1.0` is a link to the real one, so
+`../typo.zig-0.1.0` from the copy is what it is from the tree. The links are
+removed with the copy, and what they point at is not.
+
+A link reaches the real path, for writing as well as reading: a build that
+writes into a linked sibling writes into the real one, where a build of a
+patch can be seen by anything else that reads it. So name what the command
+reads, and nothing it writes. A `PATH` is refused, exit 1, before anything is
+read, when it is absolute, when nothing is there, when it is the tree, holds
+it (`..`) or is in it, since a link to the tree would have the command read the
+tree, which holds no patch, and when it is named twice or is inside another
+`PATH`. A link that cannot be made, as on Windows without the privilege to
+make one, is exit 5, with nothing run.
 
 ### When the command does not end
 

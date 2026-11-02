@@ -186,10 +186,20 @@ FLAGS
                         caches too, with modes and times, cloned where the
                         filesystem can (APFS, btrfs, XFS), and is removed at
                         the end; a line on stderr says how much it was and how
-                        long it took. A command that reaches outside --root, or
-                        names the tree by its full path, still reaches the tree
-                        itself. Refused with --verify, --verify-may-format and
-                        --allow-outside-root.
+                        long it took. A command that names the tree by its
+                        full path still reaches the tree itself, and a relative
+                        path out of --root, such as ../lib, finds nothing in
+                        the copy unless --isolated-link names it. Refused with
+                        --verify, --verify-may-format and --allow-outside-root.
+  --isolated-link PATH  With --isolated: link PATH, a path out of --root such
+                        as ../lib, beside the copy, so that the command finds
+                        it there as it would beside the tree. Once per path, as
+                        the command names it from --root. The copy keeps the
+                        names of --root and of the directories above it, as
+                        many as the deepest PATH climbs. A link reaches the
+                        real path, for writing too, so name what the command
+                        reads. Refused when PATH is absolute, missing, or is,
+                        holds or is in the tree.
   --timeout DURATION    End the --verify or --try command after DURATION, such
                         as 90s or 5m, and everything it started with it: exit
                         3 under --verify, rolled back, and 124 under --try, put
@@ -322,6 +332,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		root         = fs.String("root", "", "")
 		marker       = fs.String("marker", DefaultMarker, "")
 		patchFile    onceFlag
+		links        pathsFlag
 		asJSON       = fs.Bool("json", false, "")
 		quiet        = fs.Bool("quiet", false, "")
 		context      = fs.Int("context", DefaultContext, "")
@@ -334,6 +345,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		showVersion  = fs.Bool("version", false, "")
 	)
 	fs.Var(&patchFile, "f", "")
+	fs.Var(&links, "isolated-link", "")
 
 	// fail reports an error found before the transaction runs. §4: a caller
 	// that passed --json "asked for it on every path", so it gets the object
@@ -488,6 +500,9 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 				"nothing but the command writes in the copy, so whatever it wrote there is undone without asking"), "")
 		}
 	}
+	if len(links) > 0 && !*isolated {
+		return fail(exitUsage, errors.New("--isolated-link links a path beside the copy --isolated makes, and does nothing without --isolated"), "")
+	}
 	// --verify-may-format governs putting files back, which --try does too.
 	if *verifyFormat && *verify == "" && *try == "" {
 		return fail(exitUsage, errors.New("--verify-may-format does nothing without --verify or --try"), "")
@@ -578,6 +593,13 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	// The root descriptor goes away with the process either way, and a close
 	// error here has nothing left to report it to.
 	defer func() { _ = tree.Close() }()
+	// What --isolated-link names is checked against the tree before anything
+	// is read from it (#140), under --dry-run too, so that a dry run that
+	// passes is not followed by a refusal.
+	beside, err := planLinks(tree, links)
+	if err != nil {
+		return fail(exitUsage, err, "")
+	}
 
 	// The run holds its tree from before it reads until it ends (#128): two
 	// --try runs at once over one file each took the other's batch for the
@@ -616,7 +638,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		return runEach(eachConfig{
 			names: fs.Args(), command: *try, build: *build, marker: *marker, opt: opt, allowStrays: *allowStrays,
 			timeout: timeout, verifyLines: *verifyLines, everyTail: linesGiven, verifyFormat: *verifyFormat,
-			dryRun: *dryRun, asJSON: *asJSON, quiet: *quiet, isolated: *isolated, letGo: unlock,
+			dryRun: *dryRun, asJSON: *asJSON, quiet: *quiet, isolated: *isolated, links: beside, letGo: unlock,
 		}, tree, stdout, stderr, interrupted)
 	}
 
@@ -642,7 +664,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		// nothing is copied for it. Then the copy, which the rest is in.
 		if res, err = NewTxn(tree, opt).Preview(p); err == nil {
 			notifyInterrupts(sigs)
-			copied, m, remove, copyErr := isolate(tree, func() os.Signal { return pending(sigs) })
+			copied, m, remove, copyErr := isolate(tree, beside, func() os.Signal { return pending(sigs) })
 			var ci *copyInterrupted
 			if errors.As(copyErr, &ci) {
 				if interrupted != nil {
@@ -948,6 +970,16 @@ func (o *onceFlag) Set(v string) error {
 		return fmt.Errorf("already reading %s; one -f is one patch. To try several patches one at a time, use --try CMD --each", o.path)
 	}
 	o.set, o.path = true, v
+	return nil
+}
+
+// pathsFlag is a flag given once per path, as --isolated-link is (#140).
+type pathsFlag []string
+
+func (p *pathsFlag) String() string { return strings.Join(*p, " ") }
+
+func (p *pathsFlag) Set(v string) error {
+	*p = append(*p, v)
 	return nil
 }
 

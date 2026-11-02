@@ -916,7 +916,7 @@ func TestTheCopyIsTheTree(t *testing.T) {
 	tree, err := OpenTree(given, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	c, made, remove, err := isolate(tree, func() os.Signal { return nil })
+	c, made, remove, err := isolate(tree, nil, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	dst := c.Root()
@@ -1075,7 +1075,7 @@ func TestWhatEndsACopy(t *testing.T) {
 			must(t, err)
 			t.Cleanup(func() { _ = tree.Close() })
 			asked := 0
-			cp, _, remove, err := isolate(tree, func() os.Signal {
+			cp, _, remove, err := isolate(tree, nil, func() os.Signal {
 				if asked++; asked == c.n && c.before != nil {
 					return c.before(t, theCopy(t, tmp), root)
 				}
@@ -1138,7 +1138,7 @@ func TestACopyIsNotCopiedIntoItself(t *testing.T) {
 	tree, err := OpenTree(root, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	c, _, remove, err := isolate(tree, func() os.Signal { return nil })
+	c, _, remove, err := isolate(tree, nil, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = c.Close() })
 	var got []string
@@ -1167,7 +1167,7 @@ func TestACopyAnswersForItsTree(t *testing.T) {
 	tree, err := OpenTree(given, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	c, _, remove, err := isolate(tree, func() os.Signal { return nil })
+	c, _, remove, err := isolate(tree, nil, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = c.Close(); _ = remove() })
 
@@ -1395,7 +1395,7 @@ func TestACloneIsTakenOnlyWhenItIsTheFile(t *testing.T) {
 			tree, err := OpenTree(root, false)
 			must(t, err)
 			t.Cleanup(func() { _ = tree.Close() })
-			cp, made, remove, err := isolate(tree, func() os.Signal { return nil })
+			cp, made, remove, err := isolate(tree, nil, func() os.Signal { return nil })
 			if c.err {
 				// The error is the open's: "file exists" on Unix, "is a
 				// directory" on Windows.
@@ -1453,7 +1453,7 @@ func TestAWriteToTheCopyLeavesTheTreeAlone(t *testing.T) {
 	tree, err := OpenTree(root, false)
 	must(t, err)
 	t.Cleanup(func() { _ = tree.Close() })
-	cp, made, remove, err := isolate(tree, func() os.Signal { return nil })
+	cp, made, remove, err := isolate(tree, nil, func() os.Signal { return nil })
 	must(t, err)
 	t.Cleanup(func() { _ = closeAndRemove(cp, remove) })
 	if want := map[bool]int{true: 1, false: 0}[clones]; made.Cloned != want {

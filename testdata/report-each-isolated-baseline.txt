@@ -1,0 +1,5 @@
+hunk: the command exited 1 with no patch applied, so every patch would read as caught; nothing was tried; it ran in a copy of the tree, where a relative path out of --root, such as ../lib, finds nothing unless --isolated-link names it
+
+$ zig build test
+error: failed to open "../typo.zig-0.1.0": FileNotFound
+(last 1 of 1 lines)

@@ -749,6 +749,7 @@ var reportGoldens = map[string]int{
 	"report-try-isolated-timed-out":                   0,
 	"report-try-isolated-interrupted":                 143,
 	"report-each-isolated":                            0,
+	"report-each-isolated-baseline":                   1,
 	"report-each-isolated-stopped":                    5,
 	"cli-rollback-incomplete":                         4,
 	"cli-rollback-left-a-directory":                   3,
