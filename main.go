@@ -209,7 +209,8 @@ FLAGS
   --root DIR            Resolve relative paths and run --verify or --try here.
                         (cwd)
   --marker STR          Directive prefix. (@@)
-  -f FILE               Read the patch from a file instead of stdin.
+  -f FILE               Read the patch from a file instead of stdin. -f - is
+                        stdin, as no -f is; a file named - is -f ./-.
   --json                Emit the result as one JSON object on stdout.
   --quiet               Print nothing on success. Failures are still reported.
   --context N           Max lines of file text echoed in a near-miss report.
@@ -572,7 +573,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		var parseErr error
 		p, parseErr = Parse(src, *marker)
 		if parseErr != nil {
-			return fail(exitUsage, parseErr, heredocHint(parseErr, patchFile.path == ""))
+			return fail(exitUsage, parseErr, heredocHint(parseErr, patchFromStdin(patchFile.path)))
 		}
 		// A line that looks like a mistyped heredoc delimiter is refused
 		// before anything is read (#97), every one named, unless the caller
@@ -983,20 +984,32 @@ func (p *pathsFlag) Set(v string) error {
 	return nil
 }
 
+// stdinPatch is the -f that names stdin, as "patch -i -" and "jq -f -" do
+// (#142). Until 2026-11-05 it was a file name, so "hunk -f - <<'HUNK'" was
+// refused as "open -: no such file or directory". A file named "-" is -f ./-.
+const stdinPatch = "-"
+
+// patchFromStdin reports whether the patch comes from stdin: -f left out, or
+// -f -. Everything that asks where the patch came from asks this.
+func patchFromStdin(file string) bool {
+	return file == "" || file == stdinPatch
+}
+
 // readPatch reads the patch from -f or from stdin.
 //
 // -f is relative to the working directory, not to --root: it is the caller's
 // file, while --root describes the tree being edited.
 func readPatch(file string, stdin io.Reader) ([]byte, error) {
-	if file != "" {
+	if !patchFromStdin(file) {
 		b, err := os.ReadFile(file)
 		if err != nil {
 			return nil, err
 		}
 		return b, nil
 	}
-	// A terminal on stdin with no -f means somebody typed "hunk" and is now
-	// waiting for a program that is waiting for them. Say so instead.
+	// A terminal on stdin with no -f, or -f -, means somebody typed "hunk"
+	// and is now waiting for a program that is waiting for them. Say so
+	// instead.
 	if f, ok := stdin.(*os.File); ok {
 		if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
 			return nil, fmt.Errorf("no patch: give one on stdin or with -f. " +

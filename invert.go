@@ -81,6 +81,7 @@ A patch with any of these is refused, every one named:
 FLAGS
 
   -f FILE                     Read the patch from FILE rather than stdin.
+                              FILE - is stdin; a file named - is ./-.
   --marker STR                Directive prefix, of the patch and of its
                               inverse. (@@)
   --allow-mistyped-delimiter  Invert a patch with a line that looks like a

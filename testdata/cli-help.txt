@@ -109,7 +109,8 @@ FLAGS
   --root DIR            Resolve relative paths and run --verify or --try here.
                         (cwd)
   --marker STR          Directive prefix. (@@)
-  -f FILE               Read the patch from a file instead of stdin.
+  -f FILE               Read the patch from a file instead of stdin. -f - is
+                        stdin, as no -f is; a file named - is -f ./-.
   --json                Emit the result as one JSON object on stdout.
   --quiet               Print nothing on success. Failures are still reported.
   --context N           Max lines of file text echoed in a near-miss report.
