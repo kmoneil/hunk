@@ -1331,22 +1331,35 @@ func (t *Tree) writeAtomic(tg Target, data []byte, open fs.FileMode, mode *fs.Fi
 			t.removeName(tmp)
 		}
 	}()
-	if _, err = f.Write(data); err != nil {
+	if _, err = fwrite(f, data); err != nil {
 		return err
 	}
-	if err = f.Sync(); err != nil {
+	if err = fsync(f); err != nil {
 		return err
 	}
 	if mode != nil {
-		if err = f.Chmod(keepOwner(f, like, *mode)); err != nil {
+		if err = fchmod(f, keepOwner(f, like, *mode)); err != nil {
 			return err
 		}
 	}
-	if err = f.Close(); err != nil {
+	if err = fclose(f); err != nil {
 		return err
 	}
 	return t.rename(tmp, tg.name)
 }
+
+// writeAtomic's four steps on the temp file, as variables so a test can refuse
+// each, as fchown is below. A write, an fsync, a chmod or a close that fails
+// (a full disk, an I/O error) is not something a test can arrange on a real
+// filesystem, and until 2026-11-05 no test reached any of the four returns:
+// "return nil" in place of "return err" after the fsync passed the linter and
+// the suite, and a commit whose fsync failed would have reported success.
+var (
+	fwrite = (*os.File).Write
+	fsync  = (*os.File).Sync
+	fchmod = (*os.File).Chmod
+	fclose = (*os.File).Close
+)
 
 // fchown is (*os.File).Chown, as a variable so a test can refuse it. keepOwner's
 // last resort runs for real only when a file's group is one the invoker is not
