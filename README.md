@@ -354,7 +354,9 @@ M src/main.go  +1 -1
 
 `--new FILE` adds `@@ new` and FILE's content, so the range is replaced by it.
 It is the way to take a payload from a file: a patch has no directive for one,
-and a line such as `@@include lib.zig` in a payload is refused.
+and a line such as `@@include lib.zig` in a payload is refused. `--new -` reads
+the replacement from stdin, as `-f -` reads a patch, and a file named `-` is
+`--new ./-`.
 Without it the hunk stops after the old text, and you write `@@ new` and the
 replacement yourself, as the second one above does. Either way what comes out
 is a patch like any other: concatenate it with other hunks, pipe it in, and it
@@ -382,7 +384,9 @@ in a newline:
   last one, so a file or a replacement with no final newline comes out the same
   as one with it, and a CRLF file stays CRLF under the default `--eol auto`.
 - **An empty `--new` file deletes the lines**, endings included, leaving no
-  blank line behind. `--new /dev/null` is one.
+  blank line behind. `--new /dev/null` is one. An empty stdin under `--new -`
+  is refused instead: a command that failed and printed nothing into the pipe
+  would otherwise delete the range.
 - **A line that would read as a directive is refused**, in the range or in the
   `--new` file, naming the file and the line. A replacement that quotes
   `@@ delete b.txt` must not delete `b.txt`. Give `--marker` another prefix, to
@@ -402,9 +406,10 @@ hunk: patch line 66: "@@ end" takes no argument; found: refused by hunk quote: s
 ```
 
 `hunk quote` exits 1 for a call that is wrong whatever the tree holds (a flag,
-a number, START after END, a `--new` file that cannot be read), 2 for what the
-tree decides (a FILE the apply would refuse, a line past the end, a directive
-line, a range that is one empty line), and 5 for an I/O error. `hunk quote
+a number, START after END, a `--new` file that cannot be read, a `--new -`
+whose stdin is a terminal or empty), 2 for what the tree decides (a FILE the
+apply would refuse, a line past the end, a directive line, a range that is one
+empty line), and 5 for an I/O error. `hunk quote
 --help` has the whole of it.
 
 ## Undoing a patch: `hunk invert`

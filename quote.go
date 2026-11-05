@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -58,6 +59,8 @@ FLAGS
   --new FILE            Add "@@ new" and FILE's content, so the range is
                         replaced by it. An empty FILE deletes the lines. FILE
                         is relative to the working directory, as -f is.
+                        "--new -" reads stdin, which must not be empty; a
+                        file named - is ./-.
   --marker STR          Directive prefix. (@@) Give the same one to the hunk
                         that applies the patch. For when a line of the range,
                         or of --new's file, would read as a directive.
@@ -71,7 +74,8 @@ carries the reason, which no patch may hold. So the batch the quote was meant
 for stops at exit 1 instead of applying without it.
 
   1  a flag, a number, START after END, a FILE no directive line can name,
-     or a --new file that cannot be read
+     a --new file that cannot be read, or a --new - whose stdin is a terminal
+     or empty
   2  FILE refused as the apply would refuse it, a line past the end of FILE,
      a line of the range or of --new's file that is a directive under the
      marker, or a range that is one empty line
@@ -122,7 +126,7 @@ type Quote struct {
 
 // runQuote is the subcommand. It reads FILE through the tree, as the apply
 // will, and writes nothing to it.
-func runQuote(args []string, stdout, stderr io.Writer) int {
+func runQuote(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// A refusal goes to stderr, and into the patch as well. The patch is
 	// usually one part of a brace group piped into the apply, which cannot see
 	// this process fail: a quote that printed nothing left the rest of the
@@ -211,14 +215,14 @@ func runQuote(args []string, stdout, stderr io.Writer) int {
 	// --new's file is the caller's, like -f: relative to the working
 	// directory, not to --root, and a failure to read it is the call's.
 	var repl []byte
+	newName := *fl.newFile
 	hasNew := false
 	fs.Visit(func(f *flag.Flag) { hasNew = hasNew || f.Name == "new" })
 	if hasNew {
-		b, err := os.ReadFile(*fl.newFile)
-		if err != nil {
-			return refuse(exitUsage, fmt.Sprintf("--new: %v", err))
+		var err error
+		if repl, newName, err = readNew(*fl.newFile, stdin); err != nil {
+			return refuse(exitUsage, err.Error())
 		}
-		repl = b
 	}
 
 	dir := *fl.root
@@ -244,7 +248,7 @@ func runQuote(args []string, stdout, stderr io.Writer) int {
 		return refuse(exitNoMatch, r.Error())
 	}
 
-	q, r := quoteLines(path, f.orig, start, end, repl, hasNew, *fl.newFile, marker)
+	q, r := quoteLines(path, f.orig, start, end, repl, hasNew, newName, marker)
 	if r != nil {
 		return refuse(r.code, r.msg)
 	}
@@ -308,6 +312,37 @@ func lineNumber(s string) (int, *quoteRefusal) {
 		return 0, bad
 	}
 	return n, nil
+}
+
+// readNew reads --new's replacement, and says how a refusal names where it
+// came from. "-" is stdin, as it is for -f (#142); until 2026-11-05 it was a
+// file name, so "--new -" was refused as "open -: no such file or directory".
+// A file named "-" is --new ./-.
+//
+// An empty stdin is refused, where an empty file deletes the lines: in
+// "gen | hunk quote ... --new -", a gen that fails and prints nothing would
+// make a hunk that deletes the range, which the apply takes at exit 0, and
+// quote cannot see gen's status. An empty file is one somebody made.
+func readNew(file string, stdin io.Reader) ([]byte, string, error) {
+	if file != stdinPatch {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return nil, file, fmt.Errorf("--new: %v", err)
+		}
+		return b, file, nil
+	}
+	if stdinIsADevice(stdin) {
+		return nil, "stdin", errors.New("--new - reads the replacement from stdin, which is a terminal or a device: " +
+			"pipe the replacement in, or give --new a file")
+	}
+	b, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, "stdin", fmt.Errorf("--new -: %v", err)
+	}
+	if len(b) == 0 {
+		return nil, "stdin", errors.New("--new - read nothing from stdin; to delete the lines, give --new /dev/null")
+	}
+	return b, "stdin", nil
 }
 
 // quoteLines is lines start through end of file as a hunk on path: "@@ file",

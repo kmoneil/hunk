@@ -28,6 +28,8 @@ FLAGS
   --new FILE            Add "@@ new" and FILE's content, so the range is
                         replaced by it. An empty FILE deletes the lines. FILE
                         is relative to the working directory, as -f is.
+                        "--new -" reads stdin, which must not be empty; a
+                        file named - is ./-.
   --marker STR          Directive prefix. (@@) Give the same one to the hunk
                         that applies the patch. For when a line of the range,
                         or of --new's file, would read as a directive.
@@ -41,7 +43,8 @@ carries the reason, which no patch may hold. So the batch the quote was meant
 for stops at exit 1 instead of applying without it.
 
   1  a flag, a number, START after END, a FILE no directive line can name,
-     or a --new file that cannot be read
+     a --new file that cannot be read, or a --new - whose stdin is a terminal
+     or empty
   2  FILE refused as the apply would refuse it, a line past the end of FILE,
      a line of the range or of --new's file that is a directive under the
      marker, or a range that is one empty line
