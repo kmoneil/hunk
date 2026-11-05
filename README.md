@@ -270,7 +270,9 @@ and the shell runs every line below it as a command. Check the payload for the
 delimiter before sending, and if it is there, choose another word for both
 ends. When the payload is text you have not read line by line, write the patch
 to a file and run `hunk -f FILE` instead: a file does not go through the shell,
-so no line in it can end anything.
+so no line in it can end anything. `-f -` is stdin, as no `-f` is, so
+`hunk -f - <<'HUNK'` reads the heredoc, for `hunk` and `hunk invert` alike; a
+file named `-` is `-f ./-`.
 
 The opposite mistake is a closer the shell does not take for the delimiter.
 `HUHUNK` typed above the real `HUNK` is a payload line, and would land in the
