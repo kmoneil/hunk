@@ -162,6 +162,11 @@ func runQuote(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, quoteUsage)
 		return exitOK
 	}
+	// --root "$DIR" with DIR unset quoted from the working directory, and
+	// --new "$F" named the file it could not open as nothing.
+	if err := emptyValue(fs); err != nil {
+		return refuse(exitUsage, err.Error())
+	}
 	// A marker that cannot head a line is refused under the default, which is
 	// what markerArg made of it.
 	if *fl.marker == "" {

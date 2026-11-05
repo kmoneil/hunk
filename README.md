@@ -497,7 +497,11 @@ fail.
 
 A `--verify`, `--try` or `--build` given an empty command, as `"$CMD"` is when
 `CMD` is unset, is refused at exit 1 rather than read as left out. Read as left
-out, `--try ''` would apply the batch and keep it.
+out, `--try ''` would apply the batch and keep it. So is every flag given an
+empty path or duration, in `hunk`, `hunk invert` and `hunk quote` alike, and an
+empty patch file name under `--each`: read as left out, `--root "$DIR"` with
+`DIR` unset would edit the directory you are in, and `-f "$PATCH"` would apply
+whatever is on stdin. A path of spaces is a name, and is looked for.
 
 One subtlety, because it is the one behaviour that could make the tool
 dangerous. If your verify command rewrites files (`gofmt -w`, `prettier
