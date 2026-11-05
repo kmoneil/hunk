@@ -1355,11 +1355,12 @@ func (d *Diagnosis) Render(indent string) string {
 			}
 			b.WriteString("\n")
 		}
-		// §7.1's closing line and §5.2's example both end here, and the
-		// suggestion is the actionable half.
+		// The suggestion is the actionable half. What follows it is the note
+		// on shifted lines, if any: until 2026-11-05 this case, the overlap,
+		// the mixed endings and no room returned before it, so their line
+		// numbers could be the in-memory file's with nothing to say so.
 		fmt.Fprintf(&b, "\n%sadd surrounding context to old, or say \"@@ old x%d\"\n",
 			indent, d.Found)
-		return b.String()
 
 	case DiagOverlap, DiagMixedEndings:
 		// No "or say @@ old xN" here. Some of the copies are ones this hunk
@@ -1378,11 +1379,8 @@ func (d *Diagnosis) Render(indent string) string {
 			fmt.Fprintf(&b, ", and %d more", d.MoreLines)
 		}
 		fmt.Fprintf(&b, "\n\n%s%s\n", indent, d.Detail)
-		return b.String()
 
 	case DiagSplitCRLF, DiagJoinedCRLF:
-		// Not returned from: the lines are the file's as earlier hunks in
-		// the batch left it, which the note after the switch says.
 		at := make([]string, len(d.Lines))
 		for i, l := range d.Lines {
 			at[i] = fmt.Sprint(l)
@@ -1405,7 +1403,6 @@ func (d *Diagnosis) Render(indent string) string {
 			gutter(d.Line+i, l)
 		}
 		fmt.Fprintf(&b, "%sdrop them from your old, or anchor it further down.\n", indent)
-		return b.String()
 
 	case DiagNamed:
 		fmt.Fprintf(&b, "%s%s, at line %d:\n", indent, d.Headline, d.Line)
@@ -1433,6 +1430,7 @@ func (d *Diagnosis) Render(indent string) string {
 		}
 	}
 
+	// Every case but no anchor, which prints no line, comes here.
 	if d.Shifted > 0 {
 		which := "the hunk before this one"
 		if d.Shifted > 1 {

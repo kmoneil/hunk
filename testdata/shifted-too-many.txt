@@ -1,0 +1,9 @@
+hunk: 1 of 2 hunks did not match; nothing was written
+
+hunk 2  f.txt  (patch line 7)
+  expected 1 occurrence, found 2
+  at lines 1, 4
+
+  add surrounding context to old, or say "@@ old x2"
+  line numbers count against the file as the hunk before this one would have left it,
+  not as it is on disk: nothing was written.

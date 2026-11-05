@@ -1031,8 +1031,13 @@ type jsonFailure struct {
 	Lines []int `json:"lines,omitempty"`
 	// LineEndings is each listed copy's line endings, parallel to Lines, when
 	// the count under --eol auto missed copies in the other one.
-	LineEndings []string  `json:"line_endings,omitempty"`
-	NearMiss    *jsonNear `json:"near_miss,omitempty"`
+	LineEndings []string `json:"line_endings,omitempty"`
+	// Shifted is near_miss's shifted_by_hunks for a too-many failure, which
+	// has no near_miss: the number of hunks that changed the file earlier in
+	// the batch, so that Lines count against the file as they left it. Until
+	// 2026-11-05 neither the text nor the JSON of a too-many said so.
+	Shifted  int       `json:"shifted_by_hunks,omitempty"`
+	NearMiss *jsonNear `json:"near_miss,omitempty"`
 }
 
 type jsonNear struct {
@@ -1121,7 +1126,7 @@ func jsonFailureOf(f Failure) jsonFailure {
 	if d := f.Near; d != nil {
 		switch d.Kind {
 		case DiagTooMany:
-			jf.Lines = d.Lines
+			jf.Lines, jf.Shifted = d.Lines, d.Shifted
 		case DiagOverlap, DiagMixedEndings, DiagSplitCRLF, DiagJoinedCRLF:
 			// The lines where copies are, as for too many, and the cause
 			// and the remedy, since found alone does not say why a count
