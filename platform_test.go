@@ -60,6 +60,19 @@ func needsPOSIXPerms(t *testing.T) {
 	}
 }
 
+// tookTime reports whether seconds is a time a copy can have been measured to
+// take. Go's monotonic clock on Windows moves in timer ticks rather than
+// nanoseconds, so copying a 4-byte file measured 0s there on 2026-11-05
+// (TestIsolatedInJSON, "a --try"), where the assertion was "more than 0".
+// Elsewhere a copy never measures 0, so 0 stays a failure; below 0 is one
+// everywhere.
+func tookTime(seconds float64) bool {
+	if runtime.GOOS == "windows" {
+		return seconds >= 0
+	}
+	return seconds > 0
+}
+
 // needsUmask skips a test that runs hunk under a umask it chooses. Windows has
 // no umask and no POSIX bits for one to clear: a file is created writable or
 // read-only, and that is all. The test sets the umask through sh, which Windows

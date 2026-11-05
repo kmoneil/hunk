@@ -112,8 +112,12 @@ func TestACommitThatFailsAtAStepPutsBackWhatItWrote(t *testing.T) {
 				if *refused == nil {
 					t.Fatalf("the %s of file %d was never refused", step, c.n)
 				}
-				if _, err := (*refused).Stat(); !errors.Is(err, os.ErrClosed) {
-					t.Errorf("the temp file is still open after the refusal: Stat says %v", err)
+				// A second Close says whether the first happened, on every
+				// platform, as writeAtomic's cleanup relies on: Stat on a
+				// closed file is ErrClosed on Unix and "the handle is
+				// invalid" on Windows.
+				if err := (*refused).Close(); !errors.Is(err, os.ErrClosed) {
+					t.Errorf("the temp file was still open after the refusal: a second Close says %v", err)
 				}
 				assertUnchanged(t, root, before) // a temp file left behind is a file the tree did not have
 			})

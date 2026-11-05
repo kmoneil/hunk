@@ -929,7 +929,7 @@ func TestTheCopyIsTheTree(t *testing.T) {
 	if clones {
 		want.Cloned = 7
 	}
-	if made != want || made.Seconds <= 0 {
+	if made != want || !tookTime(made.Seconds) {
 		t.Errorf("made %+v, want %+v", made, want)
 	}
 
@@ -1253,7 +1253,7 @@ func assertCopyJSON(t *testing.T, tmp string, c *copyJSON, files int, bytes int6
 	switch {
 	case c == nil:
 		t.Error(`no "copy" in the report`)
-	case c.Files != files || c.Bytes != bytes || c.Seconds <= 0:
+	case c.Files != files || c.Bytes != bytes || !tookTime(c.Seconds):
 		t.Errorf("copy %+v, want %d files of %d bytes, and the time it took", c, files, bytes)
 	case !strings.HasPrefix(filepath.Base(c.Path), "hunk-isolated-") ||
 		runtime.GOOS != "windows" && filepath.Dir(c.Path) != tmp:
