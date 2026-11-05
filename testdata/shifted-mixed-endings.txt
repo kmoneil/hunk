@@ -1,0 +1,9 @@
+hunk: 1 of 2 hunks did not match; nothing was written
+
+hunk 2  f.txt  (patch line 7)
+  expected 1 occurrence, found 2 across both line endings
+  at lines 3 (LF), 5 (CRLF)
+
+  the file has mixed line endings, and --eol auto counted only the copies in its dominant one; add a line of context so old fits one place
+  line numbers count against the file as the hunk before this one would have left it,
+  not as it is on disk: nothing was written.

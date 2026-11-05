@@ -1,0 +1,9 @@
+hunk: 1 of 2 hunks did not match; nothing was written
+
+hunk 2  f.txt  (patch line 7)
+  expected 2 occurrences, found 2 that overlap
+  at lines 3, 4
+
+  overlapping copies share bytes, so one cannot be replaced without the other; add a line of context so old fits one place
+  line numbers count against the file as the hunk before this one would have left it,
+  not as it is on disk: nothing was written.

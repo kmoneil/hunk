@@ -238,7 +238,10 @@ Three rules worth knowing before the first patch:
 2. **Hunks apply in order, against the file as earlier hunks left it.** So a
    later hunk can match text an earlier one created. A hunk that fails stops the
    later hunks against *that file*, which are reported as skipped rather than
-   failed, so you fix one real mismatch instead of chasing its echoes.
+   failed, so you fix one real mismatch instead of chasing its echoes. A
+   refusal's line numbers then count against the file as the hunks before it
+   left it, not as it is on disk, and every report with a line number in it
+   says so; `--json` carries the count of those hunks as `shifted_by_hunks`.
 3. **A line is a directive only if** it starts with `@@` at column 0, the next
    character is a space or tab, and the first word is one of the directive
    names. Everything else is payload, so a Markdown file full of `@@` passes
