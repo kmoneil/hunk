@@ -102,7 +102,7 @@ at exit 1 instead of applying part of an inverse, or none at all at exit 0.
 // hold --help's FLAGS section to it.
 type invertFlags struct {
 	fs          *flag.FlagSet
-	file        *string
+	patch       onceFlag
 	marker      *string
 	allowStrays *bool
 	help, h     *bool
@@ -114,20 +114,14 @@ func newInvertFlags() *invertFlags {
 	fs.Usage = func() {}
 	fl := &invertFlags{
 		fs:          fs,
-		file:        new(string),
+		patch:       onceFlag{again: "hunk invert takes one patch"},
 		marker:      fs.String("marker", DefaultMarker, ""),
 		allowStrays: fs.Bool(allowMistypedFlag[2:], false, ""),
 		help:        fs.Bool("help", false, ""),
 		h:           fs.Bool("h", false, ""),
 	}
-	// One -f is one patch, as for the apply.
-	fs.Func("f", "", func(v string) error {
-		if *fl.file != "" {
-			return fmt.Errorf("already reading %s; hunk invert takes one patch", *fl.file)
-		}
-		*fl.file = v
-		return nil
-	})
+	// One -f is one patch, and an empty one is refused, as for the apply.
+	fs.Var(&fl.patch, "f", "")
 	return fl
 }
 
@@ -165,6 +159,9 @@ func runInvert(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, invertUsage)
 		return exitOK
 	}
+	if err := emptyValue(fl.fs); err != nil {
+		return refuse(exitUsage, err.Error())
+	}
 	if *fl.marker == "" {
 		return refuse(exitUsage, "--marker must not be empty")
 	}
@@ -178,7 +175,7 @@ func runInvert(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			"unexpected argument %q; the patch comes from stdin or -f, as for hunk", fl.fs.Arg(0)))
 	}
 
-	src, err := readPatch(*fl.file, stdin)
+	src, err := readPatch(fl.patch.path, stdin)
 	if err != nil {
 		return refuse(exitUsage, err.Error())
 	}

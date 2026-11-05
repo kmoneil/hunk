@@ -332,7 +332,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		dryRun       = fs.Bool("dry-run", false, "")
 		root         = fs.String("root", "", "")
 		marker       = fs.String("marker", DefaultMarker, "")
-		patchFile    onceFlag
+		patchFile    = onceFlag{again: "one -f is one patch. To try several patches one at a time, use --try CMD --each"}
 		links        pathsFlag
 		asJSON       = fs.Bool("json", false, "")
 		quiet        = fs.Bool("quiet", false, "")
@@ -409,6 +409,10 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		return fail(exitUsage, fmt.Errorf("--%s was given an empty command, so %s; "+
 			"if it came from a variable, that variable is empty", name, why), "")
 	}
+	// A path or a duration given empty, for the same reason.
+	if err := emptyValue(fs); err != nil {
+		return fail(exitUsage, err, "")
+	}
 	switch {
 	case *each:
 		// --each's patches are the positional arguments, so its refusals
@@ -421,6 +425,11 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		// reads a parse cut short at the first file: until #136 a --try
 		// after the files was refused as missing.
 		for _, name := range fs.Args() {
+			// "$P" with P unset, as for valueFlags. It was refused when
+			// read, as ": open : no such file", naming nothing.
+			if name == "" {
+				return fail(exitUsage, errors.New("--each was given an empty path; if it came from a variable, that variable is empty"), "")
+			}
 			if strings.HasPrefix(name, "-") {
 				return fail(exitUsage, fmt.Errorf("argument %q begins with \"-\": flags come before --each's patch files", name), "")
 			}
@@ -911,6 +920,46 @@ func emptyCommand(fs *flag.FlagSet) (name string) {
 	return name
 }
 
+// valueFlags are the flags that take a path or a duration, and what each
+// takes. Given empty, each read as left out until 2026-11-05, at exit 0:
+// --root "$DIR" with DIR unset edited the working directory, -f "$PATCH" read
+// the patch from stdin, --timeout "$T" set no limit, and quote's --root read
+// the working directory. The command flags have emptyCommand, and
+// --isolated-link refuses its own under --isolated.
+var valueFlags = map[string]string{
+	"f":       "path",
+	"root":    "path",
+	"new":     "path",
+	"timeout": "duration",
+}
+
+// emptyValue refuses the first of valueFlags given an empty value, in
+// whichever command's flag set fs is. Empty, not blank: a path of spaces is a
+// name a file can have, where a command of spaces runs nothing. A flag left
+// out is not given.
+func emptyValue(fs *flag.FlagSet) error {
+	var err error
+	fs.Visit(func(f *flag.Flag) {
+		what, ok := valueFlags[f.Name]
+		if !ok || err != nil {
+			return
+		}
+		kept, keeps := f.Value.(interface{ givenEmpty() bool })
+		if f.Value.String() == "" || keeps && kept.givenEmpty() {
+			err = fmt.Errorf("%s was given an empty %s; if it came from a variable, that variable is empty", spelled(f.Name), what)
+		}
+	})
+	return err
+}
+
+// spelled is a flag's name as --help spells it: -f, --root.
+func spelled(name string) string {
+	if len(name) == 1 {
+		return "-" + name
+	}
+	return "--" + name
+}
+
 // commandFlag names the flag whose command the batch will run, if either.
 func commandFlag(verify, try string) (name, cmd string) {
 	if try != "" {
@@ -958,21 +1007,37 @@ func heredocHint(err error, fromStdin bool) string {
 // onceFlag is -f: a string flag that refuses to be set twice. As a plain
 // flag.String it took the last value silently, so "hunk -f a.hunk -f b.hunk"
 // read only b.hunk and exited 0, the silent kind of wrong result this tool
-// refuses everywhere else (§4.3).
+// refuses everywhere else (§4.3). again is what the refusal says after
+// "already reading FILE; ", which is the apply's or invert's.
+//
+// An empty value is noted rather than taken, and refused by emptyValue once
+// the flags are read, wherever it stood: `-f "" -f b.hunk` read b.hunk in
+// invert until 2026-11-05, and named the file it was already reading as
+// nothing in the apply.
 type onceFlag struct {
-	set  bool
-	path string
+	again string
+	set   bool
+	empty bool
+	path  string
 }
 
 func (o *onceFlag) String() string { return o.path }
 
 func (o *onceFlag) Set(v string) error {
+	if v == "" {
+		o.empty = true
+		return nil
+	}
 	if o.set {
-		return fmt.Errorf("already reading %s; one -f is one patch. To try several patches one at a time, use --try CMD --each", o.path)
+		return fmt.Errorf("already reading %s; %s", o.path, o.again)
 	}
 	o.set, o.path = true, v
 	return nil
 }
+
+// givenEmpty reports whether the flag was given "" anywhere among the
+// arguments, which String, showing the value kept, cannot say.
+func (o *onceFlag) givenEmpty() bool { return o.empty }
 
 // pathsFlag is a flag given once per path, as --isolated-link is (#140).
 type pathsFlag []string
