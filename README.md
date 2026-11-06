@@ -605,6 +605,15 @@ one name, content above the first heading, a heading with nothing under it.
 Only `--each` reads the heading, and a plain apply of a file holding one is
 refused, exit 1, so a break set is never applied whole by accident.
 
+A patch that edits a break set quotes lines like `@@ patch` and `@@ old`, so
+give it another `--marker`. Without one those lines are directives, and every
+refusal they cause names `--marker`: an `@@ old` they leave empty or without
+its `@@ new`, an `@@ new` with nothing to close, text after `@@ end`. The one
+exception is an `@@ old` that `@@ new` follows at once, refused as an empty
+old with the ways to insert text instead, which is what that shape usually
+means. A refusal of a patch in a set counts every line in the combined file,
+the `@@ old` a message names included.
+
 The command's output is printed only under a patch whose command exited 0 or
 timed out, since those are the ones to investigate. To see what caught the
 others, give `--verify-lines N`: then the last N lines of every patch's output
