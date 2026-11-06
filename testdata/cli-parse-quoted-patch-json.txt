@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "exit": 1,
+  "error": "patch line 2: \"@@ old\" has an empty payload, ended by \"@@ patch a\" at line 3, a directive; if that line is payload text, choose another directive prefix with --marker"
+}

@@ -20,6 +20,14 @@ import (
 // payload that genuinely contains a line like "@@ old".
 const DefaultMarker = "@@"
 
+// markerWayOut is what a refusal offers when the directive line it names may
+// be text: a patch quoting a patch, as an edit to a break set does. Until
+// 2026-11-06 (#148) only the refusals of a line that is nearly a directive
+// said it, and the ones a real directive standing in a payload causes did
+// not: "@@ old" followed by a quoted "@@ patch" was refused for its empty
+// payload, with a hint about inserting text.
+const markerWayOut = "choose another directive prefix with --marker"
+
 // Op is what a hunk does to its file.
 type Op uint8
 
@@ -106,6 +114,26 @@ func (e *ParseError) Error() string {
 type notADirective struct{ *ParseError }
 
 func (e notADirective) Unwrap() error { return e.ParseError }
+
+// namedLine is the ParseError of a refusal whose message names a second line
+// of the patch besides its own: the "@@ old" a directive cut short, or the
+// directive that cut it. ref is that line, and text writes the message around
+// it, so that renumber can move it with Line. Spelled into Msg once, it stayed
+// the section's line under --each until 2026-11-06 (#148): "set.hunk:a: patch
+// line 5: expected "@@ new" to close the "@@ old" at line 2", of an "@@ old"
+// on the file's line 3.
+type namedLine struct {
+	*ParseError
+	ref  int
+	text func(ref int) string
+}
+
+func (e *namedLine) Unwrap() error { return e.ParseError }
+
+// namingLine is the refusal at line whose message, text, names line ref too.
+func namingLine(line, ref int, text func(ref int) string) error {
+	return &namedLine{&ParseError{line, text(ref)}, ref, text}
+}
 
 // shownLine is a line of the patch as a message repeats it. Until 2026-10-07
 // the message said "found payload text" and showed none, so Python from the
@@ -606,8 +634,8 @@ loop:
 			}
 			if i < len(lines) {
 				return nil, &ParseError{i + 1, fmt.Sprintf(
-					"content after %q, which terminates the patch; remove it or remove the terminator",
-					marker+" end")}
+					"content after %q, which terminates the patch; remove it or remove the terminator, or if the terminator is payload text, %s",
+					marker+" end", markerWayOut)}
 			}
 			break loop
 
@@ -662,6 +690,18 @@ loop:
 			oldEnd := next
 			i = next
 
+			// An old the patch ends inside has no "@@ new", empty or not.
+			// Asked before the empty payload since #148: until then an
+			// "@@ old" on the patch's last line was refused as an empty
+			// payload, with the hint for inserting text, when such a line is
+			// a patch cut short or one quoted at the end of a payload.
+			if i >= len(lines) {
+				return nil, &ParseError{ln, fmt.Sprintf(
+					"%q has no %q; every old needs the text to put in its place, even if that text is empty. If the line is payload text, %s",
+					marker+" old", marker+" new", markerWayOut)}
+			}
+			w2, a2, _ := directive(lines[i], marker)
+
 			// An empty old matches at every position rather than at one:
 			// strings.Count(s, "") is len(s)+1, and on an empty file it is
 			// exactly 1, so the batch would succeed and insert at offset 0.
@@ -675,22 +715,31 @@ loop:
 			// check, and on an empty file inserted at offset 0: the fuzz
 			// property that a CRLF patch is the same patch found it, on the
 			// day the CR stripping was written, before it was committed.
+			//
+			// The hint is for "@@ old" closed at once by "@@ new", which is an
+			// insert attempted. Ended by any other directive, the old is empty
+			// because that line was read as one, and the line is named (#148):
+			// in the field it was a break set's "@@ patch", quoted as old.
 			if len(old) == 0 || (p.CRLF && len(stripCR(old)) == 0) {
+				if w2 != "new" {
+					stop := lines[i]
+					return nil, namingLine(ln, i+1, func(at int) string {
+						return fmt.Sprintf(
+							"%q has an empty payload, ended by %s at line %d, a directive; if that line is payload text, %s",
+							marker+" old", shownLine(stop), at, markerWayOut)
+					})
+				}
 				return nil, &ParseError{ln, fmt.Sprintf(
 					"%s has an empty payload, which would match at every position in the file rather than at one. A single blank line joins to nothing, so leave two to match an empty line. To insert text, put a surrounding line in old and repeat it in new, or use %s or %s at a file boundary",
 					marker+" old", marker+" append", marker+" prepend")}
 			}
 
-			if i >= len(lines) {
-				return nil, &ParseError{ln, fmt.Sprintf(
-					"%q has no %q; every old needs the text to put in its place, even if that text is empty",
-					marker+" old", marker+" new")}
-			}
-			w2, a2, _ := directive(lines[i], marker)
 			if w2 != "new" {
-				return nil, &ParseError{i + 1, fmt.Sprintf(
-					"expected %q to close the %q at line %d, found %q",
-					marker+" new", marker+" old", ln, marker+" "+w2)}
+				return nil, namingLine(i+1, ln, func(at int) string {
+					return fmt.Sprintf(
+						"expected %q to close the %q at line %d, found %q; if the line is payload text, %s",
+						marker+" new", marker+" old", at, marker+" "+w2, markerWayOut)
+				})
 			}
 			if a2 != "" {
 				return nil, &ParseError{i + 1, fmt.Sprintf(
@@ -714,8 +763,8 @@ loop:
 
 		case "new":
 			return nil, &ParseError{ln, fmt.Sprintf(
-				"%q with no %q before it",
-				marker+" new", marker+" old")}
+				"%q with no %q before it; if the line is payload text, %s",
+				marker+" new", marker+" old", markerWayOut)}
 
 		case "patch":
 			// A break set applied whole is never what was meant (#100):

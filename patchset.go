@@ -119,8 +119,9 @@ func splitPatchSet(src []byte, marker string) ([]patchSection, error) {
 
 // renumber moves what a section's parse reports onto the combined file's
 // lines: the hunks' for the apply's failures, the strays' for the delimiter
-// warnings, and a *ParseError's through err. The typo in break 19 is named by
-// the line the caller can open, not by one inside a section nobody can see.
+// warnings, and a *ParseError's through err, with any other line its message
+// names (namedLine). The typo in break 19 is named by the line the caller can
+// open, not by one inside a section nobody can see.
 func (sec patchSection) renumber(p *Patch, err error) error {
 	if sec.line == 0 {
 		return err
@@ -136,6 +137,12 @@ func (sec patchSection) renumber(p *Patch, err error) error {
 	var pe *ParseError
 	if errors.As(err, &pe) && pe.Line > 0 {
 		pe.Line += sec.line
+	}
+	// And a second line the message names, which it says in words.
+	var nl *namedLine
+	if errors.As(err, &nl) {
+		nl.ref += sec.line
+		nl.Msg = nl.text(nl.ref)
 	}
 	return err
 }
