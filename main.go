@@ -307,9 +307,10 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		return exitOK
 	}
 	// quote reads the tree and writes a patch; it has its own flags and reads
-	// no patch, so it is told apart before anything here is parsed.
+	// no patch, so it is told apart before anything here is parsed. Its stdin
+	// is --new -'s.
 	if len(args) > 0 && args[0] == "quote" {
-		return runQuote(args[1:], stdout, stderr)
+		return runQuote(args[1:], stdin, stdout, stderr)
 	}
 	// invert reads a patch and writes one, and touches no tree.
 	if len(args) > 0 && args[0] == "invert" {
@@ -1075,11 +1076,9 @@ func readPatch(file string, stdin io.Reader) ([]byte, error) {
 	// A terminal on stdin with no -f, or -f -, means somebody typed "hunk"
 	// and is now waiting for a program that is waiting for them. Say so
 	// instead.
-	if f, ok := stdin.(*os.File); ok {
-		if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
-			return nil, fmt.Errorf("no patch: give one on stdin or with -f. " +
-				"Run \"hunk format\" for the grammar")
-		}
+	if stdinIsADevice(stdin) {
+		return nil, fmt.Errorf("no patch: give one on stdin or with -f. " +
+			"Run \"hunk format\" for the grammar")
 	}
 	b, err := io.ReadAll(stdin)
 	if err != nil {
@@ -1089,4 +1088,16 @@ func readPatch(file string, stdin io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("the patch is empty. Run \"hunk format\" for the grammar")
 	}
 	return b, nil
+}
+
+// stdinIsADevice reports whether stdin is a character device: a terminal,
+// where reading would wait for somebody who is waiting for hunk, or /dev/null,
+// which reaches the same branch and holds nothing either way.
+func stdinIsADevice(stdin io.Reader) bool {
+	f, ok := stdin.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }

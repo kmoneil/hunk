@@ -337,10 +337,11 @@ M src/main.go  +1 -1
 2 files, 3 hunks, +6 -106 (dry run: nothing written)
 ```
 
-`--new FILE` adds `@@ new` and FILE's content. Without it the hunk stops after
-the old text and you write `@@ new` and the replacement yourself, as the second
-one does. It is one batch and one transaction with everything else in the pipe,
-and the quoted text must still be in the file exactly once when it is applied.
+`--new FILE` adds `@@ new` and FILE's content, and `--new -` adds stdin's,
+which must not be empty. Without it the hunk stops after the old text and you
+write `@@ new` and the replacement yourself, as the second one does. It is one
+batch and one transaction with everything else in the pipe, and the quoted
+text must still be in the file exactly once when it is applied.
 
 **Read the `quoted` lines before you apply.** They are each range's first and
 last line, and they are the only check on the numbers. The text quoted is
