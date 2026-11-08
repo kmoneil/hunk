@@ -44,6 +44,19 @@ func TestLooksLikeDelimiter(t *testing.T) {
 		{"the last two swapped", "HUKN", false, true},
 		{"padded and one edit away", "  HUMK ", false, true},
 
+		// The stutter with a suffix (#151, and #92's last comment), and an
+		// underscore wherever it stands in the word.
+		{"#151's: the stutter with a suffix", "HUHUNK_NOT", false, true},
+		{"#151's: the stutter with two", "HUHUNK_GUARD_NONE", false, true},
+		{"#92's: HUHUNK_GUARD", "HUHUNK_GUARD", false, true},
+		{"#92's: HUHUNK_NOPE", "HUHUNK_NOPE", false, true},
+		{"indented, with a suffix", "\tHUHUNK_NOT ", false, true},
+		{"an underscore before", "_HUNK", false, true},
+		{"an underscore after", "HUNK_", false, true},
+		{"an underscore inserted", "HU_NK", false, true},
+		{"an underscore for a letter", "HUN_", false, true},
+		{"an identifier that holds it, alone on a line", "MAX_CHUNK", false, true},
+
 		// What is left alone.
 		{"the line HUNK itself", "HUNK", false, false},
 		{"HUNK and the CR that ends a CRLF patch's line", "HUNK\r", true, false},
@@ -51,7 +64,11 @@ func TestLooksLikeDelimiter(t *testing.T) {
 		{"capitalised", "Hunk", false, false},
 		{"an identifier at a line's end", "return MAX_CHUNK", false, false},
 		{"an assignment", "x = DEFAULT_CHUNK", false, false},
-		{"an underscore is not a letter", "MAX_CHUNK", false, false},
+		{"a hyphen is not a letter", "HUHUNK-NOT", false, false},
+		{"nor is a dot", "HUHUNK.NOT", false, false},
+		{"underscores without the word", "MAX_SIZE", false, false},
+		{"underscores only", "__", false, false},
+		{"lowercase with an underscore", "hu_hunk", false, false},
 		{"an unquoted heredoc opener", "hunk <<HUNK", false, false},
 		{"two words", "HU HUNK", false, false},
 		{"punctuation", "HUNK!", false, false},
@@ -128,12 +145,12 @@ func osaDistance(a, b string) int {
 	return d[len(a)][len(b)]
 }
 
-var reOneWord = regexp.MustCompile(`^[A-Za-z0-9]+$`)
+var reOneWord = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 // The rule against a second statement of it, written the slow way: any line
 // is either noted or not, never a panic, and the two agree.
 func FuzzLooksLikeDelimiter(f *testing.F) {
-	for _, s := range []string{"HUNK", "HUHUNK", "  HUNK", "HUNK\r", "HUN", "HNUK", "MAX_CHUNK", "", "\xff", "ab"} {
+	for _, s := range []string{"HUNK", "HUHUNK", "  HUNK", "HUNK\r", "HUN", "HNUK", "MAX_CHUNK", "", "\xff", "ab", "HUHUNK_GUARD_NONE", "HUHUNK-NOT", "HUN_", "__"} {
 		f.Add(s, false)
 		f.Add(s, true)
 	}
@@ -191,6 +208,20 @@ func TestParseNotesStrays(t *testing.T) {
 			name: "the issue: a stray above the real closer",
 			in:   "@@ file notes.txt\n@@ old\ntwo\n@@ new\ntwo, edited\nHUHUNK\n",
 			want: []Stray{stray(6, "notes.txt", "HUHUNK", 0)},
+		},
+		{
+			name: "#151: the stutter with a suffix",
+			in:   "@@ file notes.txt\n@@ old\ntwo\n@@ new\ntwo, edited\nHUHUNK_GUARD_NONE\n",
+			want: []Stray{stray(6, "notes.txt", "HUHUNK_GUARD_NONE", 0)},
+		},
+		{
+			name: "an identifier that holds it, kept from its old, is carried over",
+			in:   "@@ file h.h\n@@ old\n\tPV_CHUNK_HEADER\n\n@@ new\n\tPV_CHUNK_HEADER\n\tint x;\n\n",
+		},
+		{
+			name: "one added is written",
+			in:   "@@ file h.h\n@@ old\n\tint x;\n\n@@ new\n\tint x;\n\tPV_CHUNK_HEADER\n\n",
+			want: []Stray{stray(7, "h.h", "\tPV_CHUNK_HEADER", 0)},
 		},
 		{
 			name: "no real closer: the rest of the command follows it",

@@ -290,8 +290,9 @@ hunk: patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter; i
 ```
 
 A line is taken for one when, with the spaces and tabs around it removed, it
-is one word of letters and digits that holds `HUNK` or is one typo away from
-it, in `@@ new`, `@@ create`, `@@ append` or `@@ prepend`. The line `HUNK`
+is one word of letters, digits and underscores that holds `HUNK` or is one
+typo away from it, `HUHUNK_NOT` as much as `HUNKK`, in `@@ new`, `@@ create`,
+`@@ append` or `@@ prepend`. The line `HUNK`
 itself is left alone, and so are a line of `@@ old` and a line that `@@ new`
 keeps from its `@@ old`. In use the slip is common, about one heredoc in sixty,
 and always the closer stuttered on the line above itself, so resending the
