@@ -86,6 +86,35 @@ func TestAMistypedDelimiterIsRefused(t *testing.T) {
 	}
 }
 
+// The issue's loop (#151): the stutter with a suffix is refused as the bare
+// one and a letter before it are, nothing written and the line named, and
+// under the flag it applies, as the bare one does.
+func TestAStutterWithASuffixIsRefused(t *testing.T) {
+	for _, w := range []string{"HUHUNK", "HUHUNK_NOT", "HUHUNK_GUARD_NONE", "XHUNK"} {
+		t.Run(w, func(t *testing.T) {
+			notes := map[string]string{"notes.txt": "one\ntwo\n"}
+			patch := "@@ file notes.txt\n@@ old\ntwo\n@@ new\ntwo, edited\n" + w + "\n"
+			root := cliTree(t, notes)
+			before := snapshot(t, root)
+			code, out, errOut := runCLI(t, root, nil, patch)
+			want := strings.Replace(strayRefused, `"HUHUNK"`, `"`+w+`"`, 1)
+			if code != exitUsage || out != "" || errOut != want {
+				t.Errorf("exit %d, want %d\nstdout %q\nstderr %q\n  want %q", code, exitUsage, out, errOut, want)
+			}
+			assertUnchanged(t, root, before)
+
+			root = cliTree(t, notes)
+			code, _, errOut = runCLI(t, root, []string{allowMistypedFlag}, patch)
+			if code != exitOK || !strings.Contains(errOut, `warning: patch line 6 is "`+w+`"`) {
+				t.Errorf("under %s: exit %d, stderr %q", allowMistypedFlag, code, errOut)
+			}
+			if got, want := readFile(t, root, "notes.txt"), "one\ntwo, edited\n"+w+"\n"; got != want {
+				t.Errorf("under %s: notes.txt = %q, want %q", allowMistypedFlag, got, want)
+			}
+		})
+	}
+}
+
 // A patch with two is refused once, naming both, in patch order, so that it
 // does not cost two rounds; the second is #92's worst shape, the rest of the
 // command in the payload.

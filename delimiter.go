@@ -12,10 +12,14 @@ package main
 // So the parser notes such a line, the patch applies as written, since a
 // document about hunk may really hold one, and the report says where it went.
 // The rule is the line, once the spaces, tabs and carriage returns around it
-// are gone, being one word of ASCII letters and digits that holds HUNK or is
-// one edit from it, and not being the line HUNK itself. The issue's "ends in
-// HUNK" missed HUNKK, and caught MAX_CHUNK ending a Go line; on 116,879 text
-// files this rule fired only on an indented HUNK in markdown about hunk.
+// are gone, being one word of ASCII letters, digits and underscores that
+// holds HUNK or is one edit from it, and not being the line HUNK itself. The
+// issue's "ends in HUNK" missed HUNKK, and caught MAX_CHUNK ending a Go line;
+// on 116,879 text files this rule fired only on an indented HUNK in markdown
+// about hunk. The underscore came later (#151): the stutter grew a suffix,
+// HUHUNK_GUARD, HUHUNK_NOT, four times in the field, three applied at exit 0.
+// Over 205.9 million lines of text it adds 11 to the 10 the rule took, three
+// identifiers that stand alone on a line, such as PV_CHUNK_HEADER.
 //
 // The line HUNK itself is left alone: it cannot come through <<'HUNK', so it
 // came through -f or another delimiter, on purpose. So is a line of an "@@ old"
@@ -59,7 +63,7 @@ func looksLikeDelimiter(line []byte, crlf bool) bool {
 		return false
 	}
 	for _, c := range w {
-		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
 			return false
 		}
 	}
