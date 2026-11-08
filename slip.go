@@ -25,6 +25,12 @@ import (
 // report counted among the hunks and hid in the file's row of the others.
 // Rereading the patch found it. The no-op is decided (the file is not
 // rewritten); the warning says it happened.
+//
+// An empty new is how lines are deleted, when its old ends in a newline. When
+// it does not, and the old text is whole lines but for the last one's break,
+// the text goes and the break stays, an empty line where it was (#150): in the
+// field, a row taken out of a markdown table, whose empty line ended the
+// table there. The same empty line #111 leaves, reached from the other side.
 type Slip struct {
 	Kind SlipKind
 	Hunk int    // 1-based, in the patch
@@ -34,7 +40,8 @@ type Slip struct {
 	// may, by what follows each.
 	Count, Of int
 	// Text is the line the first one leaves, without its ending: the one
-	// before the empty line, the joined one, or the file's last.
+	// before the empty line, the joined one, or the file's last. For an
+	// emptied line it is the line as it was, before its text went.
 	Text []byte
 }
 
@@ -56,13 +63,18 @@ const (
 	// auto writes as the file's, so the hunk changed nothing either. The fix
 	// is --eol strict rather than the patch, so it is said apart.
 	SlipLineEndings
+	// The new text is empty and the old text, which does not end in a
+	// newline, started a line and stopped before its break: the break stays,
+	// an empty line where the text was.
+	SlipEmptiedLine
 )
 
 // jsonKind is the kind as --json's warnings carry it. Both ways of changing
 // nothing are one kind, which says what the hunk did; the message says why.
+// So are both ways of leaving an empty line.
 func (k SlipKind) jsonKind() string {
 	switch k {
-	case SlipEmptyLine:
+	case SlipEmptyLine, SlipEmptiedLine:
 		return "empty_line"
 	case SlipJoinedLine:
 		return "joined_line"
@@ -110,6 +122,10 @@ func (s noted) stands() bool {
 func (x *Txn) noteSlips(n int, h Hunk, f *file, old, repl, next []byte) {
 	cur := f.cur
 	oldNL, newNL := bytes.HasSuffix(old, lf), bytes.HasSuffix(repl, lf)
+	if len(repl) == 0 && !oldNL {
+		x.noteEmptied(n, h, f, old, next)
+		return
+	}
 	// An empty new with an old that ends in a newline is how lines are
 	// deleted (§3.3), and ends that agree are what was meant.
 	if oldNL == newNL || len(repl) == 0 {
@@ -141,6 +157,44 @@ func (x *Txn) noteSlips(n int, h Hunk, f *file, old, repl, next []byte) {
 			x.slips = append(x.slips, noted{Slip{
 				Kind: kind, Hunk: n, Line: h.Line, Path: h.Path, Of: h.Count,
 				Text: lineAt(next, end-1),
+			}, f})
+			s = &x.slips[len(x.slips)-1].Slip
+		}
+		s.Count++
+	}
+}
+
+// noteEmptied records hunk n's replacements that leave an empty line (#150):
+// its new text is empty and its old text does not end in a newline, so where
+// the old text started a line and stopped before its break, the text goes and
+// the break stays. Each is judged in next, as noteSlips judges: the k-th
+// replacement is at p - k*len(old) there, p being its place in f.cur, and the
+// line is empty when a line starts there and a break follows. Replacements
+// side by side on one line leave one empty line, which counts once. The line
+// quoted is the one whose break stays, as it was before its text went; one
+// with no text, a CR alone before its LF that --eol strict took, was empty
+// already.
+func (x *Txn) noteEmptied(n int, h Hunk, f *file, old, next []byte) {
+	cur := f.cur
+	var s *Slip
+	at, last := 0, -1
+	for k := range h.Count {
+		p := at + bytes.Index(cur[at:], old)
+		at = p + len(old)
+		e := p - k*len(old)
+		if e == last || (e > 0 && next[e-1] != '\n') ||
+			!(bytes.HasPrefix(next[e:], lf) || bytes.HasPrefix(next[e:], crlf)) {
+			continue
+		}
+		last = e
+		line := lineAt(cur, at-1)
+		if len(line) == 0 {
+			continue
+		}
+		if s == nil {
+			x.slips = append(x.slips, noted{Slip{
+				Kind: SlipEmptiedLine, Hunk: n, Line: h.Line, Path: h.Path, Of: h.Count,
+				Text: line,
 			}, f})
 			s = &x.slips[len(x.slips)-1].Slip
 		}
@@ -238,6 +292,16 @@ func slipMessage(patchName string, s Slip, onDisk bool) string {
 		}
 		msg += ": its new text ends in a newline and its old text does not"
 		fix = "take out the blank line under its new text"
+		if onDisk {
+			fix = "remove the empty line" + plural + " from " + path
+		}
+	case SlipEmptiedLine:
+		msg = fmt.Sprintf("%s leaves an empty line where %s was in %s", where, line, path)
+		if of != "" {
+			msg = fmt.Sprintf("%s leaves an empty line where %s was in %s, the first where %s was", where, of, path, line)
+		}
+		msg += ": its new text is empty and its old text stops before the line break"
+		fix = "leave a blank line under its old text, so the line break goes with it"
 		if onDisk {
 			fix = "remove the empty line" + plural + " from " + path
 		}

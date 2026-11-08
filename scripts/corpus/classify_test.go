@@ -828,6 +828,11 @@ var reportGoldens = map[string]int{
 	"cli-no-change":      0,
 	"cli-no-change-json": 0,
 	"cli-each-no-change": 0,
+	// #150: a report followed by a warning of an empty new that leaves the
+	// line break of the text it took, which changes no exit either.
+	"cli-slip-emptied":         0,
+	"cli-slip-emptied-dry-run": 0,
+	"cli-slip-emptied-json":    0,
 	// #100: a break set, one file of several patches under "@@ patch"
 	// headings. A heading fault refuses the run at 1, and a heading outside
 	// --each is a parse error.

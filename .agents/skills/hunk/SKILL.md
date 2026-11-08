@@ -160,9 +160,11 @@ and an agent that has not seen this list reaches for `Write` or a shell instead:
 ```
 
 The blank line before `@@ new` is rule 1 below, and it is what carries the
-block's last newline out with it. `old` is still the exact bytes: `hunk` will
-not remove text it has not been shown, so if you no longer have what you
-inserted, read it back before you write the patch.
+block's last newline out with it. Without it the text goes and that newline
+stays, an empty line where the block was: the batch applies, and a `warning:`
+names the hunk. `old` is still the exact bytes: `hunk` will not remove text it
+has not been shown, so if you no longer have what you inserted, read it back
+before you write the patch.
 
 ## The four rules that catch people
 
