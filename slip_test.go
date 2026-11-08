@@ -160,6 +160,81 @@ func TestASlipIsWarnedOf(t *testing.T) {
 			map[string]string{"a.txt": "Ab\n", "b.txt": "A\n\nb\n"},
 		},
 
+		// #150: an empty new whose old is whole lines but for the last break.
+		{
+			"#150: an empty new under a whole line, without its break",
+			map[string]string{"a.txt": "a\nb\nc\n"},
+			"@@ file a.txt\n@@ old\nb\n@@ new\n",
+			[]string{`hunk 1 (patch line 2) leaves an empty line where "b" was in a.txt: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty line from a.txt`},
+			map[string]string{"a.txt": "a\n\nc\n"},
+		},
+		{
+			"two whole lines, the last without its break, quote the last",
+			map[string]string{"a.txt": "a\nb\nc\nd\n"},
+			"@@ file a.txt\n@@ old\nb\nc\n@@ new\n",
+			[]string{`hunk 1 (patch line 2) leaves an empty line where "c" was in a.txt: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty line from a.txt`},
+			map[string]string{"a.txt": "a\n\nd\n"},
+		},
+		{
+			"the file's first line",
+			map[string]string{"a.txt": "b\nc\n"},
+			"@@ file a.txt\n@@ old\nb\n@@ new\n",
+			[]string{`hunk 1 (patch line 2) leaves an empty line where "b" was in a.txt: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty line from a.txt`},
+			map[string]string{"a.txt": "\nc\n"},
+		},
+		{
+			"the file's only line",
+			map[string]string{"a.txt": "b\n"},
+			"@@ file a.txt\n@@ old\nb\n@@ new\n",
+			[]string{`hunk 1 (patch line 2) leaves an empty line where "b" was in a.txt: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty line from a.txt`},
+			map[string]string{"a.txt": "\n"},
+		},
+		{
+			"emptied in a CRLF file, quoted without the CR",
+			map[string]string{"a.txt": "a\r\nb\r\nc\r\n"},
+			"@@ file a.txt\n@@ old\nb\n@@ new\n",
+			[]string{`hunk 1 (patch line 2) leaves an empty line where "b" was in a.txt: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty line from a.txt`},
+			map[string]string{"a.txt": "a\r\n\r\nc\r\n"},
+		},
+		{
+			"an old that starts with a blank line quotes the line after it",
+			map[string]string{"a.txt": "a\n\nb\nc\n"},
+			"@@ file a.txt\n@@ old\n\nb\n@@ new\n",
+			[]string{`hunk 1 (patch line 2) leaves an empty line where "b" was in a.txt: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty line from a.txt`},
+			map[string]string{"a.txt": "a\n\nc\n"},
+		},
+		{
+			"emptied, @@ old x2, each",
+			map[string]string{"a.txt": "x\ny\nx\n"},
+			"@@ file a.txt\n@@ old x2\nx\n@@ new\n",
+			[]string{`hunk 1 (patch line 2) leaves an empty line where each of its 2 replacements was in a.txt, the first where "x" was: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty lines from a.txt`},
+			map[string]string{"a.txt": "\ny\n\n"},
+		},
+		{
+			// Both leave the one empty line, which counts once.
+			"emptied, @@ old x2 side by side on one line",
+			map[string]string{"a.txt": "xx\ny\n"},
+			"@@ file a.txt\n@@ old x2\nx\n@@ new\n",
+			[]string{`hunk 1 (patch line 2) leaves an empty line where 1 of its 2 replacements was in a.txt, the first where "xx" was: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty line from a.txt`},
+			map[string]string{"a.txt": "\ny\n"},
+		},
+		{
+			"emptied, @@ old x2, a whole line and then text inside one",
+			map[string]string{"a.txt": "x\nax\n"},
+			"@@ file a.txt\n@@ old x2\nx\n@@ new\n",
+			[]string{`hunk 1 (patch line 2) leaves an empty line where 1 of its 2 replacements was in a.txt, the first where "x" was: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty line from a.txt`},
+			map[string]string{"a.txt": "\na\n"},
+		},
+		{
+			// The quote is the second's line, found past the first, which
+			// took a byte out of the line before it.
+			"emptied, @@ old x2, text inside a line and then a whole line",
+			map[string]string{"a.txt": "ax\nx\n"},
+			"@@ file a.txt\n@@ old x2\nx\n@@ new\n",
+			[]string{`hunk 1 (patch line 2) leaves an empty line where 1 of its 2 replacements was in a.txt, the first where "x" was: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty line from a.txt`},
+			map[string]string{"a.txt": "a\n\n"},
+		},
+
 		// No warning.
 		{
 			"at the end of a file with no final newline, which gains one",
@@ -230,6 +305,64 @@ func TestASlipIsWarnedOf(t *testing.T) {
 			"a file the batch then deletes",
 			map[string]string{"a.txt": "a\nb\n", "b.txt": "b\n"},
 			"@@ file a.txt\n@@ old\na\n@@ new\nA\n\n@@ old\nb\n\n@@ new\nB\n@@ delete a.txt\n",
+			nil,
+			map[string]string{"b.txt": "b\n"},
+		},
+		{
+			// A deletion, which the emptied line's rule must not take for
+			// one: the empty line after it was there before.
+			"lines deleted above an empty line, which stays as it was",
+			map[string]string{"a.txt": "a\n\nb\n"},
+			"@@ file a.txt\n@@ old\na\n\n@@ new\n",
+			nil,
+			map[string]string{"a.txt": "\nb\n"},
+		},
+		{
+			"text taken out inside a line",
+			map[string]string{"a.txt": "abc\n"},
+			"@@ file a.txt\n@@ old\nb\n@@ new\n",
+			nil,
+			map[string]string{"a.txt": "ac\n"},
+		},
+		{
+			"text taken out at a line's end",
+			map[string]string{"a.txt": "ab\nc\n"},
+			"@@ file a.txt\n@@ old\nb\n@@ new\n",
+			nil,
+			map[string]string{"a.txt": "a\nc\n"},
+		},
+		{
+			"text taken out at a line's start",
+			map[string]string{"a.txt": "bc\nd\n"},
+			"@@ file a.txt\n@@ old\nb\n@@ new\n",
+			nil,
+			map[string]string{"a.txt": "c\nd\n"},
+		},
+		{
+			"an indented line's text, its indent kept, is text inside a line",
+			map[string]string{"a.txt": "  b\nc\n"},
+			"@@ file a.txt\n@@ old\nb\n@@ new\n",
+			nil,
+			map[string]string{"a.txt": "  \nc\n"},
+		},
+		{
+			"the last line, with no final newline after it",
+			map[string]string{"a.txt": "a\nb"},
+			"@@ file a.txt\n@@ old\nb\n@@ new\n",
+			nil,
+			map[string]string{"a.txt": "a\n"},
+		},
+		{
+			"an old that starts with a newline takes the break before it",
+			map[string]string{"a.txt": "a\nb\nc\n"},
+			"@@ file a.txt\n@@ old\n\nb\n@@ new\n",
+			nil,
+			map[string]string{"a.txt": "a\nc\n"},
+		},
+		{
+			"emptied in a file the batch then deletes",
+			map[string]string{"a.txt": "a\nb\n", "b.txt": "b\n"},
+			"@@ file a.txt\n@@ old\nb\n@@ new\n@@ delete a.txt\n",
 			nil,
 			map[string]string{"b.txt": "b\n"},
 		},
@@ -516,9 +649,11 @@ func TestASlipUnderEach(t *testing.T) {
 // FuzzASlipSaysWhatTheEditDid: whatever the file and the payloads, the
 // warnings are a value, never a panic, and each one's claim is true of the
 // bytes the replacement left: an empty line after the line it quotes, a
-// line it quotes, or a last line it quotes with no newline after it. None
-// is warned of where the ends agree, and none counts more replacements than
-// the hunk made.
+// line it quotes, or a last line it quotes with no newline after it; for an
+// emptied line (#150), an empty line, and the line it quotes one the file
+// had, with text. None is warned of where the ends agree, an empty new's only
+// warning is the emptied line, and none counts more replacements than the
+// hunk made.
 func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 	for _, c := range [][3]string{
 		{"a\nb\nc\n", "a", "A\n"},
@@ -536,6 +671,15 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 		{"a\nb\n", "b", "\n"},
 		{"a\nb\na\n", "a\n", "A"},
 		{"a\na\n", "a\n", "A\r"},
+		{"a\nb\nc\n", "b", ""},
+		{"a\nb\nc\nd\n", "b\nc", ""},
+		{"a\n\nb\nc\n", "\nb", ""},
+		{"xx\ny\n", "x", ""},
+		{"ax\nx\n", "x", ""},
+		{"a\r\nb\r\n", "b", ""},
+		{"abc\n", "b", ""},
+		{"a\n\r\nb\n", "\r", ""},
+		{"a\n\nb\n", "a\n", ""},
 	} {
 		f.Add([]byte(c[0]), []byte(c[1]), []byte(c[2]))
 	}
@@ -568,9 +712,14 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 				slips = append(slips, s)
 			}
 		}
-		agree := bytes.HasSuffix(old, lf) == bytes.HasSuffix(repl, lf) || len(repl) == 0
+		emptied := len(repl) == 0 && !bytes.HasSuffix(old, lf)
+		agree := !emptied && (bytes.HasSuffix(old, lf) == bytes.HasSuffix(repl, lf) || len(repl) == 0)
 		if agree && len(slips) > 0 {
 			t.Fatalf("ends that agree were warned of: %+v\nstart %q old %q new %q", slips, start, old, repl)
+		}
+		var before []string
+		for l := range strings.SplitSeq(string(start), "\n") {
+			before = append(before, strings.TrimSuffix(l, "\r"))
 		}
 		kinds := map[SlipKind]bool{}
 		for _, s := range slips {
@@ -578,8 +727,20 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 				t.Fatalf("slip %+v\nstart %q old %q new %q", s, start, old, repl)
 			}
 			kinds[s.Kind] = true
+			if emptied != (s.Kind == SlipEmptiedLine) {
+				t.Fatalf("slip %v from an empty new %v\nstart %q old %q new %q", s.Kind, emptied, start, old, repl)
+			}
 			text, found := string(s.Text), false
 			switch s.Kind {
+			case SlipEmptiedLine:
+				had := false
+				for _, l := range before {
+					had = had || l == text
+				}
+				for i := range real {
+					found = found || lines[i] == ""
+				}
+				found = found && had && text != ""
 			case SlipEmptyLine:
 				for i := 0; i+1 < real; i++ {
 					found = found || (lines[i] == text && lines[i+1] == "")
@@ -595,6 +756,30 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 				t.Errorf("slip %v quoting %q is not in what the edit left, %q\nstart %q old %q new %q", s.Kind, text, got, start, old, repl)
 			}
 		}
+	})
+}
+
+// The emptied line's goldens (#150), on the field's shape, a row taken out of
+// a markdown table, and under @@ old x2: applied, a dry run, whose remedy is
+// the patch's, and --json, whose kind is #111's empty_line.
+func TestAnEmptiedLineGoldens(t *testing.T) {
+	files := map[string]string{
+		"t.md":  "| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6 |\n",
+		"x.txt": "x\ny\nx\n",
+	}
+	patch := "@@ file t.md\n@@ old\n| 3 | 4 |\n@@ new\n" +
+		"@@ file x.txt\n@@ old x2\nx\n@@ new\n"
+	t.Run("text", func(t *testing.T) {
+		_, out, errOut := runCLI(t, cliTree(t, files), nil, patch)
+		golden(t, "cli-slip-emptied", out+errOut)
+	})
+	t.Run("dry run", func(t *testing.T) {
+		_, out, errOut := runCLI(t, cliTree(t, files), []string{"--dry-run"}, patch)
+		golden(t, "cli-slip-emptied-dry-run", out+errOut)
+	})
+	t.Run("json", func(t *testing.T) {
+		_, out, _ := runCLI(t, cliTree(t, files), []string{"--json"}, patch)
+		golden(t, "cli-slip-emptied-json", out)
 	})
 }
 

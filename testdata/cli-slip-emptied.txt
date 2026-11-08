@@ -1,0 +1,6 @@
+M t.md  +1 -1
+M x.txt +2 -2
+2 files, 2 hunks, +3 -3
+
+warning: hunk 1 (patch line 2) leaves an empty line where "| 3 | 4 |" was in t.md: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty line from t.md
+warning: hunk 2 (patch line 6) leaves an empty line where each of its 2 replacements was in x.txt, the first where "x" was: its new text is empty and its old text stops before the line break; if that was not meant, remove the empty lines from x.txt
