@@ -27,6 +27,51 @@ var maskingRows = []struct {
 	{"head", "go build ./internal/wir 2>&1 | head -40", "head"},
 	{"tee", "make check 2>&1 | tee /tmp/check.log", "tee"},
 	{"cat", "go test ./... | cat", "cat"},
+
+	// #156: the rest that exit 0 whatever they read, and the four read for
+	// their words, which can make each a test.
+	{"uniq", "go test ./... 2>&1 | uniq", "uniq"},
+	{"wc", "make check | wc -l", "wc"},
+	{"cut", "a | cut -c1-80", "cut"},
+	{"tr", `a | tr -d '\r'`, "tr"},
+	{"nl", "a | nl", "nl"},
+	{"column", "a | column -t", "column"},
+	{"tac", "a | tac", "tac"},
+	{"rev", "a | rev", "rev"},
+	{"fold", "a | fold -w 80", "fold"},
+	{"sort", "go test ./... 2>&1 | sort", "sort"},
+	{"sort with options and their arguments", "a | sort -t, -k 2 -n -o /tmp/out", "sort"},
+	{"a c that is -t's argument", "a | sort -tc -k2", "sort"},
+	{"sort's long options and its files", "a | sort --numeric-sort --reverse - extra.txt", "sort"},
+	{"sort's words after --", "a | sort -- -c", "sort"},
+	{"sort -c is a test", "a | sort -c", ""},
+	{"sort -C is a test", "a | sort -C", ""},
+	{"sort -c in a cluster", "a | sort -nc", ""},
+	{"sort --check is a test", "a | sort --check=quiet", ""},
+	{"an abbreviation of --check", "a | sort --che", ""},
+	{"a sort option neither sort has", "a | sort -Q", ""},
+	{"sort missing its argument", "a | sort -k", ""},
+	{"sort with a word sh rewrites", "a | sort $OPTS", ""},
+	{"pawl fold, the issue's", "zig build test 2>&1 | pawl fold", "pawl fold"},
+	{"pawl fold --new", "a | pawl fold --new", "pawl fold"},
+	{"pawl grep is a test", "a | pawl grep FAIL", ""},
+	{"pawl alone", "a | pawl", ""},
+	{"sed", "a | sed -n '/FAIL/,$p'", "sed"},
+	{"sed with two scripts", "a | sed -e s/a/b/ -e s/c/d/", "sed"},
+	{"a sed that may quit", "a | sed '/FAIL/q'", ""},
+	{"a sed that may quit with a status", "a | sed '/FAIL/Q1'", ""},
+	{"a sed script from a file", "a | sed -f strip.sed", ""},
+	{"a sed script from a file, in a cluster", "a | sed -nf strip.sed", ""},
+	{"sed with a word sh rewrites", "a | sed \"s/$X//\"", ""},
+	{"awk", "a | awk '{print $1}'", "awk"},
+	{"awk -F", "a | awk -F: '{print $2}'", "awk"},
+	{"awk -F apart from its value", "a | awk -F : '{print $2}'", "awk"},
+	{"awk -v", "a | awk -v n=3 'NR<=n'", "awk"},
+	{"gawk", "a | gawk '{print}'", "gawk"},
+	{"an awk that may exit", "a | awk '/FAIL/{exit 1}'", ""},
+	{"an awk program from a file", "a | awk -f check.awk", ""},
+	{"an awk option it does not read", "a | awk --lint '{print}'", ""},
+	{"awk with a word sh rewrites", "a | awk \"$PROG\"", ""},
 	{"after &&, the field's commonest longer shape", "go vet ./... && go test ./... 2>&1 | tail -5", "tail"},
 	{"after ||", "make fast || make slow | tail -3", "tail"},
 	{"after a newline", "go vet ./...\ngo test ./... | tail -3", "tail"},
@@ -384,6 +429,16 @@ func FuzzUnquoted(f *testing.F) {
 
 // listOf writes the filters the way a sentence does: "tail, head, tee or cat",
 // each inside quote.
+// readForTheirWords is the documents' sentence for the filters a refusal reads
+// the words of (#156), each word quoted with quote.
+func readForTheirWords(quote string) string {
+	q := func(s string) string { return quote + s + quote }
+	return "a " + q("sort") + " without " + q("-c") + " or " + q("-C") +
+		", a " + q("sed") + " with no " + q("q") + " or " + q("Q") + " in its words, an " + q("awk") +
+		" with no " + q("exit") + " in its words and no option but " + q("-F") + " or " + q("-v") +
+		", or " + q("pawl fold")
+}
+
 func listOf(words []string, quote string) string {
 	quoted := make([]string, len(words))
 	for i, w := range words {
@@ -611,10 +666,15 @@ func TestEveryDocumentNamesTheFiltersAVerifyIsRefusedFor(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
-	if want := "ends in " + listOf(statusFilters, ""); !strings.Contains(flat(help.String()), want) {
+	// Since #156 the list is a list and four read for their words, said
+	// once in each document, the places that refuse the same pointing at it.
+	if want := "whose exit is 0 whatever it reads: " + listOf(statusFilters, ""); !strings.Contains(flat(help.String()), want) {
 		t.Errorf("--help does not say %q", want)
 	}
-	if want := "or in a grep -v without -q, -c, -l or -L"; !strings.Contains(flat(help.String()), want) {
+	if want := readForTheirWords(""); !strings.Contains(flat(help.String()), want) {
+		t.Errorf("--help does not say %q", want)
+	}
+	if want := "a grep -v without -q, -c, -l or -L"; !strings.Contains(flat(help.String()), want) {
 		t.Errorf("--help does not say %q", want)
 	}
 	// The reflex is to shorten the output, so each document has to say what
@@ -633,7 +693,10 @@ func TestEveryDocumentNamesTheFiltersAVerifyIsRefusedFor(t *testing.T) {
 		if want := listOf(statusFilters, "`"); !strings.Contains(doc, want) {
 			t.Errorf("%s does not name the filters as %q", p, want)
 		}
-		if want := listOf(statusFilters, "`") + ", or in a `grep -v`"; !strings.Contains(doc, want) {
+		if want := readForTheirWords("`"); !strings.Contains(doc, want) {
+			t.Errorf("%s does not name the filters read for their words as %q", p, want)
+		}
+		if want := "`grep -v`"; !strings.Contains(doc, want) {
 			t.Errorf("%s does not name the inverted grep as %q", p, want)
 		}
 		if !strings.Contains(doc, already) {
@@ -684,14 +747,17 @@ func FuzzMaskingFilter(f *testing.F) {
 			t.Fatalf("maskingFilter(%q) = %q, %v", s, filter, ok)
 		}
 		if ok {
-			// A refusal names one of the four, or a grep as grep -v, and
-			// nothing of the caller's.
+			// A refusal names a filter, one read for its words, or a grep
+			// as grep -v, and nothing of the caller's.
 			name, grep := strings.CutSuffix(filter, " -v")
-			if !slices.Contains(statusFilters, filter) && !(grep && slices.Contains(greps, name)) {
+			readForWords := filter == "sort" || filter == "sed" || filter == "pawl fold" || slices.Contains(awks, filter)
+			if !slices.Contains(statusFilters, filter) && !readForWords && !(grep && slices.Contains(greps, name)) {
 				t.Fatalf("%q was refused for %q, which is not a filter", s, filter)
 			}
-			if !strings.Contains(s, "|") || !strings.Contains(s, name) {
-				t.Fatalf("%q was refused for a pipe into %s that it does not hold", s, filter)
+			for _, word := range strings.Fields(name) {
+				if !strings.Contains(s, "|") || !strings.Contains(s, word) {
+					t.Fatalf("%q was refused for a pipe into %s that it does not hold", s, filter)
+				}
 			}
 			if grep && !strings.Contains(s, "v") {
 				t.Fatalf("%q was refused for an inverted grep with no v in it", s)
