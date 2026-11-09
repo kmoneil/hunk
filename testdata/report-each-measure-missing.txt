@@ -1,0 +1,15 @@
+tried base     the command exited 0 (3.1s)
+
+$ go test -run '^$' -bench Parse .
+BenchmarkParse-10   	  412345	      2911 ns/op
+ok  	example.com/parse	3.012s
+(last 2 of 2 lines)
+tried v1.hunk  the command timed out after 1m30s
+
+$ go test -run '^$' -bench Parse .
+tried v2.hunk  did not build: the build exited 1 (1.2s)
+
+$ go vet ./...
+vet: ./parse.go:40:2: declared and not used: n
+(last 1 of 1 lines)
+tried base and 2 patches and put back every file; 1 exited 0, 1 timed out, 1 did not build (94.4s)

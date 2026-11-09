@@ -530,6 +530,16 @@ too: `go vet ./...` or `go test -run '^$' ./...`, `zig test --test-no-exec
 FILE`, `cargo test --no-run`; `go build ./...` and `cargo build` leave them
 out.
 
+**To compare patches by what the command prints**, such as a benchmark for
+each version of a function, add `--measure`, and `--rounds N` to run them N
+times, interleaved. Each round runs the command on the tree as it is, named
+`base`, then under each patch alone, every run's output under its line. No exit
+is a catch: the exit is 0 when every run ran to its end, 3 when one timed out or
+did not build. Each run's command gets `HUNK_PATCH` and `HUNK_ROUND`, so one
+command can keep every run's output: `bench > "/tmp/b/$(basename
+"$HUNK_PATCH").$HUNK_ROUND"`. Do not loop `--try` per patch instead: that
+validates nothing up front and lets the tree go between runs.
+
 **When anything else reads the tree while you try, add `--isolated`.** `--try`
 and `--each` put each patch into the tree itself, and the tree lock keeps out
 only other `hunk` runs: a build in another terminal, an editor's language

@@ -1,0 +1,83 @@
+{
+  "ok": true,
+  "exit": 0,
+  "each": {
+    "command": "go test -run '^$' -bench Parse .",
+    "measure": true,
+    "rounds": 2,
+    "patches": [
+      {
+        "patch": "base",
+        "base": true,
+        "round": 1,
+        "ran": true,
+        "status": 0,
+        "seconds": 3.1,
+        "output": [
+          "BenchmarkParse-10   \t  412345\t      2911 ns/op",
+          "ok  \texample.com/parse\t3.012s"
+        ]
+      },
+      {
+        "patch": "v1.hunk",
+        "round": 1,
+        "ran": true,
+        "status": 0,
+        "seconds": 3.1,
+        "output": [
+          "BenchmarkParse-10   \t  412345\t      2604 ns/op",
+          "ok  \texample.com/parse\t3.012s"
+        ],
+        "rolled_back": 1
+      },
+      {
+        "patch": "v2.hunk",
+        "round": 1,
+        "ran": true,
+        "status": 1,
+        "seconds": 3.1,
+        "output": [
+          "--- FAIL: TestParse (0.00s)",
+          "FAIL"
+        ],
+        "rolled_back": 1
+      },
+      {
+        "patch": "base",
+        "base": true,
+        "round": 2,
+        "ran": true,
+        "status": 0,
+        "seconds": 3.1,
+        "output": [
+          "BenchmarkParse-10   \t  412345\t      2897 ns/op",
+          "ok  \texample.com/parse\t3.012s"
+        ]
+      },
+      {
+        "patch": "v1.hunk",
+        "round": 2,
+        "ran": true,
+        "status": 0,
+        "seconds": 3.1,
+        "output": [
+          "BenchmarkParse-10   \t  412345\t      2611 ns/op",
+          "ok  \texample.com/parse\t3.012s"
+        ],
+        "rolled_back": 1
+      },
+      {
+        "patch": "v2.hunk",
+        "round": 2,
+        "ran": true,
+        "status": 1,
+        "seconds": 3.1,
+        "output": [
+          "--- FAIL: TestParse (0.00s)",
+          "FAIL"
+        ],
+        "rolled_back": 1
+      }
+    ]
+  }
+}

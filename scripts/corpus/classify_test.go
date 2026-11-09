@@ -478,6 +478,37 @@ func TestHunkExit(t *testing.T) {
 			"--each refused: a patch could not be checked", "hunk --try x --each a.hunk b.hunk",
 			"hunk: 1 of 2 patches could not be checked; nothing was tried\n\na.hunk: open a.txt: permission denied\n", 5,
 		},
+		// --measure (#154), from 2026-11-09: no status is a catch, so a
+		// summary that says "exited 0" is 0, and only a run that timed out or
+		// did not build is 3. A stop counts runs; base's lines are runs too.
+		{
+			"--measure, every command exited 0", "hunk --try x --measure --each a.hunk b.hunk",
+			"tried base    the command exited 0 (0.1s)\ntried a.hunk  the command exited 0 (0.1s)\ntried b.hunk  the command exited 0 (0.1s)\ntried base and 2 patches and put back every file; every command exited 0 (0.3s)\n", 0,
+		},
+		{
+			"--measure --rounds, a command exited nonzero", "hunk --try x --measure --rounds 2 --each a.hunk",
+			"tried base    round 1  the command exited 0 (0.1s)\ntried a.hunk  round 1  the command exited 2 (0.1s)\ntried base    round 2  the command exited 0 (0.1s)\ntried a.hunk  round 2  the command exited 2 (0.1s)\ntried base and 1 patch in 2 rounds and put back every file; 2 exited 0, 2 exited nonzero (0.4s)\n", 0,
+		},
+		{
+			"--measure, a run timed out", "hunk --try x --measure --timeout 9s --each a.hunk",
+			"tried base    the command exited 0 (0.1s)\ntried a.hunk  the command timed out after 9s\ntried base and 1 patch and put back every file; 1 exited 0, 1 timed out (9.1s)\n", 3,
+		},
+		{
+			"--measure --isolated, base did not build", "hunk --try x --build y --measure --isolated --each a.hunk",
+			"tried base    did not build: the build exited 1 (0.1s)\ntried a.hunk  the command exited 0 (0.1s)\ntried base and 1 patch in a copy of the tree; 1 exited 0, 1 did not build (0.2s)\n", 3,
+		},
+		{
+			"--measure stopped, a file not restored", "hunk --try x --measure --rounds 2 --each a.hunk",
+			"tried base    round 1  the command exited 0 (0.1s)\ntried a.hunk  round 1  the command exited 0 (0.1s); 1 file left alone\ntried 1 of 4 runs; stopped at a.hunk in round 1: 1 file was not restored; 2 runs not tried\n", 4,
+		},
+		{
+			"--measure interrupted during base", "hunk --try x --measure --each a.hunk",
+			"tried base    interrupted by SIGINT, the command was ended (0.1s)\ntried 0 of 2 runs; interrupted by SIGINT during base; 1 run not tried\n", 130,
+		},
+		{
+			"--measure stopped, base's command could not start", "hunk --try x --measure --each a.hunk",
+			"tried base    the command could not start\nhunk: at base: could not run the --try command: exec: \"sh\": not found; no patch was applied\ntried 0 of 2 runs; stopped at base; 1 run not tried\n", 5,
+		},
 		// --build (§4.3), from 2026-10-15: a patch whose build failed is a
 		// line and a count, and the summary's "did not build" is 3; the
 		// build's own "exited 1" under it never reads as the run's exit. A
@@ -751,6 +782,11 @@ var reportGoldens = map[string]int{
 	"report-each-isolated":                            0,
 	"report-each-isolated-baseline":                   1,
 	"report-each-isolated-stopped":                    5,
+	"report-each-measure":                             0,
+	"report-each-measure-json":                        0,
+	"report-each-measure-missing":                     3,
+	"report-each-measure-stopped":                     4,
+	"report-each-measure-cannot-start":                5,
 	"cli-rollback-incomplete":                         4,
 	"cli-rollback-left-a-directory":                   3,
 	"cli-rollback-left-a-directory-json":              3,
@@ -894,6 +930,8 @@ func FuzzHunkExit(f *testing.F) {
 	f.Add("", "")
 	f.Add("hunk <<'H'\n@@ old\nH", "hunk: 1 hunk did not match; nothing was written")
 	f.Add("hunk --json -f p", "{\"exit\": 3}")
+	f.Add("hunk --try x --measure --rounds 2 --each a.hunk", "tried base and 1 patch in 2 rounds and put back every file; 3 exited 0, 1 timed out (9.1s)\n")
+	f.Add("hunk --try x --measure --each a.hunk", "tried 1 of 2 runs; stopped at a.hunk: 1 file was not restored\n")
 	f.Fuzz(func(t *testing.T, cmd, result string) {
 		code := HunkExit(cmd, result)
 		if code < ExitUnclassified {

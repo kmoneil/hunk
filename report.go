@@ -932,10 +932,15 @@ func endedJSON(v *Verify) jsonEnded {
 // command's run there, after the build's (#90). baseline kept its name from
 // v0.3.13, where it was the only one. baseline_after and try_baseline_after
 // are the same pair once the last patch is back (#110), run only when a patch
-// was caught and the run did not stop.
+// was caught and the run did not stop. measure and rounds are --measure's
+// (#154), under which none of the four runs, and patches has an entry per
+// run once the runs began: base, which is the tree as it is, then each patch,
+// in every round.
 type jsonEach struct {
 	Command          string          `json:"command"`
 	Build            string          `json:"build,omitempty"`
+	Measure          bool            `json:"measure,omitempty"`
+	Rounds           int             `json:"rounds,omitempty"`
 	Baseline         *jsonEachRun    `json:"baseline,omitempty"`
 	TryBaseline      *jsonEachRun    `json:"try_baseline,omitempty"`
 	BaselineAfter    *jsonEachRun    `json:"baseline_after,omitempty"`
@@ -965,9 +970,12 @@ type jsonEachRun struct {
 // command's tail whenever it ran, a caught patch's included (#89). build is
 // the patch's --build run; when its ok is false, ran is false, since the
 // command never ran, and rolled_back and the rest are what the build's own
-// putting back did.
+// putting back did. Under --measure (#154) base says the entry is the run
+// with no patch applied, whose patch is "base", and round is its round.
 type jsonEachPatch struct {
 	Patch       string        `json:"patch"`
+	Base        bool          `json:"base,omitempty"`
+	Round       int           `json:"round,omitempty"`
 	Ran         bool          `json:"ran"`
 	Status      *int          `json:"status,omitempty"`
 	Seconds     float64       `json:"seconds,omitempty"`

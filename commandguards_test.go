@@ -63,6 +63,26 @@ var commandUses = []struct {
 		},
 		map[string]string{"empty": "refused", "filter": "refused", "baseline": "refused"},
 	},
+	{
+		"--try under --each --measure", "try",
+		func(cmd string, p []string) []string { return []string{"--try", cmd, "--measure", "--each", p[0]} },
+		map[string]string{
+			"empty":    "refused",
+			"filter":   letThrough + "under --measure no exit is scored, as a single --try's is not, so a filter on the output is a way of reading it (#154)",
+			"baseline": letThrough + "under --measure the tree as it is is base, an entry like any other, and how its run ends is its line (#154)",
+		},
+	},
+	{
+		"--build under --each --measure", "build",
+		func(cmd string, p []string) []string {
+			return []string{"--try", "true", "--build", cmd, "--measure", "--each", p[0]}
+		},
+		map[string]string{
+			"empty":    "refused",
+			"filter":   "refused",
+			"baseline": letThrough + "under --measure a build that fails on the tree as it is is base's line, did not build, and the exit is 3 (#154)",
+		},
+	},
 }
 
 // commandGuards is every guard on a command: the command it is probed with,

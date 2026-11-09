@@ -159,10 +159,15 @@ var (
 	// Under --isolated the summary says the run was in a copy where it would
 	// say every file was put back, and a file not restored is in the copy,
 	// which is 5 rather than 4: the tree was never written.
+	// Under --measure (#154), from 2026-11-09, the run is of base and the
+	// patches and no status is a catch, so "exited 0" in its summary is no
+	// verdict: a run that timed out or did not build is 3, and anything else
+	// 0. A stop is --each's, counted in runs rather than patches.
 	reEachVerdict     = regexp.MustCompile(`(?m)^tried \d+ patch(?:es)? (?:and put back every file|in a copy of the tree); (.*)$`)
-	reEachStopped     = regexp.MustCompile(`(?m)^tried \d+ of \d+ patch(?:es)?; `)
-	reEachNotRestored = regexp.MustCompile(`(?m)^tried \d+ of \d+ patch(?:es)?; stopped at .*: \d+ files? (?:was|were) not restored( in the copy)?`)
-	reEachInterrupted = regexp.MustCompile(`(?m)^tried \d+ of \d+ patch(?:es)?; interrupted by (SIG[A-Z]+)`)
+	reMeasureVerdict  = regexp.MustCompile(`(?m)^tried base and \d+ patch(?:es)?(?: in \d+ rounds)? (?:and put back every file|in a copy of the tree); (.*)$`)
+	reEachStopped     = regexp.MustCompile(`(?m)^tried \d+ of \d+ (?:patch(?:es)?|runs?); `)
+	reEachNotRestored = regexp.MustCompile(`(?m)^tried \d+ of \d+ (?:patch(?:es)?|runs?); stopped at .*: \d+ files? (?:was|were) not restored( in the copy)?`)
+	reEachInterrupted = regexp.MustCompile(`(?m)^tried \d+ of \d+ (?:patch(?:es)?|runs?); interrupted by (SIG[A-Z]+)`)
 	reEachDrift       = regexp.MustCompile(`(?m)^hunk: .* no longer applies; the preflight matched every patch`)
 	reEachRefused     = regexp.MustCompile(`(?m)^hunk: (?:\d+ of )?\d+ patch(?:es)? (could not be read|would not apply|could not be checked); nothing was tried`)
 	reEachDryRun      = regexp.MustCompile(`(?m)^\d+ patch(?:es)? would apply, `)
@@ -423,6 +428,12 @@ func HunkExit(cmd, result string) int {
 		}
 		// The remaining stop is an I/O failure, whose text is the OS's.
 		return 5
+	}
+	if m := reMeasureVerdict.FindStringSubmatch(result); m != nil {
+		if strings.Contains(m[1], "timed out") || strings.Contains(m[1], "did not build") {
+			return 3
+		}
+		return ExitOK
 	}
 	if m := reEachVerdict.FindStringSubmatch(result); m != nil {
 		if a := reEachAfterInterrupted.FindStringSubmatch(m[1]); a != nil {

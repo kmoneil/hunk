@@ -1003,10 +1003,16 @@ var (
 // The pipe is hunk's own rather than one exec makes, which is what lets it be
 // cut whatever the command's status: exec.Cmd.WaitDelay does the same and
 // reports it only when the command succeeded.
-func RunVerify(command, root string, tailLines int, stop Stop) (*Verify, error) {
+//
+// env is added to hunk's own environment, a variable in both taking env's
+// value: under --each --measure, which entry and round the run is (#154).
+func RunVerify(command, root string, tailLines int, stop Stop, env ...string) (*Verify, error) {
 	v := &Verify{Ran: true, Command: command}
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = root
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	ownGroup(cmd)
 	start := time.Now()
 	r, w, err := os.Pipe()
