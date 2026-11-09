@@ -534,7 +534,14 @@ files.
 is its last command's. So `go test ./... 2>&1 | tail -5` exits 0 with every test
 failing, and a verify written that way cannot fail. `hunk` refuses one at exit
 1, before it reads the patch: a `--verify` command whose last pipeline ends in
-`tail`, `head`, `tee` or `cat`. Drop the pipe. The command's output is printed
+a filter whose exit is 0 whatever it reads: `tail`, `head`, `tee`, `cat`,
+`uniq`, `wc`, `cut`, `tr`, `nl`, `column`, `tac`, `rev` or `fold`; a `sort`
+without `-c` or `-C`, a `sed` with no `q` or `Q` in its words, an `awk` with no
+`exit` in its words and no option but `-F` or `-v`, or `pawl fold`. The four
+are read for their words because each can be a test: `sort -c` exits 1 on
+input out of order, a `sed` script can quit with a status, an `awk` program
+can exit with one, and `pawl`'s other commands are tests. Anything `hunk` is not
+sure of runs as written. Drop the pipe. The command's output is printed
 only when the verify fails, and then only its last 40 lines, which
 `--verify-lines N` changes. A pipeline that ends in `grep` is left alone,
 because `grep`'s status depends on what it read, except a `grep -v`: it exits
@@ -665,9 +672,9 @@ others, give `--verify-lines N`: then the last N lines of every patch's output
 print under its line, the caught ones too, and a suite whose last lines name
 the failing test says what caught each break. `--json` carries every patch's
 output, given or not. That is the way to shorten it: a command or a `--build`
-whose last pipeline ends in `tail`, `head`, `tee` or `cat`, or in a `grep -v`,
-is refused under `--each`, exit 1, nothing tried, since the exit scored would
-be the filter's.
+whose last pipeline ends in one of `--verify`'s filters, or in a `grep -v`, is
+refused under `--each`, exit 1, nothing tried, since the exit scored would be
+the filter's.
 The run stops at once
 where carrying on would lie: a file not put back (exit 4, the block names
 it), a patch refused after the preflight passed (the tree changed under the

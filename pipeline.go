@@ -11,7 +11,16 @@ import (
 // on purpose: its status depends on what it read, and of the six verifies in
 // the field that ended in one, five were a test somebody wrote. The sixth was
 // a grep -v, which invertedGrep reads (#107).
-var statusFilters = []string{"tail", "head", "tee", "cat"}
+//
+// The four were the field's until #156, where a verify piped into pawl fold,
+// which prints each repeated line's shape once, said "verify ok" twice and
+// could not have said otherwise. The rest of the commands that exit 0 on any
+// input joined them then. Four more do too unless their words make them a
+// test, and are read for those words: sort, sed, awk and pawl.
+var statusFilters = []string{"tail", "head", "tee", "cat", "uniq", "wc", "cut", "tr", "nl", "column", "tac", "rev", "fold"}
+
+// awks are the names awk is run under.
+var awks = []string{"awk", "gawk", "mawk", "nawk"}
 
 // greps are the names an inverted grep is read under: egrep and fgrep are
 // grep -E and grep -F.
@@ -59,15 +68,112 @@ func maskingFilter(command string) (string, bool) {
 	switch {
 	case slices.Contains(statusFilters, name):
 		return name, true
+	case name == "sort" && sortFilters(last.args),
+		name == "sed" && sedFilters(last.args),
+		slices.Contains(awks, name) && awkFilters(last.args):
+		return name, true
+	case name == "pawl" && len(last.args) > 0 && last.args[0] == "fold":
+		// pawl's other commands are tests: grep exits 1 for no match,
+		// triage for a new line, check for a failed example. fold exits 0,
+		// or 2 for a file it could not read (#156).
+		return "pawl fold", true
 	case slices.Contains(greps, name) && invertedGrep(last.args):
 		return name + " -v", true
 	}
 	return "", false
 }
 
+// sortFilters reports whether a sort's words leave its status fixed: none of
+// -c, -C and --check, which make it a test of whether its input is sorted,
+// exit 1 when it is not. Sure or false: a word sh would rewrite, a short
+// option sort does not have, and a long one that may abbreviate --check.
+func sortFilters(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		w, ok := unquoted(args[i])
+		switch {
+		case !ok:
+			return false
+		case w == "--":
+			return true
+		case len(w) < 2 || w[0] != '-':
+			continue
+		case strings.HasPrefix(w, "--"):
+			// GNU takes an unambiguous prefix of a long option, so any that
+			// --check begins with is it, or a refusal of its own.
+			name, _, _ := strings.Cut(w[2:], "=")
+			if strings.HasPrefix("check", name) {
+				return false
+			}
+			continue
+		}
+		for j := 1; j < len(w); j++ {
+			switch c := w[j]; {
+			case strings.IndexByte(sortShortArg, c) >= 0:
+				if j == len(w)-1 {
+					if i++; i == len(args) {
+						return false
+					}
+				}
+				j = len(w)
+			case strings.IndexByte(sortShortFlag, c) < 0:
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// sort's short options, GNU's and the BSD one macOS ships, that take an
+// argument, and the rest bar -c and -C: those two are left out of both, so a
+// sort given either reads as one with an option this does not know, which
+// runs as written.
+const (
+	sortShortArg  = "koStT"
+	sortShortFlag = "bdfghiMmnRrsuVz"
+)
+
+// sedFilters reports whether a sed's words leave its status fixed. A script
+// that quits can choose its exit, GNU's q5 and Q5, and a script in a file is
+// not on the command line to read, so a word holding q or Q, or an option
+// holding f, is a sed that may be a test. That leaves out more than it must:
+// a script that only matches a q, and a file named with one. A wrong refusal
+// takes away a command that worked, and a missing one costs what it cost
+// before #156.
+func sedFilters(args []string) bool {
+	for _, a := range args {
+		w, ok := unquoted(a)
+		if !ok || strings.ContainsAny(w, "qQ") ||
+			(strings.HasPrefix(w, "-") && strings.ContainsRune(w, 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+// awkFilters reports whether an awk's words leave its status fixed: a
+// program can exit with any status, so one that holds exit, or that comes
+// from a file, may be a test. Only -F and -v, each with its value, are read
+// as options; any other is a way to load a program this cannot read.
+func awkFilters(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		w, ok := unquoted(args[i])
+		switch {
+		case !ok || strings.Contains(w, "exit"):
+			return false
+		case w == "-F" || w == "-v":
+			i++
+		case strings.HasPrefix(w, "-F") || strings.HasPrefix(w, "-v"), !strings.HasPrefix(w, "-"):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // filterStatus is what a refusal says the pipeline's status is, after "and
 // that is". A grep's status depends on what it read, so the refusal says why
-// an inverted one's is no test.
+// an inverted one's is no test. Every other filter's is its own: 0, whatever
+// it reads.
 func filterStatus(filter string) string {
 	if strings.HasSuffix(filter, " -v") {
 		return filter + ", which exits 0 whenever one line it reads does not match"

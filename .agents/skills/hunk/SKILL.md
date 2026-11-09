@@ -525,7 +525,7 @@ last, keeping its own status as the exit: `--try 'zig build test > /tmp/out
 2>&1; s=$?; grep -m3 "error: .*failed" /tmp/out; exit $s' --verify-lines 3`.
 `--json` carries every patch's output either way. Do not pipe the command into
 `tail` instead: under `--each`, a command or `--build` whose last pipeline ends
-in `tail`, `head`, `tee` or `cat`, or in a `grep -v`, is refused, exit 1,
+in one of `--verify`'s filters (below), or in a `grep -v`, is refused, exit 1,
 nothing tried.
 
 **In a compiled language, add `--build CMD`.** A break that does not compile
@@ -593,7 +593,11 @@ tree is good.
 **Do not pipe the command into a filter to shorten its output.** A pipeline's
 exit status is its last command's, so `go test ./... 2>&1 | tail -5` exits 0
 with every test failing. `hunk` refuses a `--verify` whose last pipeline ends
-in `tail`, `head`, `tee` or `cat`, at exit 1, before anything is written. There
+in a filter whose exit is 0 whatever it reads, at exit 1, before anything is
+written: `tail`, `head`, `tee`, `cat`, `uniq`, `wc`, `cut`, `tr`, `nl`,
+`column`, `tac`, `rev` or `fold`; a `sort` without `-c` or `-C`, a `sed` with no
+`q` or `Q` in its words, an `awk` with no `exit` in its words and no option but
+`-F` or `-v`, or `pawl fold`. There
 is nothing to shorten: the command's output is printed only when the verify
 fails, and then only its last 40 lines. Nor is there anything to filter out: a
 `grep -v` exits 0 whenever one line does not match, and in build output one

@@ -21,11 +21,15 @@ FLAGS
                         rolls everything back. Optional: 58% of the measured
                         calls this tool was designed from bundled one, and
                         requiring it would be obnoxious for documentation edits.
-                        Refused, exit 1, if its last pipeline ends in tail,
-                        head, tee or cat, or in a grep -v without -q, -c, -l
-                        or -L: the exit status would be the filter's, and the
-                        verify could not fail. The output is printed only on
-                        failure, already cut by --verify-lines.
+                        Refused, exit 1, if its last pipeline ends in a filter
+                        whose exit is 0 whatever it reads: tail, head, tee,
+                        cat, uniq, wc, cut, tr, nl, column, tac, rev or fold;
+                        a sort without -c or -C, a sed with no q or Q in its
+                        words, an awk with no exit in its words and no option
+                        but -F or -v, or pawl fold; or a grep -v without -q,
+                        -c, -l or -L. The exit status would be the filter's,
+                        and the verify could not fail. The output is printed
+                        only on failure, already cut by --verify-lines.
   --verify-may-format   On verify failure, or after --try, restore original
                         bytes even for files the command rewrote. Set this when
                         the command formats. Without it, a file that changed
@@ -65,10 +69,9 @@ FLAGS
                         hunk's, and the command runs once with no patch
                         applied, so none is scored by a command that fails
                         anyway: one that fails there refuses the run, exit 1.
-                        A command whose last pipeline ends in tail, head, tee
-                        or cat, or in a grep -v, is refused too, as under
-                        --verify, since the exit it scores would be the
-                        filter's.
+                        A command whose last pipeline ends in one of
+                        --verify's filters is refused too, since the exit it
+                        scores would be the filter's.
                         A file may hold several patches, one "@@ patch NAME"
                         heading each; every patch is tried alone, its line
                         named FILE:NAME. Only --each reads the heading: a
@@ -88,8 +91,8 @@ FLAGS
                         output shown and its --try command not run, and the
                         exit is 3. A build that fails with no patch applied
                         refuses the run, exit 1, and so does one whose last
-                        pipeline ends in tail, head, tee or cat, or in a grep
-                        -v: a patch that does not build would read as caught.
+                        pipeline ends in one of --verify's filters: a patch
+                        that does not build would read as caught.
   --measure             With --try --each: report every run and score none, to
                         compare patches by what the command prints, such as a
                         benchmark's numbers. Each round runs the command on the
