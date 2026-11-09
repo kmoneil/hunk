@@ -462,6 +462,19 @@ func TestMeasureJSON(t *testing.T) {
 			t.Errorf("%d warnings: %q", n, errOut)
 		}
 	})
+	// A mistyped delimiter is the patch's, which every round's entry
+	// carries, where a slip is the preflight's, which only the first does:
+	// the mutant that warned of each round's found this row missing.
+	t.Run("a mistyped delimiter once", func(t *testing.T) {
+		stray := writePatch(t, t.TempDir(), "stray.hunk", "@@ file a.txt\n@@ old\nalpha\n@@ new\nALPHA\nHUHUNK\n")
+		code, out, errOut := runCLI(t, root,
+			[]string{"--json", "--allow-mistyped-delimiter", "--try", "true", "--measure", "--rounds", "3", "--each", stray}, "")
+		var r measureJSONReport
+		must(t, json.Unmarshal([]byte(out), &r))
+		if code != exitOK || len(r.Warnings) != 1 || r.Warnings[0].Kind != "mistyped_delimiter" || r.Warnings[0].Patch != stray {
+			t.Errorf("exit %d, warnings %+v: %s", code, r.Warnings, errOut)
+		}
+	})
 }
 
 // TestMeasureBeforeTheFirstRun: the preflight and --dry-run are --each's,
