@@ -673,6 +673,41 @@ func TestACommitThatCannotPutBackSaysWhere(t *testing.T) {
 	}
 }
 
+// An append or a prepend whose payload needs a line ending writes it into a
+// slice of its own, never past the end of the caller's (t145). Under --eol
+// strict convert returns the payload itself, and the fuzzer gave a payload
+// that was the head of another input, which the ending then overwrote.
+func TestAppendAndPrependLeaveTheirPayloadAlone(t *testing.T) {
+	for _, op := range []Op{OpAppend, OpPrepend} {
+		for _, eol := range []EOL{EOLStrict, EOLAuto} {
+			for _, file := range []string{"x\n", "x\r\n"} {
+				t.Run(fmt.Sprintf("op %d, eol %d, %q", op, eol, file), func(t *testing.T) {
+					buf := []byte("q\xdcLLLLLL\nb\x0f\n")
+					orig := string(buf)
+					tree, root := fixture(t, map[string]string{"a.txt": file})
+					p := &Patch{Hunks: []Hunk{{Op: op, Path: "a.txt", Line: 1, Body: buf[:2]}}}
+					if _, err := NewTxn(tree, Options{EOL: eol}).Run(p); err != nil {
+						t.Fatal(err)
+					}
+					if string(buf) != orig {
+						t.Errorf("the caller's bytes are now %q, were %q", buf, orig)
+					}
+					got, err := os.ReadFile(filepath.Join(root, "a.txt"))
+					must(t, err)
+					ending := file[1:]
+					want := file + "q\xdc" + ending
+					if op == OpPrepend {
+						want = "q\xdc" + ending + file
+					}
+					if string(got) != want {
+						t.Errorf("a.txt = %q, want %q", got, want)
+					}
+				})
+			}
+		}
+	}
+}
+
 // The check phase is asserted at the phase level above, by calling Check
 // directly, because Run closes the window itself and nothing can write between
 // its phases from outside. So nothing asserted that Run calls it: deleting the
