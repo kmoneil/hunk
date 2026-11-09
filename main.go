@@ -178,6 +178,19 @@ FLAGS
                         refuses the run, exit 1, and so does one whose last
                         pipeline ends in tail, head, tee or cat, or in a grep
                         -v: a patch that does not build would read as caught.
+  --measure             With --try --each: report every run and score none, to
+                        compare patches by what the command prints, such as a
+                        benchmark's numbers. Each round runs the command on the
+                        tree as it is, named base, then under each patch alone,
+                        and prints every run's --verify-lines tail under its
+                        line. No status is a catch: the run with no patch is an
+                        entry, not a gate, and a command piped into a filter is
+                        let through. Each run's --build and command get
+                        HUNK_PATCH, the patch's name or base, and HUNK_ROUND in
+                        their environment. The exit is 0 when every run ran to
+                        its end, 3 when one timed out or did not build.
+  --rounds N            With --measure: run base and the patches N times,
+                        interleaved, so that drift falls on each alike. (1)
   --isolated            With --try: copy --root to a temporary directory once
                         every patch is known to apply, and apply and run there,
                         so nothing else that reads the tree sees a patch. The
@@ -251,7 +264,9 @@ Under --try the exit is the command's own status, 124 for a --timeout. Under
 --try --each it is the run's, and a command's status never passes through: 0
 when every patch was tried and put back and every command exited nonzero, 3
 when a command exited 0 or timed out or a patch did not build, and the table's
-own codes where the run refused or stopped.
+own codes where the run refused or stopped. Under --measure it is 0 when every
+run ran to its end, whatever it exited, and 3 when one timed out or did not
+build.
 
 SIGINT, SIGTERM or SIGHUP while the --verify or --try command runs ends the
 command and everything it started, puts the batch back, and then ends hunk by
@@ -326,6 +341,8 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		try          = fs.String("try", "", "")
 		each         = fs.Bool("each", false, "")
 		build        = fs.String("build", "", "")
+		measure      = fs.Bool("measure", false, "")
+		rounds       = fs.Int("rounds", 1, "")
 		isolated     = fs.Bool("isolated", false, "")
 		verifyFormat = fs.Bool("verify-may-format", false, "")
 		verifyLines  = fs.Int("verify-lines", 40, "")
@@ -451,6 +468,12 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 				return fail(exitUsage, fmt.Errorf("%s is listed twice", name), "")
 			}
 			seen[name] = true
+			// Under --measure the run with no patch applied is named base, on
+			// its lines, in --json and in HUNK_PATCH (#154), so a patch of
+			// that name would be two entries under one.
+			if *measure && name == measureBase {
+				return fail(exitUsage, fmt.Errorf("a patch file named %[1]s would read as --measure's run with no patch applied, which is named %[1]s; name it ./%[1]s", measureBase), "")
+			}
 		}
 	case fs.NArg() > 0:
 		// "format" is a subcommand and has to come first, which is what §4's
@@ -471,6 +494,22 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	if *build != "" && !*each {
 		return fail(exitUsage, errors.New("--build runs before each patch's command under --try --each, and does nothing without --each; "+
 			`one command can build first itself, as in "BUILD && TEST"`), "")
+	}
+	// --measure is a way of running --each (#154), and --rounds a way of
+	// running --measure.
+	roundsGiven := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "rounds" {
+			roundsGiven = true
+		}
+	})
+	switch {
+	case *measure && !*each:
+		return fail(exitUsage, errors.New("--measure reports every run of --try CMD --each, and does nothing without --each"), "")
+	case roundsGiven && !*measure:
+		return fail(exitUsage, errors.New("--rounds repeats a --measure run, and does nothing without --measure"), "")
+	case *rounds < 1:
+		return fail(exitUsage, fmt.Errorf("--rounds must be at least 1, not %d", *rounds), "")
 	}
 
 	// --verify-may-format only ever acts during a rollback, and --keep-on-fail
@@ -537,9 +576,11 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	// so the reason a single --try is not read does not hold (#101). A command
 	// piped into a filter scores every patch as missed; a build piped into one
 	// passes a patch that does not build on to the command, which fails on it,
-	// and the patch is scored as caught.
+	// and the patch is scored as caught. Under --measure the command's exit
+	// scores nothing, as a single --try's does not, and is let through; the
+	// build's still decides whether the command runs on what it built (#154).
 	if *each {
-		if filter, ok := maskingFilter(*try); ok {
+		if filter, ok := maskingFilter(*try); ok && !*measure {
 			return fail(exitUsage, fmt.Errorf("--try cannot see the command piped into %[1]s fail under --each: "+
 				"a pipeline's exit status is its last command's, and that is %[2]s, so every patch would read as missed; "+
 				"drop the pipe, since --verify-lines N prints the last N lines of each patch's output under its line, "+
@@ -650,6 +691,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 			names: fs.Args(), command: *try, build: *build, marker: *marker, opt: opt, allowStrays: *allowStrays,
 			timeout: timeout, verifyLines: *verifyLines, everyTail: linesGiven, verifyFormat: *verifyFormat,
 			dryRun: *dryRun, asJSON: *asJSON, quiet: *quiet, isolated: *isolated, links: beside, letGo: unlock,
+			measure: *measure, rounds: *rounds,
 		}, tree, stdout, stderr, interrupted)
 	}
 
@@ -797,8 +839,8 @@ func runVerify(txn *Txn, tree *Tree, command string, lines int, keep, mayFormat 
 // runTry is --try (§4.1): run the command, then put the batch back whatever it
 // said. A command that cannot start still gets the batch put back, and is exit
 // 5 through the error, reported like any other.
-func runTry(txn *Txn, tree *Tree, command string, lines int, mayFormat bool, stop Stop) (*Verify, error) {
-	v, err := RunVerify(command, tree.Root(), lines, stop)
+func runTry(txn *Txn, tree *Tree, command string, lines int, mayFormat bool, stop Stop, env ...string) (*Verify, error) {
+	v, err := RunVerify(command, tree.Root(), lines, stop, env...)
 	if err != nil {
 		v = &Verify{Command: command, Try: true, Applied: txn.Applied()}
 		return v, cannotStart("the --try command", "put back", err, v, txn, mayFormat)

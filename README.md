@@ -681,6 +681,50 @@ has to compile what the tests compile: `go vet ./...` or `go test -run '^$'
 `-f` given twice is refused rather than read as the last one, which it
 silently was before `--each` existed.
 
+### Comparing patches: `--measure`
+
+`--each` scores each run by the command's exit, for breaks. To compare patches
+by what the command prints instead, such as a benchmark's numbers for each
+version of one function, add `--measure`:
+
+```sh
+hunk --try 'go test -run "^$" -bench Parse .' --measure --rounds 3 --each v1.hunk v2.hunk
+```
+
+Every patch is validated before the first run, as under `--each`, and the run
+holds the tree until it ends. Then each round runs the command on the tree as
+it is, named `base`, and then under each patch alone, putting every file back
+after each. `--rounds N` (default 1) does that N times, interleaved, so that
+drift on the machine falls on base and every patch alike. A `--build` runs
+before every run's command, base's included, since what a patch's build left
+behind is not base's. Every run gets its line, with the last `--verify-lines`
+lines of its output under it, and with more than one round, its round:
+
+```
+tried base     round 1  the command exited 0 (3.1s)
+tried v1.hunk  round 1  the command exited 0 (3.4s)
+...
+tried base and 2 patches in 3 rounds and put back every file; every command exited 0 (29.6s)
+```
+
+No status is a catch. The run with no patch applied is an entry rather than a
+gate, nothing runs again after the last patch, and a command piped into `tail`
+or `grep` is let through, as a single `--try`'s is, since no exit is scored; a
+`--build` piped into one is still refused, since its exit decides whether the
+command runs on what it built. The exit is 0 when every run ran to its end,
+whatever it exited, and 3 when one timed out or did not build, since a
+measurement is missing; a stop is as under `--each`. Under `--quiet` only a run
+that timed out, did not build or stopped the run prints its line.
+
+Each run's build and command get `HUNK_PATCH`, the patch as its line names it
+or `base`, and `HUNK_ROUND`, from 1, in their environment, so one command can
+keep each run's whole output, outside the tree, which `--isolated` removes:
+`bench > "/tmp/bench/$(basename "$HUNK_PATCH").$HUNK_ROUND"`. A patch file named
+`base` is refused under `--measure`; give it as `./base`. In `--json`,
+`each.measure` is true, `each.rounds` is N, and once the runs begin
+`each.patches` has an entry per run, in the order they ran, each with its
+`round`, and `base: true` on the runs with no patch.
+
 ### Trying in a copy: `--isolated`
 
 `--try` and `--each` put each patch into the tree itself and take it out

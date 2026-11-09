@@ -51,6 +51,17 @@ package main
 // A caught patch's output prints only when --verify-lines is given (#89): a
 // passing suite's forty lines under every catch would bury the misses, and
 // the caller who wants to know what caught each asks for the lines that say.
+//
+// --measure, from issue #154, is the same loop with the scoring taken out,
+// for comparing patches by what the command prints, a benchmark's numbers:
+// every run's status and output is a result and none is a catch. The tree as
+// it is is an entry of the run, base, rather than a gate before it, and runs
+// first in each round; --rounds N repeats base and the patches N times,
+// interleaved, which is what evens out a machine's drift between them. Each
+// run's command and build get HUNK_PATCH and HUNK_ROUND in their environment,
+// so one command can name a file for each run's output. The exit is 0 when
+// every run ran to its end, and 3 when one timed out or did not build, since
+// a measurement is missing.
 
 import (
 	"errors"
@@ -58,6 +69,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -88,7 +100,16 @@ type eachConfig struct {
 	inCopy bool
 	// copied is that copy (#132), for --json; the text said so as it was made.
 	copied *copyMade
+	// measure is --measure (#154): every run is a result and none a catch,
+	// and the tree as it is is an entry of each round rather than a gate.
+	measure bool
+	rounds  int // --rounds, 1 unless given
 }
+
+// measureBase is the name of a --measure run with no patch applied, on its
+// line, in --json and in HUNK_PATCH. A patch file of that name is refused
+// under --measure, so the name is never two entries'.
+const measureBase = "base"
 
 // eachPatch is one patch of the run: the file as the caller spelled it, its
 // parsed form, and what happened to it.
@@ -109,6 +130,55 @@ type eachPatch struct {
 	// or before the patch's turn. When it failed, its rollback is the one that
 	// put the files back.
 	build *Verify
+	// Under --measure each entry is one run (#154): base says it has no
+	// patch, round is its round from 1, and rounds how many the run has. All
+	// three are zero outside --measure.
+	base          bool
+	round, rounds int
+}
+
+// env is what a --measure run's build and command get in their environment
+// (#154): the entry's name and its round, so one command can name a file for
+// each run's output. Nil outside --measure.
+func (ep *eachPatch) env() []string {
+	if ep.round == 0 {
+		return nil
+	}
+	return []string{"HUNK_PATCH=" + ep.name, "HUNK_ROUND=" + strconv.Itoa(ep.round)}
+}
+
+// inRound is name with the entry's round after it, under --measure with more
+// than one round, for the sentences that name an entry: "a.hunk in round 2".
+func (ep *eachPatch) inRound(name string) string {
+	if ep.rounds > 1 {
+		return fmt.Sprintf("%s in round %d", name, ep.round)
+	}
+	return name
+}
+
+// shown is the entry's name as the text prints it, with its round where it
+// has one that says something.
+func (ep *eachPatch) shown() string {
+	return ep.inRound(showControls(ep.name))
+}
+
+// measureRuns is a --measure run's entries in the order they run (#154): in
+// each round the tree as it is, then every patch, so that base and the
+// patches are interleaved and drift falls on each alike. A patch's first
+// round carries its preflight's result, whose warnings --json gives once.
+func measureRuns(patches []*eachPatch, rounds int) []*eachPatch {
+	runs := make([]*eachPatch, 0, rounds*(len(patches)+1))
+	for r := 1; r <= rounds; r++ {
+		runs = append(runs, &eachPatch{name: measureBase, base: true, round: r, rounds: rounds})
+		for _, ep := range patches {
+			run := &eachPatch{name: ep.name, p: ep.p, round: r, rounds: rounds}
+			if r == 1 {
+				run.res = ep.res
+			}
+			runs = append(runs, run)
+		}
+	}
+	return runs
 }
 
 // outcome is the run that put this patch's files back: the command's, or the
@@ -313,6 +383,11 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 	sigs := make(chan os.Signal, 1)
 	defer signal.Stop(sigs)
 	stop := Stop{Timeout: cfg.timeout, Signals: sigs}
+	if cfg.measure {
+		// Every run is an entry of its own from here, the report's and
+		// --json's included: the tree as it is first in each round (#154).
+		patches = measureRuns(patches, cfg.rounds)
+	}
 	width := eachNameWidth(patches)
 	start := time.Now()
 
@@ -350,7 +425,10 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 			}
 		}
 	}
-	if sig == nil && cfg.build != "" {
+	// Under --measure neither run below is a gate: the tree as it is is the
+	// base entry of each round, built first where there is a build, and how
+	// it ends is its line (#154).
+	if sig == nil && cfg.build != "" && !cfg.measure {
 		// The build on the tree as it is, before any patch: one that fails
 		// here fails under every patch, and "did not build" would be true of
 		// each line and false about each patch.
@@ -367,7 +445,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 			return eachBaselineRefused(cfg, patches, bases, b, cfg.inACopy(baselineFailure("the build", b, "not built")), exitUsage, stdout, stderr)
 		}
 	}
-	if sig == nil {
+	if sig == nil && !cfg.measure {
 		// The command on the tree as it is, after the build's, which is the
 		// more precise refusal when the tree does not build: one that fails
 		// here, every patch would read as caught.
@@ -394,21 +472,26 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 			stopAt = i
 			break
 		}
-		txn := NewTxn(tree, cfg.opt)
-		txn.beforeCommit = func() { notifyInterrupts(sigs) }
-		if _, err := txn.Run(ep.p); err != nil {
-			// The preflight matched every patch, so a refusal here means the
-			// tree changed under the run: by the command, or by another
-			// writer. Carrying on would score every later patch against a
-			// tree nobody validated.
-			stopAt, stopErr = i, err
-			var ve *ValidationError
-			if errors.As(err, &ve) {
-				ep.failures = ve.Failures
+		var tryErr error
+		if ep.base {
+			tryErr = tryBase(cfg, ep, tree, sigs, stop)
+		} else {
+			txn := NewTxn(tree, cfg.opt)
+			txn.beforeCommit = func() { notifyInterrupts(sigs) }
+			if _, err := txn.Run(ep.p); err != nil {
+				// The preflight matched every patch, so a refusal here means
+				// the tree changed under the run: by the command, or by
+				// another writer. Carrying on would score every later patch
+				// against a tree nobody validated.
+				stopAt, stopErr = i, err
+				var ve *ValidationError
+				if errors.As(err, &ve) {
+					ep.failures = ve.Failures
+				}
+				break
 			}
-			break
+			tryErr = tryOne(cfg, ep, txn, tree, sigs, stop)
 		}
-		tryErr := tryOne(cfg, ep, txn, tree, sigs, stop)
 		for _, v := range []*Verify{ep.v, ep.build} {
 			if v != nil {
 				v.Isolated = cfg.inCopy
@@ -444,14 +527,15 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 	}
 	o := eachOutcome{
 		tried: tried, zeros: zeros, timeouts: timeouts, notBuilt: notBuilt,
-		stopAt: stopAt, stopErr: stopErr, sig: sig, inCopy: cfg.inCopy,
+		stopAt: stopAt, stopErr: stopErr, sig: sig, inCopy: cfg.inCopy, measure: cfg.measure,
 	}
-	if stopAt < 0 && o.caught() > 0 {
+	if stopAt < 0 && o.caught() > 0 && !cfg.measure {
 		// The tree as it is once more, the last patch back (#110). The runs
 		// before the first patch say the command could pass then; these say
 		// it still can, so that a catch is the patch's and not that of
 		// something that changed meanwhile. Only a catch needs it: a break
-		// that passed, hung or did not build is already the news.
+		// that passed, hung or did not build is already the news. Under
+		// --measure nothing is a catch, and base ran in every round.
 		o.sig, o.afterErr = eachAfter(cfg, tree, stop, &bases)
 	}
 	o.bases = bases
@@ -480,7 +564,7 @@ func tryOne(cfg eachConfig, ep *eachPatch, txn *Txn, tree *Tree, sigs chan os.Si
 		return nil
 	}
 	if cfg.build != "" {
-		b, err := runBuild(cfg, txn, tree, stop)
+		b, err := runBuild(cfg, txn, tree, stop, ep.env()...)
 		ep.build = b
 		if err != nil || !b.OK {
 			return err
@@ -492,16 +576,47 @@ func tryOne(cfg eachConfig, ep *eachPatch, txn *Txn, tree *Tree, sigs chan os.Si
 			return nil
 		}
 	}
-	v, err := runTry(txn, tree, cfg.command, cfg.verifyLines, cfg.verifyFormat, stop)
+	v, err := runTry(txn, tree, cfg.command, cfg.verifyLines, cfg.verifyFormat, stop, ep.env()...)
 	ep.v = v
 	return err
 }
 
+// tryBase is a --measure run's turn with no patch applied (#154): the build
+// where there is one, then the command, on the tree as it is, as tryOne runs
+// them on a patch. A build that does not exit 0 leaves the command unrun, and
+// a signal between the two leaves it unrun too. Nothing was written, so
+// nothing is put back. The error is a build or a command that could not
+// start, which stops the run at 5 as it does under a patch.
+func tryBase(cfg eachConfig, ep *eachPatch, tree *Tree, sigs chan os.Signal, stop Stop) error {
+	if cfg.build != "" {
+		b, err := runOnTheTree(cfg.build, cfg, tree, stop, ep.env()...)
+		if err != nil {
+			ep.build = &Verify{Command: cfg.build}
+			return fmt.Errorf("could not run the --build command: %w; no patch was applied", err)
+		}
+		ep.build = b
+		if !b.OK {
+			return nil
+		}
+		if s := pending(sigs); s != nil {
+			ep.v = &Verify{Command: cfg.command, Signal: s}
+			return nil
+		}
+	}
+	v, err := runOnTheTree(cfg.command, cfg, tree, stop, ep.env()...)
+	if err != nil {
+		ep.v = &Verify{Command: cfg.command}
+		return fmt.Errorf("could not run the --try command: %w; no patch was applied", err)
+	}
+	ep.v = v
+	return nil
+}
+
 // runOnTheTree runs command once, from the root, under the run's timeout and
-// signals: --build, or either baseline. A timeout is 124 in Status, as
-// --try's is.
-func runOnTheTree(command string, cfg eachConfig, tree *Tree, stop Stop) (*Verify, error) {
-	b, err := RunVerify(command, tree.Root(), cfg.verifyLines, stop)
+// signals: --build, or either baseline, with env added to the environment. A
+// timeout is 124 in Status, as --try's is.
+func runOnTheTree(command string, cfg eachConfig, tree *Tree, stop Stop, env ...string) (*Verify, error) {
+	b, err := RunVerify(command, tree.Root(), cfg.verifyLines, stop, env...)
 	if err != nil {
 		return nil, err
 	}
@@ -515,8 +630,8 @@ func runOnTheTree(command string, cfg eachConfig, tree *Tree, stop Stop) (*Verif
 // batch for the command; any other end puts it back, since the command will
 // not run. One that cannot start puts it back too, and is exit 5 through the
 // error, as a command that cannot start is.
-func runBuild(cfg eachConfig, txn *Txn, tree *Tree, stop Stop) (*Verify, error) {
-	b, err := runOnTheTree(cfg.build, cfg, tree, stop)
+func runBuild(cfg eachConfig, txn *Txn, tree *Tree, stop Stop, env ...string) (*Verify, error) {
+	b, err := runOnTheTree(cfg.build, cfg, tree, stop, env...)
 	if err != nil {
 		b = &Verify{Command: cfg.build, Applied: txn.Applied()}
 		return b, cannotStart("the --build command", "put back", err, b, txn, cfg.verifyFormat)
@@ -652,10 +767,12 @@ type eachOutcome struct {
 	bases                  eachBaselines     // the runs on the tree as it is, before and after
 	afterErr               *afterCannotStart // a run after the last patch that could not start
 	inCopy                 bool              // the run was in a copy of the tree, under --isolated (#130)
+	measure                bool              // --measure: no run is a catch (#154)
 }
 
 // caught is how many patches the command caught: tried, and neither passed,
-// timed out nor failed to build.
+// timed out nor failed to build. Under --measure, how many runs exited
+// nonzero, which is not a catch there.
 func (o eachOutcome) caught() int {
 	return o.tried - o.zeros - o.timeouts - o.notBuilt
 }
@@ -678,10 +795,12 @@ func eachExit(patches []*eachPatch, o eachOutcome) int {
 	case o.afterErr != nil:
 		// As the same failure before the first patch is: I/O.
 		return exitIO
-	case o.zeros > 0 || o.timeouts > 0 || o.notBuilt > 0:
+	case o.timeouts > 0 || o.notBuilt > 0 || (o.zeros > 0 && !o.measure):
 		// As a verify that went against the caller exits: the tree is back in
 		// place, and the verdict is the news (§4.3). A patch that did not
-		// build was shown nothing, so it is not a catch either.
+		// build was shown nothing, so it is not a catch either. Under
+		// --measure a command's status is no verdict, but a run that timed
+		// out or did not build is a measurement missing (#154).
 		return exitVerifyFailed
 	}
 	if failed, _ := o.bases.failedAfter(); failed != nil {
@@ -703,18 +822,21 @@ func writeEachEnd(cfg eachConfig, patches []*eachPatch, o eachOutcome, code int,
 		ep := patches[o.stopAt]
 		switch {
 		case len(ep.failures) > 0:
-			fmt.Fprintf(stderr, "hunk: %s no longer applies; the preflight matched every patch, so the tree has changed since the run began: by the command, or by another writer\n", showControls(ep.name))
+			fmt.Fprintf(stderr, "hunk: %s no longer applies; the preflight matched every patch, so the tree has changed since the run began: by the command, or by another writer\n", ep.shown())
 			writeFailureBlocks(stderr, ep.failures)
 		case o.stopErr != nil:
 			// A per-patch line said what the try did; this is why the run
 			// stopped. A failed --try's own not-restored block was the line's.
-			fmt.Fprintf(stderr, "hunk: at %s: %v\n", showControls(ep.name), o.stopErr)
+			fmt.Fprintf(stderr, "hunk: at %s: %v\n", ep.shown(), o.stopErr)
 			var ce *CommitError
 			if errors.As(o.stopErr, &ce) {
 				writeNotRestored(stderr, ce.NotRestored)
 			}
 		}
-		if notTried := eachNotTried(patches); len(notTried) > 0 {
+		// Under --measure the runs not reached are counted in the summary
+		// rather than named here: N rounds of the same names, and --json
+		// has each.
+		if notTried := eachNotTried(patches); len(notTried) > 0 && !o.measure {
 			fmt.Fprintf(stderr, "not tried: %s\n", strings.Join(notTried, ", "))
 		}
 	}
@@ -737,21 +859,58 @@ func writeEachEnd(cfg eachConfig, patches []*eachPatch, o eachOutcome, code int,
 		}
 		w = stdout
 	}
+	where := "and put back every file"
+	if o.inCopy {
+		where = "in a copy of the tree"
+	}
 	switch {
+	case o.stopAt >= 0 && o.measure:
+		fmt.Fprintf(w, "tried %d of %s; %s", o.tried, count(len(patches), "run"), eachStopClause(patches, o))
+		if n := len(eachNotTried(patches)); n > 0 {
+			fmt.Fprintf(w, "; %s not tried", count(n, "run"))
+		}
+		fmt.Fprintln(w)
 	case o.stopAt >= 0:
 		fmt.Fprintf(w, "tried %d of %s; %s", o.tried, patchCount(len(patches)), eachStopClause(patches, o))
 		if n := len(eachNotTried(patches)); n > 0 {
 			fmt.Fprintf(w, "; %s not tried", patchCount(n))
 		}
 		fmt.Fprintln(w)
-	default:
-		where := "and put back every file"
-		if o.inCopy {
-			where = "in a copy of the tree"
+	case o.measure:
+		// Every entry ran in every round: the patches are what is left of a
+		// round once base is taken out.
+		what := "base and " + patchCount(len(patches)/cfg.rounds-1)
+		if cfg.rounds > 1 {
+			what += fmt.Sprintf(" in %d rounds", cfg.rounds)
 		}
+		fmt.Fprintf(w, "tried %s %s; %s (%.1fs)\n", what, where, measureVerdict(o), o.seconds)
+	default:
 		fmt.Fprintf(w, "tried %s %s; %s%s (%.1fs)\n",
 			patchCount(o.tried), where, eachVerdict(o.tried, o.zeros, o.timeouts, o.notBuilt), eachAfterClause(o), o.seconds)
 	}
+}
+
+// measureVerdict is a --measure summary's middle (#154): how the runs ended,
+// none of it a catch, with what made the exit 3 named.
+func measureVerdict(o eachOutcome) string {
+	nonzero := o.caught()
+	if nonzero == 0 && o.timeouts == 0 && o.notBuilt == 0 {
+		return "every command exited 0"
+	}
+	parts := make([]string, 0, 4)
+	if o.zeros > 0 {
+		parts = append(parts, fmt.Sprintf("%d exited 0", o.zeros))
+	}
+	if nonzero > 0 {
+		parts = append(parts, fmt.Sprintf("%d exited nonzero", nonzero))
+	}
+	if o.timeouts > 0 {
+		parts = append(parts, fmt.Sprintf("%d timed out", o.timeouts))
+	}
+	if o.notBuilt > 0 {
+		parts = append(parts, fmt.Sprintf("%d did not build", o.notBuilt))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // writeEachLine is one patch's line, to stderr the moment it finished, plus
@@ -760,7 +919,8 @@ func writeEachEnd(cfg eachConfig, patches []*eachPatch, o eachOutcome, code int,
 // patch's author fixes, and under --quiet those lines are all that print.
 // With --verify-lines given, every command's tail prints, since a caught
 // patch's is what says what caught it (#89); --quiet still decides which
-// lines print at all.
+// lines print at all. Under --measure every command's tail prints, since the
+// output is the measurement, and a command that exited 0 is no news (#154).
 func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 	v, what := ep.v, "command"
 	if v == nil {
@@ -769,12 +929,15 @@ func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 	// notBuilt is a build that ended by itself or by --timeout, not by a
 	// signal and not for want of a shell.
 	notBuilt := what == "build" && v.Ran && v.Signal == nil
-	actionable := v.Signal != nil || v.TimedOut > 0 || (v.Ran && v.Status == 0) || notBuilt ||
+	actionable := v.Signal != nil || v.TimedOut > 0 || (v.Ran && v.Status == 0 && !cfg.measure) || notBuilt ||
 		len(v.NotRestored) > 0 || len(v.Gone) > 0 || len(v.Left) > 0 || !v.Ran
 	if cfg.quiet && !actionable {
 		return
 	}
 	fmt.Fprintf(w, "tried %-*s  ", width, showControls(ep.name))
+	if ep.rounds > 1 {
+		fmt.Fprintf(w, "round %-*d  ", len(strconv.Itoa(ep.rounds)), ep.round)
+	}
 	switch {
 	case v.Signal != nil && !v.Ran:
 		fmt.Fprintf(w, "interrupted by %s before the command ran", signalName(v.Signal))
@@ -798,7 +961,7 @@ func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 		}
 	}
 	fmt.Fprintln(w)
-	if notBuilt || (v.Ran && (v.TimedOut > 0 || v.Status == 0 || (cfg.everyTail && what == "command"))) {
+	if notBuilt || (v.Ran && (v.TimedOut > 0 || v.Status == 0 || ((cfg.everyTail || cfg.measure) && what == "command"))) {
 		writeCommandOutput(w, v)
 	}
 	writeAftermath(w, v)
@@ -808,7 +971,7 @@ func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 // has been told above it.
 func eachStopClause(patches []*eachPatch, o eachOutcome) string {
 	ep := patches[o.stopAt]
-	name := showControls(ep.name)
+	name := ep.shown()
 	where := ""
 	if o.inCopy {
 		where = " in the copy"
@@ -838,9 +1001,9 @@ func eachStopReason(patches []*eachPatch, o eachOutcome) string {
 	ep := patches[o.stopAt]
 	switch {
 	case len(ep.failures) > 0:
-		return fmt.Sprintf("%s no longer applies; the preflight matched every patch, so the tree has changed since the run began", ep.name)
+		return fmt.Sprintf("%s no longer applies; the preflight matched every patch, so the tree has changed since the run began", ep.inRound(ep.name))
 	case o.stopErr != nil:
-		return fmt.Sprintf("at %s: %v", ep.name, o.stopErr)
+		return fmt.Sprintf("at %s: %v", ep.inRound(ep.name), o.stopErr)
 	}
 	return eachStopClause(patches, o)
 }
@@ -927,6 +1090,9 @@ func eachNameWidth(patches []*eachPatch) int {
 func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code int, stopReason string, stdout, stderr io.Writer) int {
 	out := jsonReport{OK: code == exitOK, Exit: code, DryRun: cfg.dryRun, Isolated: cfg.inCopy, Copy: jsonCopyOf(cfg.copied)}
 	je := &jsonEach{Command: cfg.command, Build: cfg.build}
+	if cfg.measure {
+		je.Measure, je.Rounds = true, cfg.rounds
+	}
 	if bases.build != nil {
 		je.Baseline = eachBuildJSON(bases.build)
 	}
@@ -943,7 +1109,7 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code in
 		out.Error = stopReason
 	}
 	for _, ep := range patches {
-		jp := jsonEachPatch{Patch: ep.name}
+		jp := jsonEachPatch{Patch: ep.name, Base: ep.base, Round: ep.round}
 		switch {
 		case ep.loadErr != nil:
 			jp.Error = ep.loadErr.Error()
@@ -981,6 +1147,10 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code in
 			}
 		}
 		je.Patches = append(je.Patches, jp)
+		if ep.round > 1 {
+			// A --measure patch's warnings are its first round's (#154).
+			continue
+		}
 		if ep.res != nil {
 			out.Warnings = append(out.Warnings, slipWarnings(ep.name, ep.res.Slips, false)...)
 		}

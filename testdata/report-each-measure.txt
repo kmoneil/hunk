@@ -1,0 +1,37 @@
+tried base     round 1  the command exited 0 (3.1s)
+
+$ go test -run '^$' -bench Parse .
+BenchmarkParse-10   	  412345	      2911 ns/op
+ok  	example.com/parse	3.012s
+(last 2 of 2 lines)
+tried v1.hunk  round 1  the command exited 0 (3.1s)
+
+$ go test -run '^$' -bench Parse .
+BenchmarkParse-10   	  412345	      2604 ns/op
+ok  	example.com/parse	3.012s
+(last 2 of 2 lines)
+tried v2.hunk  round 1  the command exited 1 (3.1s)
+
+$ go test -run '^$' -bench Parse .
+--- FAIL: TestParse (0.00s)
+FAIL
+(last 2 of 2 lines)
+tried base     round 2  the command exited 0 (3.1s)
+
+$ go test -run '^$' -bench Parse .
+BenchmarkParse-10   	  412345	      2897 ns/op
+ok  	example.com/parse	3.012s
+(last 2 of 2 lines)
+tried v1.hunk  round 2  the command exited 0 (3.1s)
+
+$ go test -run '^$' -bench Parse .
+BenchmarkParse-10   	  412345	      2611 ns/op
+ok  	example.com/parse	3.012s
+(last 2 of 2 lines)
+tried v2.hunk  round 2  the command exited 1 (3.1s)
+
+$ go test -run '^$' -bench Parse .
+--- FAIL: TestParse (0.00s)
+FAIL
+(last 2 of 2 lines)
+tried base and 2 patches in 2 rounds and put back every file; 4 exited 0, 2 exited nonzero (18.6s)
