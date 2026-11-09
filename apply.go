@@ -788,7 +788,7 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 		// from the patch alone. The seam byte depends on the file, which is
 		// why that one is reported.
 		if len(body) > 0 && !bytes.HasSuffix(body, lf) {
-			body = append(body, eol...)
+			body = endedLine(body, eol)
 		}
 		f.cur = append(append([]byte{}, base...), body...)
 		f.added += lineCount(body)
@@ -807,7 +807,7 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 		// reporting it put "(added a final newline)" on every prepend.
 		body := x.convert(h.Body, f.eol)
 		if len(body) > 0 && !bytes.HasSuffix(body, lf) {
-			body = append(body, eol...)
+			body = endedLine(body, eol)
 		}
 		f.cur = append(append([]byte{}, body...), f.cur...)
 		f.added += lineCount(body)
@@ -822,6 +822,18 @@ func (x *Txn) applyWhole(f *file, h Hunk) {
 	}
 	f.changed = true
 	f.applied++
+}
+
+// endedLine is body with eol after it, in a slice of its own. Under --eol
+// strict convert hands back the payload itself, a slice of the patch's text
+// or of whatever the caller built the hunk from, and appending to it in
+// place wrote the ending into the caller's bytes past the payload's end: in
+// the CLI the newline after it and the next directive's first byte, after
+// the parse, so nothing showed; in a fuzz target, another of its inputs,
+// which FuzzInverseToUndoesTheBatch found on main on 2026-11-09. The capacity
+// is cut to the length so that the append always copies.
+func endedLine(body []byte, eol []byte) []byte {
+	return append(body[:len(body):len(body)], eol...)
 }
 
 // finalOp is what commit does for this path: the batch's final state, not the
