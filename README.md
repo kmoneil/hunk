@@ -469,6 +469,47 @@ As with `hunk quote`, a refusal is written to stdout as well, as an `@@ end`
 line, so the `hunk` it is piped into stops at exit 1 rather than applying
 nothing at exit 0. `hunk invert --help` has the whole of it.
 
+### An undo written by the apply: `--inverse-to`
+
+`hunk invert` has only the patch, so it refuses what the patch alone cannot
+undo, and an inverse whose new text the file holds more often than the patch
+wrote it is refused when it is applied: by then the edit is in, and other work
+may be on top of it. Planting bugs to see the tests catch them, an agent met
+both, and the second time did not notice, and the next plant went in on top of
+the first. The apply knows every file's bytes before and after, so it can write
+an undo that always applies:
+
+```sh
+hunk -f plant.hunk --inverse-to undo.hunk
+# ... run the tests ...
+hunk -f undo.hunk
+```
+
+The report's last line is the command that applies it, `to undo: hunk -f
+undo.hunk`. Each of its hunks quotes as many whole lines around its change as
+the file needs to hold that text once, so a deletion, a new text the file
+holds elsewhere, a `@@ delete`, an `@@ append` and a `@@ prepend` all undo; a
+replacement that `hunk invert` could undo is written as it would write it.
+Before anything is written the inverse is read back and applied in memory to
+the files as the batch leaves them, and has to put every one back exactly,
+bytes and whether it is there at all. Where the file holds lines that read as
+directives, the inverse is written under another `--marker`; where it puts back
+a line that looks like a mistyped heredoc delimiter, it needs
+`--allow-mistyped-delimiter`; where a file mixes line endings, `--eol strict`.
+The command says which, and under `--quiet` that line is still printed. With
+`--root` or `--allow-outside-root`, the command has them too.
+
+`FILE` is written before the batch, and removed again if the batch does not
+stay: a `--verify` that fails and rolls back, a signal, a write that fails. It
+stays under `--keep-on-fail`, where the batch does. A `FILE` that exists is
+refused, exit 1, since it may be the undo of an earlier batch nobody applied;
+so are `--try` and `--each`, which put every file back, and `--dry-run`, which
+writes nothing. A batch that deletes a file of a mode `@@ create` cannot give
+back, an executable script, is refused at exit 1 too. A batch that changes
+nothing has nothing to undo, and no file is written. As with `hunk invert`, a
+directory a create made is left, empty, and the undo is refused, exit 2, if
+the text it quotes has changed since.
+
 ## Verify, and rollback
 
 `--verify CMD` runs after a successful apply, from `--root`, through `sh -c`.

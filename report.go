@@ -122,6 +122,8 @@ type Report struct {
 	// Copy is the copy a --try --isolated made, once it was made (#132). The
 	// text has said so already, as the copy was made; --json says it here.
 	Copy *copyMade
+	// Inverse is the patch --inverse-to wrote, where the batch stayed (#155).
+	Inverse *Inverse
 }
 
 // count is the summary form: "1 file", "3 files". Distinct from plural, which
@@ -161,6 +163,10 @@ func ExitCode(err error) int {
 	var ce *ChangedError
 	if errors.As(err, &ce) {
 		return exitChanged
+	}
+	var ie *InverseError
+	if errors.As(err, &ie) {
+		return exitUsage
 	}
 	// Another run holding the tree is the second writer exit 6 already
 	// names, found before the read rather than after it (#128).
@@ -245,6 +251,11 @@ func (r *Report) changedTheTree() bool {
 func (r *Report) Text(out, errOut io.Writer, quiet bool) {
 	o, e := &tally{w: out}, &tally{w: errOut}
 	r.text(o, e, quiet)
+	if r.Inverse != nil && quiet && r.Inverse.Extra && r.Exit == exitOK && !r.Inverse.Nothing {
+		// Said under --quiet when the inverse needs more than -f: applied
+		// without the flags, it would be refused (#155).
+		fmt.Fprintf(e, "to undo: %s\n", r.Inverse.Command())
+	}
 	gap := o.n+e.n > 0
 	if r.Result != nil && writeSlips(errOut, "", r.Result.Slips, r.changedTheTree(), gap) {
 		gap = false
@@ -349,6 +360,9 @@ func (r *Report) writeSuccess(w io.Writer) {
 	if v := r.Verify; v != nil && v.Ran && v.Cut {
 		fmt.Fprintln(w, cutNote())
 	}
+	if r.Inverse != nil {
+		fmt.Fprintln(w, r.Inverse.line())
+	}
 }
 
 func (r *Report) writeValidationFailure(w io.Writer) {
@@ -448,6 +462,9 @@ func (r *Report) writeVerifyFailure(w io.Writer) {
 	switch {
 	case v.Kept:
 		fmt.Fprint(w, ", changes left in place for inspection (--keep-on-fail)\n")
+		if r.Inverse != nil {
+			fmt.Fprintln(w, r.Inverse.line())
+		}
 	case len(v.NotRestored) > 0:
 		fmt.Fprintf(w, ", rolled back %s, %s left alone\n",
 			count(v.RolledBack, "file"), count(len(v.NotRestored), "file"))
@@ -796,6 +813,9 @@ type jsonReport struct {
 	Failures []jsonFailure `json:"failures,omitempty"`
 	Error    string        `json:"error,omitempty"`
 	DryRun   bool          `json:"dry_run,omitempty"`
+	// Inverse is the patch --inverse-to wrote (#155), where the batch stayed:
+	// its path, and the arguments to hunk that apply it.
+	Inverse *jsonInverse `json:"inverse,omitempty"`
 	// Isolated says the --try command ran in a copy of the tree (#130), so
 	// the tree itself was never written: under --each, once the copy was
 	// made, and for one --try, once the batch was in it.
@@ -810,6 +830,15 @@ type jsonReport struct {
 	// and the lines that look like a mistyped heredoc delimiter (#92),
 	// whatever the outcome.
 	Warnings []jsonWarning `json:"warnings,omitempty"`
+}
+
+// jsonInverse is the patch --inverse-to wrote (#155): where, and the arguments
+// to hunk that apply it, -f and the path last; or, with nothing_to_undo, that
+// the batch changed nothing and no file was written.
+type jsonInverse struct {
+	Path    string   `json:"path"`
+	Args    []string `json:"args,omitempty"`
+	Nothing bool     `json:"nothing_to_undo,omitempty"`
 }
 
 // jsonCopy is the copy --isolated made (#132), as its line has it: where it
@@ -1078,6 +1107,9 @@ func (r *Report) JSON(w io.Writer) error {
 	}
 	out.Isolated = r.Verify != nil && r.Verify.Isolated
 	out.Copy = jsonCopyOf(r.Copy)
+	if r.Inverse != nil {
+		out.Inverse = &jsonInverse{Path: r.Inverse.Path, Args: r.Inverse.Args, Nothing: r.Inverse.Nothing}
+	}
 	if v := r.Verify; v != nil && v.Try {
 		jt := &jsonTry{
 			Ran: v.Ran, Status: v.Status, Seconds: v.Seconds, Command: v.Command,

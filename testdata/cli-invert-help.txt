@@ -46,6 +46,9 @@ A patch with any of these is refused, every one named:
                   "@@include x", which a patch refuses where it is written,
                   unless the new holds it too; under another --marker it is text
 
+To undo any of these, apply the patch with --inverse-to FILE: the apply knows
+the files' bytes, and writes an inverse that quotes them.
+
 FLAGS
 
   -f FILE                     Read the patch from FILE rather than stdin.

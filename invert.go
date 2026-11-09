@@ -78,6 +78,9 @@ A patch with any of these is refused, every one named:
                   "@@include x", which a patch refuses where it is written,
                   unless the new holds it too; under another --marker it is text
 
+To undo any of these, apply the patch with --inverse-to FILE: the apply knows
+the files' bytes, and writes an inverse that quotes them.
+
 FLAGS
 
   -f FILE                     Read the patch from FILE rather than stdin.
@@ -335,6 +338,13 @@ func printPatch(hunks []Hunk, crlf bool, marker string) []byte {
 		case OpDelete:
 			fmt.Fprintf(&b, "%s delete %s%s", marker, h.Path, eol)
 			cur = h.Path
+		case OpCreate:
+			// --inverse-to's, for a file the batch deleted (#155); hunk
+			// invert writes none. The file in effect is named again after
+			// it.
+			fmt.Fprintf(&b, "%s create %s%s", marker, h.Path, eol)
+			payload(h.Body)
+			cur = ""
 		}
 	}
 	return b.Bytes()

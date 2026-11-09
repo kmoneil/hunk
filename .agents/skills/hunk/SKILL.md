@@ -395,6 +395,16 @@ took out a CRLF file's only line ending gets it back as LF. `@@ delete`,
 refused at exit 1, each such hunk named, and the refusal is printed as an
 `@@ end` line that stops the `hunk` it is piped into.
 
+**When you know at apply time that you will undo**, a planted bug, a probe,
+an experiment, apply with `--inverse-to undo.hunk` and undo with the command
+the report's last line gives (`to undo: hunk -f undo.hunk`). The apply writes
+the inverse from the files' bytes, each hunk quoting enough lines around its
+change to be unique, so it undoes deletions, a new text the file holds twice,
+`@@ delete`, `@@ append` and `@@ prepend`, which `hunk invert` refuses. Use
+another file name for each batch: one that exists is refused, since it may be
+an undo not yet applied. For a check you run at once, `--try CMD` is simpler
+still: it puts every file back whatever the command says.
+
 ## When to reach for it, and when not
 
 `hunk` earns its keep when an edit has something to go wrong: several changes

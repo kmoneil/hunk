@@ -707,8 +707,10 @@ func TestRunChecksBetweenValidatingAndCommitting(t *testing.T) {
 	// beforeCommit sits after the check and before the first write, which is
 	// where the CLI's signal handler has to go in: after it, a signal ends the
 	// verify and puts the batch back; before it, a signal still kills a load
-	// that writes nothing.
-	if want := []string{"Load", "Validate", "Check", "beforeCommit", "Commit", "result"}; !slices.Equal(calls, want) {
+	// that writes nothing. writeInverse, from 2026-11-09 (#155), is
+	// --inverse-to's file, written once the batch validates and before the
+	// check, so the check still comes last before the commit.
+	if want := []string{"Load", "Validate", "writeInverse", "Check", "beforeCommit", "Commit", "result"}; !slices.Equal(calls, want) {
 		t.Errorf("Run calls %v on the transaction, want %v: §6.1's phases, in order, each once", calls, want)
 	}
 
@@ -742,7 +744,7 @@ func TestRunChecksBetweenValidatingAndCommitting(t *testing.T) {
 			stops[sel.Sel.Name] = true
 		}
 	}
-	for _, phase := range []string{"Load", "Check", "Commit"} {
+	for _, phase := range []string{"Load", "writeInverse", "Check", "Commit"} {
 		if !stops[phase] {
 			t.Errorf("Run does not return when %s fails", phase)
 		}

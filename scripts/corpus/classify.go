@@ -190,6 +190,9 @@ var (
 	// An --isolated run whose copy could not be made is 5 too, nothing run.
 	reExitCannotStart  = regexp.MustCompile(`(?m)^hunk: (?:at .*: )?(?:could not run the (?:verify|--try|--build) command|--(?:verify|try) runs its command with sh, which was not found|could not copy the tree for --isolated)`)
 	reExitVerifyFailed = regexp.MustCompile(`(?m)^hunk: applied .*verify (?:failed|timed out)`)
+	// --inverse-to's file that could not be written (#155), from 2026-11-09:
+	// I/O, with nothing applied.
+	reExitInverseUnwritten = regexp.MustCompile(`(?m)^hunk: could not write the inverse to `)
 	// A signal to hunk while its command ran, from 2026-10-06: the batch went
 	// back and hunk died of the signal, which a shell reports as 128 plus it.
 	// The text names the signal, so the code is read from it, and a file that
@@ -476,7 +479,7 @@ func HunkExit(cmd, result string) int {
 		return 4
 	case reExitTried.MatchString(result):
 		return ExitOK
-	case reExitCannotStart.MatchString(result):
+	case reExitCannotStart.MatchString(result), reExitInverseUnwritten.MatchString(result):
 		return 5
 	case reExitChanged.MatchString(result):
 		return 6

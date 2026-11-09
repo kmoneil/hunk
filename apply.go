@@ -280,6 +280,19 @@ type Txn struct {
 	// set. The CLI installs its signal handler there: earlier, a signal still
 	// kills a load or a validation that writes nothing, and a hung one with it.
 	beforeCommit func()
+	// inverseTo is --inverse-to's file (#155), "" for none. Validate records
+	// every edit while it is set, and Run writes there the patch that undoes
+	// the batch, before the commit. inverse is what was written, until it is
+	// taken back out because the batch did not stay.
+	inverseTo string
+	edits     []edit
+	inverse   *Inverse
+	// inverseMarker is the batch's --marker, which the inverse is written
+	// under where its payloads allow, and inverseArgs the arguments it is
+	// applied with whatever it holds: the batch's --root and
+	// --allow-outside-root, so that its paths lead where the batch's did.
+	inverseMarker string
+	inverseArgs   []string
 }
 
 func NewTxn(tree *Tree, opt Options) *Txn {
@@ -289,12 +302,21 @@ func NewTxn(tree *Tree, opt Options) *Txn {
 // Run performs phases 2 through 5. On any error nothing has been written,
 // except that a commit failure part-way through leaves the files before it
 // written, which is §6.2's stated limit.
+//
+// Under --inverse-to the inverse is written once the batch validates and
+// before the check (#155), so that a file that cannot be written stops the
+// batch with nothing applied. Taking it back out when the batch does not
+// stay, a check or a commit that fails here or a verify that rolls back
+// after, is the caller's, which alone sees every one of those ends.
 func (x *Txn) Run(p *Patch) (*Result, error) {
 	if err := x.Load(p); err != nil {
 		return nil, err
 	}
 	if failures := x.Validate(p); len(failures) > 0 {
 		return nil, &ValidationError{Failures: failures}
+	}
+	if err := x.writeInverse(); err != nil {
+		return nil, err
 	}
 	if err := x.Check(); err != nil {
 		return nil, err
@@ -533,9 +555,13 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			continue
 		}
 		if h.Op != OpReplace {
+			before, applied := f.cur, f.applied
 			x.applyWhole(f, h)
 			if h.Op == OpCreate {
 				f.createdBy = n
+			}
+			if x.inverseTo != "" && f.applied > applied {
+				x.edits = append(x.edits, edit{n: n, h: h, f: f, before: before})
 			}
 			continue
 		}
@@ -618,6 +644,9 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			f.added += a
 			f.removed += r
 			x.noteSlips(n, h, f, old, repl, next)
+			if x.inverseTo != "" {
+				x.edits = append(x.edits, edit{n: n, h: h, f: f, old: old, repl: repl, at: copiesAt(f.cur, old, h.Count)})
+			}
 		}
 		f.cur = next
 	}
