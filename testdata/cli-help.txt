@@ -42,6 +42,18 @@ FLAGS
                         out.
   --keep-on-fail        Leave the applied changes in place when verify fails,
                         for inspection. Still exits 3.
+  --inverse-to FILE     Also write FILE, the patch that undoes this batch, for
+                        hunk -f FILE to apply: every file back as it was, a
+                        deleted one made again and a created one gone. Each of
+                        its hunks quotes as many whole lines around the change
+                        as the file needs to hold it once, so a deletion, or a
+                        new text the file holds elsewhere, undoes too, where
+                        hunk invert refuses. The report's last line is the
+                        command, with any --marker, --eol strict or
+                        --allow-mistyped-delimiter it needs. Refused, exit 1,
+                        if FILE exists, with --try or --dry-run, or to delete a
+                        file of a mode @@ create cannot give back. FILE goes
+                        again if the batch does not stay.
   --try CMD             Apply, run CMD as --verify would, then put every file
                         back whatever it says, and exit with its status. For a
                         print statement or a measurement you do not mean to

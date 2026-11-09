@@ -1,0 +1,1 @@
+hunk: --inverse-to writes the patch that undoes a batch that stays, and --try puts every file back

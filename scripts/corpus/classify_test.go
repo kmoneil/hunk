@@ -509,6 +509,17 @@ func TestHunkExit(t *testing.T) {
 			"--measure stopped, base's command could not start", "hunk --try x --measure --each a.hunk",
 			"tried base    the command could not start\nhunk: at base: could not run the --try command: exec: \"sh\": not found; no patch was applied\ntried 0 of 2 runs; stopped at base; 1 run not tried\n", 5,
 		},
+		// --inverse-to (#155), from 2026-11-09: the undo's file could not be
+		// written, which is I/O with nothing applied; and a batch the flag
+		// cannot be honoured with, which is 1.
+		{
+			"--inverse-to, the file could not be written", "hunk --inverse-to /x/undo.hunk -f p",
+			"hunk: could not write the inverse to /x/undo.hunk: open /x/undo.hunk: no such file or directory; nothing was written\n", 5,
+		},
+		{
+			"--inverse-to, the batch names it", "hunk --inverse-to n.txt -f p",
+			"hunk: --inverse-to cannot write the patch that undoes this batch: it names n.txt, which the batch writes; name a file outside it; nothing was written\n", 1,
+		},
 		// --build (§4.3), from 2026-10-15: a patch whose build failed is a
 		// line and a count, and the summary's "did not build" is 3; the
 		// build's own "exited 1" under it never reads as the run's exit. A
@@ -787,6 +798,11 @@ var reportGoldens = map[string]int{
 	"report-each-measure-missing":                     3,
 	"report-each-measure-stopped":                     4,
 	"report-each-measure-cannot-start":                5,
+	"report-inverse-to":                               0,
+	"report-inverse-to-json":                          0,
+	"cli-inverse-to-exists":                           1,
+	"cli-inverse-to-try":                              1,
+	"cli-inverse-to-mode":                             1,
 	"cli-rollback-incomplete":                         4,
 	"cli-rollback-left-a-directory":                   3,
 	"cli-rollback-left-a-directory-json":              3,

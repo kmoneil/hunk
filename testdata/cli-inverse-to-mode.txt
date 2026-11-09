@@ -1,0 +1,1 @@
+hunk: --inverse-to cannot undo hunk 1 (patch line 1): it deletes run.sh, whose mode is 0755, and the @@ create that would put it back makes a file 0644; nothing was written

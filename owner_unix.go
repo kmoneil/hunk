@@ -8,6 +8,10 @@ import (
 	"syscall"
 )
 
+// recreatedMode is the mode @@ create gives a file here, before the umask:
+// what a file --inverse-to puts back after a delete comes back as (#155).
+const recreatedMode = createMode
+
 // keepOwner gives the file being written, f, the owner and group of the file it
 // replaces, as far as the invoker may, and returns the mode to set on it after.
 // like is that file as load read it, from the descriptor its bytes came through,

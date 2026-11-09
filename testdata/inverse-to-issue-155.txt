@@ -1,0 +1,12 @@
+@@ file f.zig
+@@ old
+fn b() {
+    return x;
+}
+
+@@ new
+fn b() {
+    if (y) return x;
+    return x;
+}
+

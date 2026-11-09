@@ -142,6 +142,18 @@ FLAGS
                         out.
   --keep-on-fail        Leave the applied changes in place when verify fails,
                         for inspection. Still exits 3.
+  --inverse-to FILE     Also write FILE, the patch that undoes this batch, for
+                        hunk -f FILE to apply: every file back as it was, a
+                        deleted one made again and a created one gone. Each of
+                        its hunks quotes as many whole lines around the change
+                        as the file needs to hold it once, so a deletion, or a
+                        new text the file holds elsewhere, undoes too, where
+                        hunk invert refuses. The report's last line is the
+                        command, with any --marker, --eol strict or
+                        --allow-mistyped-delimiter it needs. Refused, exit 1,
+                        if FILE exists, with --try or --dry-run, or to delete a
+                        file of a mode @@ create cannot give back. FILE goes
+                        again if the batch does not stay.
   --try CMD             Apply, run CMD as --verify would, then put every file
                         back whatever it says, and exit with its status. For a
                         print statement or a measurement you do not mean to
@@ -344,6 +356,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		measure      = fs.Bool("measure", false, "")
 		rounds       = fs.Int("rounds", 1, "")
 		isolated     = fs.Bool("isolated", false, "")
+		inverseTo    = fs.String("inverse-to", "", "")
 		verifyFormat = fs.Bool("verify-may-format", false, "")
 		verifyLines  = fs.Int("verify-lines", 40, "")
 		keepOnFail   = fs.Bool("keep-on-fail", false, "")
@@ -553,6 +566,23 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	if len(links) > 0 && !*isolated {
 		return fail(exitUsage, errors.New("--isolated-link links a path beside the copy --isolated makes, and does nothing without --isolated"), "")
 	}
+	// --inverse-to writes the patch that undoes a batch that stays (#155).
+	// --try and --each put every file back, and --dry-run writes nothing.
+	// A file already there may be the inverse of an earlier batch nobody
+	// applied: in the field, a second planted bug went in on top of a first
+	// whose undo had failed, and overwriting the first's inverse would lose
+	// the only record of it.
+	if *inverseTo != "" {
+		switch {
+		case *try != "":
+			return fail(exitUsage, errors.New("--inverse-to writes the patch that undoes a batch that stays, and --try puts every file back"), "")
+		case *dryRun:
+			return fail(exitUsage, errors.New("--inverse-to writes the patch that undoes a batch, and --dry-run writes nothing"), "")
+		}
+		if _, err := os.Lstat(*inverseTo); err == nil {
+			return fail(exitUsage, fmt.Errorf("--inverse-to %s: it already exists, and may be the inverse of an earlier batch; apply it or remove it, or name another file", *inverseTo), "")
+		}
+	}
 	// --verify-may-format governs putting files back, which --try does too.
 	if *verifyFormat && *verify == "" && *try == "" {
 		return fail(exitUsage, errors.New("--verify-may-format does nothing without --verify or --try"), "")
@@ -741,6 +771,17 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	if sigs != nil {
 		txn.beforeCommit = func() { notifyInterrupts(sigs) }
 	}
+	if *inverseTo != "" {
+		txn.inverseTo, txn.inverseMarker = *inverseTo, *marker
+		// The inverse's paths are the batch's, so it is applied from the same
+		// root, and outside it as the batch was.
+		if *root != "" {
+			txn.inverseArgs = append(txn.inverseArgs, "--root", *root)
+		}
+		if *allowOutside {
+			txn.inverseArgs = append(txn.inverseArgs, "--allow-outside-root")
+		}
+	}
 	switch {
 	case err != nil:
 		// The preflight on the tree itself refused it.
@@ -783,8 +824,17 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	if v != nil && v.Signal != nil && interrupted != nil && len(v.NotRestored) == 0 {
 		*interrupted = v.Signal
 	}
+	// The inverse stays with the batch (#155): a verify that rolled it back,
+	// a signal, a command that could not start, all take the inverse too,
+	// and --keep-on-fail keeps both.
+	if stays := v == nil && err == nil || v != nil && (v.Kept || v.OK && err == nil); !stays {
+		if dropErr := txn.dropInverse(); dropErr != nil {
+			fmt.Fprintf(stderr, "hunk: the batch did not stay, and its inverse could not be removed: %v\n", dropErr)
+		}
+	}
 
 	rep := NewReport(res, err, v, *dryRun, len(p.Hunks))
+	rep.Inverse = txn.kept()
 	rep.Strays = p.Strays
 	rep.Copy = made
 	if *asJSON {
@@ -970,10 +1020,11 @@ func emptyCommand(fs *flag.FlagSet) (name string) {
 // the working directory. The command flags have emptyCommand, and
 // --isolated-link refuses its own under --isolated.
 var valueFlags = map[string]string{
-	"f":       "path",
-	"root":    "path",
-	"new":     "path",
-	"timeout": "duration",
+	"f":          "path",
+	"root":       "path",
+	"new":        "path",
+	"timeout":    "duration",
+	"inverse-to": "path",
 }
 
 // emptyValue refuses the first of valueFlags given an empty value, in
