@@ -995,6 +995,18 @@ yours, and drops setuid, which would otherwise run it as you. ACLs and extended
 attributes are not kept. A file whose access depends on any of those is better
 edited another way.
 
+A file `hunk` writes is dated in a later second than the file it replaces,
+than the file as `hunk` first read it, and than any version `hunk` wrote at
+that name earlier in the same run. When the clock has not reached such a second
+yet, the file is dated the start of the first one, ahead of the clock. Python,
+among others, takes a file whose time to the second and size have not changed
+for unchanged, and runs what it compiled from it before: without this, a
+same-size break that `--try` or `--each` put back, or a `--verify` rolled back,
+within the second it was written ran as the break from a tree that no longer
+held it. Writes to one file faster than one a second date it further ahead, by
+up to a second for each, so ten breaks of one file tried within a second can
+leave it twenty seconds ahead of the clock, which `make` warns of.
+
 ## Install
 
 Each way below installs the `hunk` binary and its agent skill, which teaches an
