@@ -202,8 +202,13 @@ FLAGS
                         entry, not a gate, and a command piped into a filter is
                         let through. Each run's --build and command get
                         HUNK_PATCH, the patch's name or base, and HUNK_ROUND in
-                        their environment. The exit is 0 when every run ran to
-                        its end, 3 when one timed out or did not build.
+                        their environment. The run ends with a table of the
+                        numbers its runs printed: a row for each number of each
+                        kind of line, named by the line's leading text and the
+                        number's unit, a column for base and each patch, each
+                        cell the median across the rounds, and each patch's
+                        ratio to base. The exit is 0 when every run ran to its
+                        end, 3 when one timed out or did not build.
   --rounds N            With --measure: run base and the patches N times,
                         interleaved, so that drift falls on each alike. (1)
   --isolated            With --try: copy --root to a temporary directory once

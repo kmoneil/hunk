@@ -34,4 +34,9 @@ $ go test -run '^$' -bench Parse .
 --- FAIL: TestParse (0.00s)
 FAIL
 (last 2 of 2 lines)
+                         base    v1.hunk         v2.hunk
+BenchmarkParse-10        412345  412345   1.00x  -        -
+BenchmarkParse-10 ns/op  2904    2607.5   0.90x  -        -
+ok example.com/parse s   3.012   3.012    1.00x  -        -
+--- FAIL: TestParse s    -       -        -      0.00     -
 tried base and 2 patches in 2 rounds and put back every file; 4 exited 0, 2 exited nonzero (18.6s)

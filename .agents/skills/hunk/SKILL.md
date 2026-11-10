@@ -545,8 +545,13 @@ each version of a function, add `--measure`, and `--rounds N` to run them N
 times, interleaved. Each round runs the command on the tree as it is, named
 `base`, then under each patch alone, every run's output under its line. No exit
 is a catch: the exit is 0 when every run ran to its end, 3 when one timed out or
-did not build. Each run's command gets `HUNK_PATCH` and `HUNK_ROUND`, so one
-command can keep every run's output: `bench > "/tmp/b/$(basename
+did not build. The run ends with a table of every number the runs printed,
+a row per number of each kind of line, named as benchstat names one
+(`BenchmarkParse-8 ns/op`), each cell the median across the rounds for base
+and each patch, and each patch's ratio to base; `--json` has it as
+`each.table`. Read that rather than writing a script to group the runs'
+output. Each run's command gets `HUNK_PATCH` and `HUNK_ROUND`, so one command
+can keep every run's output: `bench > "/tmp/b/$(basename
 "$HUNK_PATCH").$HUNK_ROUND"`. Do not loop `--try` per patch instead: that
 validates nothing up front and lets the tree go between runs.
 

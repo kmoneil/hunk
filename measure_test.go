@@ -787,14 +787,22 @@ func TestMeasureReportGoldens(t *testing.T) {
 			run("base", 2, 2, 0, bench("2897")...), run("v1.hunk", 2, 2, 0, bench("2611")...),
 			run("v2.hunk", 2, 2, 1, "--- FAIL: TestParse (0.00s)", "FAIL"),
 		}
-		got, code := stream(cfg(2), runs, eachOutcome{tried: 6, zeros: 4, stopAt: -1, seconds: 18.6})
+		// The closing table (#163), as eachRun makes it: each run read, and
+		// v2's one number, a test's time, a row only it has.
+		c := cfg(2)
+		for i, ep := range runs {
+			ep.side = i % 3
+			ep.measured(40)
+		}
+		c.table = measureTableOf(runs, 3)
+		got, code := stream(c, runs, eachOutcome{tried: 6, zeros: 4, stopAt: -1, seconds: 18.6})
 		if code != exitOK {
 			t.Fatalf("exit %d", code)
 		}
 		golden(t, "report-each-measure", got)
 
 		var out, errOut bytes.Buffer
-		if code := eachJSON(cfg(2), runs, eachBaselines{}, exitOK, "", &out, &errOut); code != exitOK {
+		if code := eachJSON(c, runs, eachBaselines{}, exitOK, "", &out, &errOut); code != exitOK {
 			t.Fatalf("exit %d: %s", code, errOut.String())
 		}
 		golden(t, "report-each-measure-json", out.String())
