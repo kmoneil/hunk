@@ -5,9 +5,9 @@ import (
 	"io"
 	"math"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -137,7 +137,7 @@ func readNumber(field string) (number, bool) {
 		return number{}, false
 	}
 	for _, r := range n.unit {
-		if !unicode.IsLetter(r) && r != '%' && r != '/' {
+		if !unitRune(r) {
 			return number{}, false
 		}
 	}
@@ -191,6 +191,14 @@ func numberEnd(s string) int {
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
+// unitRune reports whether r can be part of a unit: an ASCII letter, %, /,
+// or a micro sign, as the micro sign (U+00B5) or as Greek mu (U+03BC), both
+// of which benches print for microseconds. A unit in another script is not
+// one a bench prints.
+func unitRune(r rune) bool {
+	return r < utf8.RuneSelf && (isASCIILetter(byte(r)) || r == '%' || r == '/') || r == 0xB5 || r == 0x3BC
+}
+
 // measureTable is the table: its sides' names, base first, and its rows.
 type measureTable struct {
 	sides []string
@@ -241,18 +249,20 @@ func measureTableOf(runs []*eachPatch, perRound int) *measureTable {
 			r.samples[ep.side] = append(r.samples[ep.side], f)
 		}
 	}
-	slices.SortStableFunc(t.rows, func(a, b *measureRow) int {
-		return boolRank(!a.everywhere()) - boolRank(!b.everywhere())
-	})
+	// Two passes rather than a sort: slices' generic sorts were 18 KB of the
+	// binary, which is past its size budget.
+	var apart []*measureRow
+	every := t.rows[:0:0]
+	for _, r := range t.rows {
+		if r.everywhere() {
+			every = append(every, r)
+		} else {
+			apart = append(apart, r)
+		}
+	}
+	t.rows = append(every, apart...)
 	settleLabels(t.rows)
 	return t
-}
-
-func boolRank(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // settleLabels makes each row's label its own: a clash gets each row's
@@ -284,15 +294,9 @@ func settleLabels(rows []*measureRow) {
 // middle and the mean of the two where there are two, with a decimal place
 // more than the finer of them where the mean needs it.
 func median(samples []figure) (float64, string) {
-	s := slices.SortedFunc(slices.Values(samples), func(a, b figure) int {
-		switch {
-		case a.value < b.value:
-			return -1
-		case a.value > b.value:
-			return 1
-		}
-		return 0
-	})
+	// sort.Slice, which the binary has already, not a generic sort (above).
+	s := slices.Clone(samples)
+	sort.Slice(s, func(i, j int) bool { return s[i].value < s[j].value })
 	mid := len(s) / 2
 	if len(s)%2 == 1 {
 		return s[mid].value, s[mid].text
