@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -185,6 +186,9 @@ type Tree struct {
 	// copyOf is the tree this one is a copy of, made by --isolated (#130), and
 	// nil for any other. The copy answers for it: see Shown and Resolve.
 	copyOf *Tree
+	// stamps is the whole second, in Unix time, that writeAtomic last dated
+	// each name in this run (#162). See stamp.
+	stamps map[string]int64
 }
 
 // OpenTree opens root for confined access. The root is resolved once, because
@@ -1337,6 +1341,11 @@ func (t *Tree) writeAtomic(tg Target, data []byte, open fs.FileMode, mode *fs.Fi
 	if err = fsync(f); err != nil {
 		return err
 	}
+	written, err := fstat(f)
+	if err != nil {
+		return err
+	}
+	mtime, moved := t.stamp(tg.name, written.ModTime(), like)
 	if mode != nil {
 		if err = fchmod(f, keepOwner(f, like, *mode)); err != nil {
 			return err
@@ -1345,20 +1354,84 @@ func (t *Tree) writeAtomic(tg Target, data []byte, open fs.FileMode, mode *fs.Fi
 	if err = fclose(f); err != nil {
 		return err
 	}
+	if moved {
+		if err = chtimes(t, tmp, mtime); err != nil {
+			return err
+		}
+	}
 	return t.rename(tmp, tg.name)
 }
 
-// writeAtomic's four steps on the temp file, as variables so a test can refuse
-// each, as fchown is below. A write, an fsync, a chmod or a close that fails
-// (a full disk, an I/O error) is not something a test can arrange on a real
-// filesystem, and until 2026-11-05 no test reached any of the four returns:
-// "return nil" in place of "return err" after the fsync passed the linter and
-// the suite, and a commit whose fsync failed would have reported success.
+// stamp is the time to date a file written at name whose temp file the
+// filesystem dated at: at itself, unless its whole second is not past every
+// earlier version's, and then the start of the first second that is. moved
+// says which. Decided 2026-11-10 from issue #162.
+//
+// Python takes a .pyc for current while the source's whole-second mtime and
+// size are the ones it compiled, and other caches trust a file's stat the same
+// way. A --try or --each that put a file back, or a rollback after a failed
+// verify, within the second the patch was written left a same-size file that
+// Python ran the patch's bytecode for, from a tree whose bytes were the
+// original: the after-run failed with no patch applied, and under --each a
+// patch could be scored by another one's bytecode.
+//
+// The earlier versions are the file at the name now, which is the one being
+// replaced, a formatter's rewrite included; like, the file as load read it,
+// which is all a delete's restore has; and the version this Tree dated the
+// name last, which is all a create rolled back and made again has. Past every
+// one, not merely apart from each: a run knows no version older than the file
+// it finds, and a .pyc can be older than that, so a second only apart could be
+// the .pyc's. Each version past the one before is past them all.
+//
+// The date never goes below at, so whatever a build made from the file
+// replaced stays older than it, and goes past the clock only when writes to
+// one file come faster than one a second, by up to a second for each, or when
+// the file was already dated ahead of it.
+func (t *Tree) stamp(name string, at time.Time, like fs.FileInfo) (time.Time, bool) {
+	s := at.Unix()
+	if last, ok := t.stamps[name]; ok {
+		s = max(s, last+1)
+	}
+	if like != nil {
+		s = max(s, like.ModTime().Unix()+1)
+	}
+	if fi, err := t.lstat(name); err == nil {
+		s = max(s, fi.ModTime().Unix()+1)
+	}
+	if t.stamps == nil {
+		t.stamps = map[string]int64{}
+	}
+	t.stamps[name] = s
+	if s == at.Unix() {
+		return at, false
+	}
+	return time.Unix(s, 0), true
+}
+
+// chtimes dates a file, leaving its access time. writeAtomic calls it through
+// the variable below, so a test can refuse it.
+func (t *Tree) chtimes(name string, mtime time.Time) error {
+	if t.r == nil {
+		return os.Chtimes(name, time.Time{}, mtime)
+	}
+	return t.r.Chtimes(name, time.Time{}, mtime)
+}
+
+// writeAtomic's steps on the temp file, as variables so a test can refuse
+// each, as fchown is below. A write, an fsync, a stat, a chmod, a close or a
+// date that fails (a full disk, an I/O error) is not something a test can
+// arrange on a real filesystem, and until 2026-11-05 no test reached any of
+// the returns: "return nil" in place of "return err" after the fsync passed
+// the linter and the suite, and a commit whose fsync failed would have
+// reported success. fstat is also how a test says when the temp file was
+// written, which a real clock will not hold still for.
 var (
-	fwrite = (*os.File).Write
-	fsync  = (*os.File).Sync
-	fchmod = (*os.File).Chmod
-	fclose = (*os.File).Close
+	fwrite  = (*os.File).Write
+	fsync   = (*os.File).Sync
+	fstat   = (*os.File).Stat
+	fchmod  = (*os.File).Chmod
+	fclose  = (*os.File).Close
+	chtimes = (*Tree).chtimes
 )
 
 // fchown is (*os.File).Chown, as a variable so a test can refuse it. keepOwner's

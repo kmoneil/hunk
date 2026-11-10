@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// refuseStep makes one of writeAtomic's four steps fail, as a full disk or an
+// refuseStep makes one of writeAtomic's five steps fail, as a full disk or an
 // I/O error would, while the nth file is written, and passes every other call
 // through: commit puts back the files before it through the same steps, and a
 // seam that refused those too would test a different report. A file's write is
@@ -22,8 +22,8 @@ import (
 // refused step was given, so a test can check it was closed.
 func refuseStep(t *testing.T, step string, n int) **os.File {
 	t.Helper()
-	w, s, m, c := fwrite, fsync, fchmod, fclose
-	t.Cleanup(func() { fwrite, fsync, fchmod, fclose = w, s, m, c })
+	w, s, st, m, c := fwrite, fsync, fstat, fchmod, fclose
+	t.Cleanup(func() { fwrite, fsync, fstat, fchmod, fclose = w, s, st, m, c })
 	refused := new(*os.File)
 	writes := 0
 	hit := func(op string, f *os.File) error {
@@ -47,6 +47,12 @@ func refuseStep(t *testing.T, step string, n int) **os.File {
 		}
 		return s(f)
 	}
+	fstat = func(f *os.File) (fs.FileInfo, error) {
+		if err := hit("stat", f); err != nil {
+			return nil, err
+		}
+		return st(f)
+	}
 	fchmod = func(f *os.File, mode fs.FileMode) error {
 		if err := hit("chmod", f); err != nil {
 			return err
@@ -63,11 +69,12 @@ func refuseStep(t *testing.T, step string, n int) **os.File {
 	return refused
 }
 
-// A commit that fails at any of the four steps before the rename puts back
+// A commit that fails at any of the five steps before the rename puts back
 // what it wrote and is exit 5, naming the file and the cause, with no temp file
 // left in the tree and none left open. TestACommitThatFailsPutsBackWhatItWrote
-// fails it at the rename. Until 2026-11-05 no test reached these four returns,
-// and "return nil" in place of "return err" after the fsync passed the suite.
+// fails it at the rename. Until 2026-11-05 no test reached the four returns
+// there were then, and "return nil" in place of "return err" after the fsync
+// passed the suite. The stat came with #162.
 func TestACommitThatFailsAtAStepPutsBackWhatItWrote(t *testing.T) {
 	const (
 		modify   = "@@ file keep.txt\n@@ old\nkeep\n@@ new\nKEEP\n"
@@ -78,8 +85,8 @@ func TestACommitThatFailsAtAStepPutsBackWhatItWrote(t *testing.T) {
 		one      = "the file written before it was put back, so nothing was written"
 		twoFiles = "the 2 files written before it were put back, so nothing was written"
 	)
-	all := []string{"write", "sync", "chmod", "close"}
-	noChmod := []string{"write", "sync", "close"} // a create keeps what the open gave it
+	all := []string{"write", "sync", "stat", "chmod", "close"}
+	noChmod := []string{"write", "sync", "stat", "close"} // a create keeps what the open gave it
 	for _, c := range []struct {
 		name, patch string
 		n           int    // the file that fails, counting the files written
