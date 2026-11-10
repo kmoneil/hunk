@@ -1132,10 +1132,7 @@ func RunVerify(command, root string, tailLines int, stop Stop, env ...string) (*
 		lines = nil
 	}
 	v.TotalLines = len(lines)
-	if tailLines > 0 && len(lines) > tailLines {
-		lines = lines[len(lines)-tailLines:]
-	}
-	v.Tail = lines
+	v.Tail = tailOf(lines, tailLines)
 	return v, nil
 }
 

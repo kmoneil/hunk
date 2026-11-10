@@ -752,8 +752,33 @@ lines of its output under it, and with more than one round, its round:
 tried base     round 1  the command exited 0 (3.1s)
 tried v1.hunk  round 1  the command exited 0 (3.4s)
 ...
+                         base    v1.hunk         v2.hunk
+BenchmarkParse-10        412345  412345   1.00x  398120   0.97x
+BenchmarkParse-10 ns/op  2904    2607.5   0.90x  3011     1.04x
+ok example.com/parse s   3.012   3.012    1.00x  3.105    1.03x
 tried base and 2 patches in 3 rounds and put back every file; every command exited 0 (29.6s)
 ```
+
+The table before the last line is the numbers the runs printed: a row for each
+number of each kind of line, a column for base and each patch, each cell the
+median across the rounds, the mean of the middle two for an even count, and
+after each patch's cell its ratio to base. A line's kind is the line with its
+numbers taken out and its spacing made even, so every printing of it, in
+every round and as often as one run prints it (`-count 5`), is a sample of its
+rows. A number is a field of digits, with a sign, a point and an exponent
+where it has them, and a unit of letters, `%` and `/` alone stuck to it
+(`3.4s`, `35ns`); a bracket or quote around it, a `key=` before it and a comma
+or colon after it are let through, but a number in a word (`arm64`,
+`BenchmarkParse-10`) or with more after it (`1.2.3`, `2026-11-10`, `0x1f`) is
+text, and a unit that changes between runs (`980ns`, then `1.02µs`) makes two
+kinds of line. A row is named as benchstat names one: the text before its
+line's first number, then the number's own word, its unit, its key or the
+field after it; rows that would share a name take the number's place in its
+line, `(2)`. Every line a run printed is read, not only the tail shown, and a
+run that timed out is left out. A row that not every side printed comes after
+the rest, with `-` in the cells it has no sample for, and a ratio is `-` where
+base's median is 0. A run that stopped prints no table, and neither does
+`--quiet` on success.
 
 No status is a catch. The run with no patch applied is an entry rather than a
 gate, nothing runs again after the last patch, and a command piped into `tail`
@@ -771,7 +796,11 @@ keep each run's whole output, outside the tree, which `--isolated` removes:
 `base` is refused under `--measure`; give it as `./base`. In `--json`,
 `each.measure` is true, `each.rounds` is N, and once the runs begin
 `each.patches` has an entry per run, in the order they ran, each with its
-`round`, and `base: true` on the runs with no patch.
+`round`, and `base: true` on the runs with no patch. Once every run has run,
+`each.table` is the table: its `sides`, base first, and its `rows`, each with
+its `label`, its `line` with the numbers taken out, the `number`'s place in
+that line, and per side a `medians`, a `ratios` and a `samples` entry, `null`
+where the side has none and for base's ratio.
 
 ### Trying in a copy: `--isolated`
 

@@ -78,6 +78,95 @@
         ],
         "rolled_back": 1
       }
-    ]
+    ],
+    "table": {
+      "sides": [
+        "base",
+        "v1.hunk",
+        "v2.hunk"
+      ],
+      "rows": [
+        {
+          "label": "BenchmarkParse-10",
+          "line": "BenchmarkParse-10 # # ns/op",
+          "number": 1,
+          "medians": [
+            412345,
+            412345,
+            null
+          ],
+          "ratios": [
+            null,
+            1,
+            null
+          ],
+          "samples": [
+            2,
+            2,
+            0
+          ]
+        },
+        {
+          "label": "BenchmarkParse-10 ns/op",
+          "line": "BenchmarkParse-10 # # ns/op",
+          "number": 2,
+          "medians": [
+            2904,
+            2607.5,
+            null
+          ],
+          "ratios": [
+            null,
+            0.8978994490358126,
+            null
+          ],
+          "samples": [
+            2,
+            2,
+            0
+          ]
+        },
+        {
+          "label": "ok example.com/parse s",
+          "line": "ok example.com/parse #s",
+          "number": 1,
+          "medians": [
+            3.012,
+            3.012,
+            null
+          ],
+          "ratios": [
+            null,
+            1,
+            null
+          ],
+          "samples": [
+            2,
+            2,
+            0
+          ]
+        },
+        {
+          "label": "--- FAIL: TestParse s",
+          "line": "--- FAIL: TestParse (#s)",
+          "number": 1,
+          "medians": [
+            null,
+            null,
+            0
+          ],
+          "ratios": [
+            null,
+            null,
+            null
+          ],
+          "samples": [
+            0,
+            0,
+            2
+          ]
+        }
+      ]
+    }
   }
 }

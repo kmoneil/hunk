@@ -975,6 +975,8 @@ type jsonEach struct {
 	BaselineAfter    *jsonEachRun    `json:"baseline_after,omitempty"`
 	TryBaselineAfter *jsonEachRun    `json:"try_baseline_after,omitempty"`
 	Patches          []jsonEachPatch `json:"patches"`
+	// Table is a --measure run's closing table (#163), when every run ran.
+	Table *jsonMeasureTable `json:"table,omitempty"`
 }
 
 // jsonEachRun is one --build run, or the command's run on the tree as it is.
