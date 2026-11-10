@@ -1,0 +1,6 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  a.txt  (patch line 2)
+  expected 1 match, found 0
+
+  the pattern matches nowhere in the file

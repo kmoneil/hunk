@@ -1257,6 +1257,11 @@ func TestDirectives(t *testing.T) {
 			[]string{"create", "delete"},
 		},
 		{
+			"a regex hunk (#161)",
+			"hunk <<'H'\n@@ file a.go\n@@ re x3\n\\boldName\\((\\w+)\\)\n@@ new\nnewName($1, ctx)\nH",
+			[]string{"file", "re", "new"},
+		},
+		{
 			"--marker moves the prefix, and the @@ lines under it are payload",
 			"hunk --marker '%%' <<'H'\n%% file doc.md\n%% old\n@@ create x.go\n%% new\n@@ delete x.go\nH",
 			[]string{"file", "old", "new"},

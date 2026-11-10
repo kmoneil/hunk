@@ -1,0 +1,11 @@
+hunk: 1 of 2 hunks did not match; nothing was written
+
+hunk 2  a.txt  (patch line 7)
+  expected 2 matches, found 1
+
+      2 | b
+        | ^
+
+  change the pattern, or say "@@ re x1"
+  line numbers count against the file as the hunk before this one would have left it,
+  not as it is on disk: nothing was written.

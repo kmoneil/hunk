@@ -29,6 +29,19 @@ import "bytes"
 // 207,002 copies on one 220 KB line took 11 seconds on a laptop, and on a CI
 // runner more than the 60 the fuzzer allows one input.
 func replaceCounts(cur, old, repl []byte, n int) (added, removed int) {
+	changes := make([]change, 0, n)
+	for at := 0; len(changes) < n; {
+		p := at + bytes.Index(cur[at:], old)
+		at = p + len(old)
+		changes = append(changes, change{at: p, end: at, repl: repl})
+	}
+	return changeCounts(cur, changes)
+}
+
+// changeCounts is replaceCounts for any changes in order and not overlapping,
+// each its own text and its own replacement, which an @@ re hunk's matches
+// are (#161). A match of nothing is on the line that holds it.
+func changeCounts(cur []byte, changes []change) (added, removed int) {
 	start, stop, at := 0, 0, 0 // the region open in cur, and where the last match ended
 	var after []byte
 	flush := func() {
@@ -39,7 +52,6 @@ func replaceCounts(cur, old, repl []byte, n int) (added, removed int) {
 	// lineAt is where the line holding at starts, and nl the first newline
 	// at or past where one was last looked for, or len(cur) if there is none.
 	lineAt, nl := 0, -1
-	oldNL := bytes.LastIndexByte(old, '\n')
 	lineEnd := func(end int) int { // past the newline ending end's line, or len(cur)
 		if nl < end {
 			nl = len(cur)
@@ -49,19 +61,18 @@ func replaceCounts(cur, old, repl []byte, n int) (added, removed int) {
 		}
 		return min(nl+1, len(cur))
 	}
-	for k := range n {
-		p := at + bytes.Index(cur[at:], old)
-		end := p + len(old)
+	for k, c := range changes {
+		p, end, repl := c.at, c.end, c.repl
 		ls := lineAt
 		if i := bytes.LastIndexByte(cur[at:p], '\n'); i >= 0 {
 			ls = at + i + 1
 		}
 		lineAt = ls
-		if oldNL >= 0 {
-			lineAt = p + oldNL + 1
+		if i := bytes.LastIndexByte(cur[p:end], '\n'); i >= 0 {
+			lineAt = p + i + 1
 		}
 		le := end
-		if cur[end-1] != '\n' {
+		if end == 0 || cur[end-1] != '\n' {
 			le = lineEnd(end)
 		}
 		if k > 0 && ls < stop {

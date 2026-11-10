@@ -1,0 +1,28 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  a.txt  (patch line 2)
+  expected 1 match, found 12
+
+      1 | ab
+        |  ^
+      2 | ab
+        |  ^
+      3 | ab
+        |  ^
+      4 | ab
+        |  ^
+      5 | ab
+        |  ^
+      6 | ab
+        |  ^
+      7 | ab
+        |  ^
+      8 | ab
+        |  ^
+      9 | ab
+        |  ^
+     10 | ab
+        |  ^
+  and 2 more
+
+  change the pattern, or say "@@ re x12"

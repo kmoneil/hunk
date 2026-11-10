@@ -599,8 +599,12 @@ func TestParserHasNoFileAccess(t *testing.T) {
 	// unicode/utf8 joined on 2026-10-06, to tell a lone C1 byte from a byte of
 	// another character; it decodes bytes in memory and opens nothing. So
 	// does unicode, which joined on 2026-10-18 to know a no-break space for a
-	// space (#96): it is tables.
-	allowed := map[string]bool{"bytes": true, "fmt": true, "strconv": true, "strings": true, "unicode": true, "unicode/utf8": true}
+	// space (#96): it is tables. regexp joined on 2026-11-10, to compile an
+	// @@ re hunk's pattern as it is parsed (#161): it matches in memory.
+	allowed := map[string]bool{
+		"bytes": true, "fmt": true, "regexp": true, "strconv": true, "strings": true,
+		"unicode": true, "unicode/utf8": true,
+	}
 	for _, im := range f.Imports {
 		path, err := strconv.Unquote(im.Path.Value)
 		if err != nil {
@@ -801,7 +805,7 @@ func FuzzParse(f *testing.F) {
 func TestOpString(t *testing.T) {
 	for op, want := range map[Op]string{
 		OpReplace: "replace", OpCreate: "create", OpAppend: "append",
-		OpPrepend: "prepend", OpDelete: "delete",
+		OpPrepend: "prepend", OpDelete: "delete", OpRegex: "re",
 	} {
 		if got := op.String(); got != want {
 			t.Errorf("Op(%d).String() = %q, want %q", uint8(op), got, want)

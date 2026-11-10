@@ -1,0 +1,17 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 1,
+      "path": "a.txt",
+      "patch_line": 2,
+      "expected": 3,
+      "found": 2,
+      "lines": [
+        1,
+        1
+      ]
+    }
+  ]
+}

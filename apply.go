@@ -85,6 +85,8 @@ type Failure struct {
 	PatchLine int    // §5.2 prints "(patch line 9)"
 	Expected  int    // occurrences the hunk claimed
 	Found     int    // occurrences actually present
+	// Matches says Expected and Found count an @@ re hunk's matches (#161).
+	Matches bool
 
 	// SkippedAfter is the hunk that failed first against this file. Non-zero
 	// means this hunk was never evaluated, and Expected and Found are unset.
@@ -552,6 +554,13 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			failures = append(failures, Failure{
 				Hunk: n, Path: h.Path, PatchLine: h.Line, SkippedAfter: f.failedAt,
 			})
+			continue
+		}
+		if h.Op == OpRegex {
+			if fail := x.validateRegex(n, h, f, &diagnosed); fail != nil {
+				f.failedAt = n
+				failures = append(failures, *fail)
+			}
 			continue
 		}
 		if h.Op != OpReplace {

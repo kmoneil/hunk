@@ -10,6 +10,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -37,6 +38,7 @@ const (
 	OpAppend
 	OpPrepend
 	OpDelete
+	OpRegex // @@ re (#161)
 )
 
 func (o Op) String() string {
@@ -51,6 +53,8 @@ func (o Op) String() string {
 		return "prepend"
 	case OpDelete:
 		return "delete"
+	case OpRegex:
+		return "re"
 	}
 	return fmt.Sprintf("Op(%d)", uint8(o))
 }
@@ -66,10 +70,13 @@ type Hunk struct {
 	Path string
 	Line int
 
-	// OpReplace only.
+	// OpReplace, and OpRegex, whose Old is its pattern and New the template
+	// each match's expansion is made from.
 	Count int // expected occurrences, at least 1 (§3.4)
 	Old   []byte
 	New   []byte
+	// Re is an OpRegex's pattern as the patch wrote it, compiled.
+	Re *regexp.Regexp
 
 	// OpCreate, OpAppend, OpPrepend.
 	Body []byte
@@ -172,7 +179,7 @@ func quoteCut(s string) string {
 var directiveWords = map[string]bool{
 	"file": true, "old": true, "new": true, "create": true,
 	"delete": true, "append": true, "prepend": true, "patch": true,
-	"end": true,
+	"end": true, "re": true,
 }
 
 // directive reports whether line is a directive, and if so its keyword and the
@@ -524,13 +531,14 @@ func collectPayload(lines [][]byte, i int, marker string) ([]byte, int) {
 // Bare means exactly one, "x3" means exactly three and replaces all three.
 // There is no "one or more" and no "zero or more": if the agent does not know
 // the count, that is the thing the tool is here to refuse.
-func parseCount(arg string, line int, marker string) (int, error) {
+func parseCount(arg string, line int, marker, word string) (int, error) {
 	if arg == "" {
 		return 1, nil
 	}
+	dir := marker + " " + word
 	bad := &ParseError{line, fmt.Sprintf(
 		"%q is not an occurrence count; write %q for exactly one occurrence or %q for exactly three",
-		arg, marker+" old", marker+" old x3")}
+		arg, dir, dir+" x3")}
 
 	digits, isX := strings.CutPrefix(arg, "x")
 	if !isX || digits == "" {
@@ -548,7 +556,7 @@ func parseCount(arg string, line int, marker string) (int, error) {
 	if n == 0 {
 		return 0, &ParseError{line, fmt.Sprintf(
 			"%q asks for exactly zero occurrences, which asserts that text is absent rather than editing it; hunk has no way to express that",
-			marker+" old x0")}
+			dir+" x0")}
 	}
 	return n, nil
 }
@@ -617,7 +625,7 @@ loop:
 		word, arg, ok := directive(lines[i], marker)
 		if !ok {
 			return nil, notADirective{&ParseError{ln, fmt.Sprintf(
-				"expected a directive, found %s; a directive is %q at column 0, then a space or tab, then one of file old new create delete append prepend patch end",
+				"expected a directive, found %s; a directive is %q at column 0, then a space or tab, then one of file old re new create delete append prepend patch end",
 				shownLine(lines[i]), marker)}}
 		}
 		i++
@@ -681,7 +689,7 @@ loop:
 					"no file is in effect; put %q before this",
 					marker+" file <path>")}
 			}
-			count, err := parseCount(arg, ln, marker)
+			count, err := parseCount(arg, ln, marker, "old")
 			if err != nil {
 				return nil, err
 			}
@@ -761,6 +769,14 @@ loop:
 				Count: count, Old: old, New: replacement,
 			})
 
+		case "re":
+			h, next, err := p.parseRegex(lines, i, ln, cur, arg, marker)
+			if err != nil {
+				return nil, err
+			}
+			i = next
+			p.Hunks = append(p.Hunks, h)
+
 		case "new":
 			return nil, &ParseError{ln, fmt.Sprintf(
 				"%q with no %q before it; if the line is payload text, %s",
@@ -837,10 +853,11 @@ context markers anywhere in it. You paste the exact text you want replaced.
 GRAMMAR
 
   patch     := directive+ ["@@ end"]
-  directive := file | replace | create | append | prepend | delete
+  directive := file | replace | regex | create | append | prepend | delete
 
   file      := "@@ file " path
   replace   := "@@ old" [" x" N] payload "@@ new" payload
+  regex     := "@@ re" [" x" N] payload "@@ new" payload
   create    := "@@ create " path payload
   append    := "@@ append " path payload
   prepend   := "@@ prepend " path payload
@@ -848,7 +865,7 @@ GRAMMAR
 
 A line is a directive only when all three of these hold: it starts with "@@" at
 column 0, the next character is a space or tab, and the first word after that
-is one of file old new create delete append prepend patch end. Every other
+is one of file old re new create delete append prepend patch end. Every other
 line is payload. So a Markdown file full of "@@" passes through untouched, and
 so does a unified diff pasted into a payload, whose "@@ -1,3 +1,4 @@" fails
 the third test. If a payload really does contain a line like "@@ old",
@@ -904,6 +921,30 @@ would split a CRLF: one that begins on its newline, or ends on its carriage
 return, when new does not do the same. And so is one whose replacement would
 put a carriage return just before a newline, which would read as a CRLF line
 ending the patch did not write.
+
+REGEX
+
+"@@ re" is "@@ old" with a pattern for its old text, in Go's regexp syntax
+(RE2), which no pattern can make hang:
+
+  @@ file src/a.go
+  @@ re x3
+  \boldName\((\w+)\)
+  @@ new
+  newName($1, ctx)
+
+Its count is of the pattern's matches, leftmost first and never overlapping:
+exactly as many as claimed, or the batch is refused, and the refusal lists
+each match with carets under it. Each match is replaced by the new text with
+$1 or ${1} for a group by number, $name or ${name} for a named group, and $$
+for a "$"; a reference to a group the pattern does not have is refused, exit
+1, since it would put nothing in its place. The pattern is a payload like any
+other: it gains no trailing newline, so a blank line before "@@ new" puts a
+line break at its end, and under --eol auto a line break typed in it stands
+for the file's line ending. "." matches a carriage return, so in a CRLF file
+end a pattern before the line's end with [^\r\n]* rather than .*: a match that
+would split a CRLF is refused. hunk invert refuses an "@@ re"; --inverse-to
+writes its undo.
 
 PAYLOADS
 
