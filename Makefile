@@ -18,7 +18,10 @@ GOVULNCHECK_VERSION    := v1.6.0
 # A stdlib-only static binary that was 3,802,193 bytes when this was written.
 # The budget is not a target, it is a tripwire: an embed, a dependency or a
 # large table would move it and nothing else in the gate would notice.
-SIZE_BUDGET_BYTES := 4718592
+# Raised from 4,718,592 on 2026-11-10, when ordinary code had grown the binary
+# to within 3.9 KB of it (4,714,702 on CI) and the next two changes, about 15
+# KB and 80 KB of code and no embed, dependency or table, tripped it.
+SIZE_BUDGET_BYTES := 5242880
 
 # The toolchain `make fuzz` runs, which is not go.mod's. Every go1.26 release
 # has a fuzz coordinator that can fail a clean run on its own -fuzztime
