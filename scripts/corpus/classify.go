@@ -291,7 +291,7 @@ const hunkAnchor = `(?:^|[;&|(]|\n|\{\s)\s*` +
 var hunkDirectives = map[string]bool{
 	"file": true, "old": true, "new": true, "create": true,
 	"delete": true, "append": true, "prepend": true, "patch": true,
-	"end": true,
+	"end": true, "re": true,
 }
 
 // Exit categories that are not exit codes. Negative, so they cannot collide

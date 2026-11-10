@@ -235,6 +235,8 @@ func invertPatch(p *Patch, marker string) ([]Hunk, []noInverse) {
 			why = "an append is not inverted: it may also have ended the file's last line, and the line ending it added is the file's; the patch holds neither"
 		case OpPrepend:
 			why = "a prepend is not inverted: the line ending it may have added is the file's, under the --eol it was applied with; the patch holds neither"
+		case OpRegex:
+			why = "a regex replacement is not inverted: what each match was is in the file it was applied to, not in the patch; apply it with --inverse-to FILE to have the undo written"
 		case OpReplace:
 			// What an empty old would be, which the parser refuses: in a CRLF
 			// patch a blank line is a CR, which --eol auto reads as its

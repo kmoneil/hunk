@@ -119,12 +119,13 @@ anywhere**: no JSON strings, no backslash-n, no shell quoting of the text. That
 is the property that makes a heredoc work, and it is why an agent can emit a
 patch without a serialisation step that can itself be wrong.
 
-Seven directives:
+Eight directives:
 
 | directive | does |
 | --- | --- |
 | `@@ file PATH` | sets the target for the hunks that follow |
 | `@@ old` / `@@ new` | replace text. `@@ old x3` means exactly three occurrences, and replaces all three |
+| `@@ re` / `@@ new` | replace each match of a regular expression, `$1` in `@@ new` for its first group. `@@ re x3` means exactly three matches; see below |
 | `@@ create PATH` | create a file, with the payload as its contents, at mode 0644 less the umask |
 | `@@ delete PATH` | delete a file |
 | `@@ append PATH` | append the payload |
@@ -322,6 +323,59 @@ a file without one it adds the final newline, which is a reason to send it.
 
 `hunk format` prints the full grammar and a worked example that applies.
 
+## Replacing by pattern: `@@ re`
+
+When one change has to land on texts that differ, an `@@ old` for each is fine
+for three and not for forty, and `sed -i` exits 0 whether it matched nothing or
+twice the places meant. `@@ re` is `@@ old` with a regular expression for its
+old text, held to the same count:
+
+```
+@@ file src/a.go
+@@ re x3
+\boldName\((\w+)\)
+@@ new
+newName($1, ctx)
+```
+
+The pattern is Go's `regexp` syntax, RE2, which runs in time linear in the
+file, so no pattern can hang. Its matches are found leftmost first and never
+overlap, and there must be exactly as many as the count, one when none is
+given, or the batch is refused and nothing is written. A refusal lists each
+match under its line, with carets under what it took, so the pattern or the
+count can be fixed from the report:
+
+```
+hunk 1  src/a.go  (patch line 2)
+  expected 2 matches, found 3
+
+      4 | 	x := oldName(a)
+        | 	     ^^^^^^^^^^
+      5 | 	y := oldName(bb)
+        | 	     ^^^^^^^^^^^
+      6 | 	return oldName(c1)
+        | 	       ^^^^^^^^^^^
+
+  change the pattern, or say "@@ re x3"
+```
+
+Each match is replaced by `@@ new` with `$1` or `${1}` for a group by number,
+`$0` for the whole match, `$name` or `${name}` for a named group, and `$$` for a
+`$`. A reference to a group the pattern does not have is refused, exit 1,
+because it would put nothing in its place: `$HOME` in a shell script is
+written `$$HOME`, and `$1x`, which reads as a group named `1x`, is `${1}x`.
+
+The pattern is a payload under every rule above. It gains no trailing newline,
+so a blank line before `@@ new` puts a line break at its end, and under `--eol
+auto` a line break typed in the pattern or in `@@ new` stands for the file's
+line ending; `\n` written as an escape is the pattern's own and means a newline
+alone. `.` matches a carriage return, so in a CRLF file a pattern that runs to
+the end of a line is written `[^\r\n]*` rather than `.*`: a match that would
+part a CRLF's two bytes is refused, as an `@@ old` that would is. It is one
+transaction with every other hunk, `--verify` rolls it back, and
+`--inverse-to` writes its undo as literal hunks; `hunk invert` refuses it,
+since what each match was is in the file, not the patch.
+
 ## Replacing a whole block: `hunk quote`
 
 `@@ old` wants the text it replaces, and for a block of a hundred lines that
@@ -458,6 +512,8 @@ refused with exit 1, every such hunk named:
   it added is the file's.
 - `@@ prepend`: the line ending it may have added is the file's, under the
   `--eol` it was applied with.
+- `@@ re`: what each match was is in the file it was applied to, not in the
+  patch; `--inverse-to` writes its undo.
 - a replacement with an empty `@@ new`, which took text out: nothing is left in
   the file to find its place by.
 - a replacement whose `@@ old` has a line that is `@@` glued to a word that is

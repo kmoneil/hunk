@@ -1,0 +1,9 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  a.txt  (patch line 2)
+  expected 2 matches, found 1
+
+      1 | a
+        | ^ and on
+
+  change the pattern, or say "@@ re x1"

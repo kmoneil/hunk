@@ -1,0 +1,7 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  a.txt  (patch line 2)
+  expected 1 match, found 1, and replacing it would join a carriage return to a newline
+  at line 1
+
+  a replacement would put a carriage return just before a newline that did not follow it, which reads as a CRLF the patch did not write; take the carriage return out of the replacement, or pass --eol strict to edit the bytes as they are

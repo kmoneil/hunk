@@ -120,25 +120,64 @@ func (s noted) stands() bool {
 // one match can be the start of the next, which the fuzzer found, and then
 // no empty line is left.
 func (x *Txn) noteSlips(n int, h Hunk, f *file, old, repl, next []byte) {
-	cur := f.cur
-	oldNL, newNL := bytes.HasSuffix(old, lf), bytes.HasSuffix(repl, lf)
-	if len(repl) == 0 && !oldNL {
-		x.noteEmptied(n, h, f, old, next)
-		return
-	}
-	// An empty new with an old that ends in a newline is how lines are
-	// deleted (§3.3), and ends that agree are what was meant.
-	if oldNL == newNL || len(repl) == 0 {
-		return
-	}
-	first := len(x.slips)
-	at := 0
-	for k := range h.Count {
-		p := at + bytes.Index(cur[at:], old)
+	changes := make([]change, 0, h.Count)
+	for at := 0; len(changes) < h.Count; {
+		p := at + bytes.Index(f.cur[at:], old)
 		at = p + len(old)
-		// Where this replacement ends in next: each one before it moved it
-		// by the difference in length.
-		end := p + k*(len(repl)-len(old)) + len(repl)
+		changes = append(changes, change{at: p, end: at, repl: repl})
+	}
+	x.noteChangeSlips(n, h, f, changes, next)
+}
+
+// noteChangeSlips is noteSlips for any changes, each its own old and its own
+// replacement, which an @@ re hunk's matches are (#161). Each change is
+// judged on its own ends. A replacement with a newline at its end where its
+// old had none leaves an empty line when a line break follows it; one with
+// none where its old had one joins the next line on, or leaves the file with
+// no final newline. An empty replacement of an old that does not end in a
+// newline leaves an empty line where the old started a line and stopped
+// before its break (#150), counted once for replacements side by side on one
+// line, and quoting the line whose break stays, as it was before its text
+// went; one with no text, a CR alone before its LF that --eol strict took,
+// was empty already. An empty one of an old that ends in a newline is how
+// lines are deleted (§3.3), and ends that agree are what was meant.
+//
+// The k-th change starts in next where it started in f.cur, moved by the
+// difference in length of every change before it.
+func (x *Txn) noteChangeSlips(n int, h Hunk, f *file, changes []change, next []byte) {
+	cur := f.cur
+	first := len(x.slips)
+	note := func(kind SlipKind, text []byte) {
+		s := x.slipOf(first, kind)
+		if s == nil {
+			x.slips = append(x.slips, noted{Slip{
+				Kind: kind, Hunk: n, Line: h.Line, Path: h.Path, Of: h.Count, Text: text,
+			}, f})
+			s = &x.slips[len(x.slips)-1].Slip
+		}
+		s.Count++
+	}
+	d, last := 0, -1
+	for _, c := range changes {
+		old, repl := cur[c.at:c.end], c.repl
+		e := c.at + d
+		end := e + len(repl)
+		d += len(repl) - len(old)
+		oldNL, newNL := bytes.HasSuffix(old, lf), bytes.HasSuffix(repl, lf)
+		if len(repl) == 0 && !oldNL {
+			if len(old) == 0 || e == last || (e > 0 && next[e-1] != '\n') ||
+				!(bytes.HasPrefix(next[e:], lf) || bytes.HasPrefix(next[e:], crlf)) {
+				continue
+			}
+			last = e
+			if line := lineAt(cur, c.end-1); len(line) > 0 {
+				note(SlipEmptiedLine, line)
+			}
+			continue
+		}
+		if oldNL == newNL || len(repl) == 0 {
+			continue
+		}
 		var kind SlipKind
 		switch {
 		case newNL && (bytes.HasPrefix(next[end:], lf) || bytes.HasPrefix(next[end:], crlf)):
@@ -152,53 +191,7 @@ func (x *Txn) noteSlips(n int, h Hunk, f *file, old, repl, next []byte) {
 		default:
 			kind = SlipNoFinalNewline
 		}
-		s := x.slipOf(first, kind)
-		if s == nil {
-			x.slips = append(x.slips, noted{Slip{
-				Kind: kind, Hunk: n, Line: h.Line, Path: h.Path, Of: h.Count,
-				Text: lineAt(next, end-1),
-			}, f})
-			s = &x.slips[len(x.slips)-1].Slip
-		}
-		s.Count++
-	}
-}
-
-// noteEmptied records hunk n's replacements that leave an empty line (#150):
-// its new text is empty and its old text does not end in a newline, so where
-// the old text started a line and stopped before its break, the text goes and
-// the break stays. Each is judged in next, as noteSlips judges: the k-th
-// replacement is at p - k*len(old) there, p being its place in f.cur, and the
-// line is empty when a line starts there and a break follows. Replacements
-// side by side on one line leave one empty line, which counts once. The line
-// quoted is the one whose break stays, as it was before its text went; one
-// with no text, a CR alone before its LF that --eol strict took, was empty
-// already.
-func (x *Txn) noteEmptied(n int, h Hunk, f *file, old, next []byte) {
-	cur := f.cur
-	var s *Slip
-	at, last := 0, -1
-	for k := range h.Count {
-		p := at + bytes.Index(cur[at:], old)
-		at = p + len(old)
-		e := p - k*len(old)
-		if e == last || (e > 0 && next[e-1] != '\n') ||
-			!(bytes.HasPrefix(next[e:], lf) || bytes.HasPrefix(next[e:], crlf)) {
-			continue
-		}
-		last = e
-		line := lineAt(cur, at-1)
-		if len(line) == 0 {
-			continue
-		}
-		if s == nil {
-			x.slips = append(x.slips, noted{Slip{
-				Kind: SlipEmptiedLine, Hunk: n, Line: h.Line, Path: h.Path, Of: h.Count,
-				Text: line,
-			}, f})
-			s = &x.slips[len(x.slips)-1].Slip
-		}
-		s.Count++
+		note(kind, lineAt(next, end-1))
 	}
 }
 

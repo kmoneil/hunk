@@ -57,6 +57,9 @@ const (
 	// that did not follow it, which reads back as a CRLF line ending the
 	// patch did not write (#126).
 	DiagJoinedCRLF
+	// DiagMatches: an @@ re hunk's pattern matched other than the claimed
+	// number of times, none included (#161). Matched lists each match.
+	DiagMatches
 )
 
 // A Diagnosis explains why a hunk did not apply. It renders to both the text
@@ -130,6 +133,9 @@ type Diagnosis struct {
 	// the one on disk, and the report has to say so: nothing was written, so an
 	// agent that opens the file sees different numbers.
 	Shifted int
+
+	// Matched is each match an @@ re pattern made, capped, for DiagMatches.
+	Matched []matchLine
 }
 
 // tooManyLimit is §7.1's cap on listed match positions.
@@ -1379,6 +1385,9 @@ func (d *Diagnosis) Render(indent string) string {
 			fmt.Fprintf(&b, ", and %d more", d.MoreLines)
 		}
 		fmt.Fprintf(&b, "\n\n%s%s\n", indent, d.Detail)
+
+	case DiagMatches:
+		d.renderMatches(&b, indent)
 
 	case DiagSplitCRLF, DiagJoinedCRLF:
 		at := make([]string, len(d.Lines))

@@ -1,0 +1,13 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  a.txt  (patch line 2)
+  expected 2 matches, found 3
+
+      4 | 	x := oldName(a)
+        | 	     ^^^^^^^^^^
+      5 | 	y := oldName(bb)
+        | 	     ^^^^^^^^^^^
+      6 | 	return oldName(c1)
+        | 	       ^^^^^^^^^^^
+
+  change the pattern, or say "@@ re x3"

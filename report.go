@@ -403,7 +403,15 @@ func writeFailureBlocks(w io.Writer, failures []Failure) {
 			fmt.Fprintf(w, "  %s\n", f.Refusal)
 			continue
 		}
-		fmt.Fprintf(w, "  expected %s, found %d", count(f.Expected, "occurrence"), f.Found)
+		what := count(f.Expected, "occurrence")
+		switch {
+		// An @@ re hunk's count is of its pattern's matches (#161).
+		case f.Matches && f.Expected == 1:
+			what = "1 match"
+		case f.Matches:
+			what = fmt.Sprintf("%d matches", f.Expected)
+		}
+		fmt.Fprintf(w, "  expected %s, found %d", what, f.Found)
 		if f.Near == nil {
 			fmt.Fprintln(w)
 			continue
@@ -1167,7 +1175,7 @@ func jsonFailureOf(f Failure) jsonFailure {
 	}
 	if d := f.Near; d != nil {
 		switch d.Kind {
-		case DiagTooMany:
+		case DiagTooMany, DiagMatches:
 			jf.Lines, jf.Shifted = d.Lines, d.Shifted
 		case DiagOverlap, DiagMixedEndings, DiagSplitCRLF, DiagJoinedCRLF:
 			// The lines where copies are, as for too many, and the cause

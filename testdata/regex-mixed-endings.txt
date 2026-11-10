@@ -1,0 +1,7 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  a.txt  (patch line 2)
+  expected 1 match, found 2 across both line endings
+  at lines 4
+
+  the file has mixed line endings, and under --eol auto a line break in the pattern matches only its dominant one, so these matches were missed; write the line break as \r?\n, which matches either

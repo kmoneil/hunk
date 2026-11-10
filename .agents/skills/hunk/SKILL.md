@@ -134,15 +134,16 @@ a word that is no directive, `@@include lib.zig`, where a payload would write
 it: hunk has no such directive, and the line would land in the file as text.
 To take a payload from a file, use `hunk quote --new FILE`.
 
-## The five directives
+## The six directives
 
-`@@ old` / `@@ new` is the one you want most of the time. The other four exist,
+`@@ old` / `@@ new` is the one you want most of the time. The other five exist,
 and an agent that has not seen this list reaches for `Write` or a shell instead:
 
 | Directive | What it does |
 | --- | --- |
 | `@@ file PATH` | Sets the file the `@@ old` hunks under it apply to |
 | `@@ old` / `@@ new` | Replaces literal text, exactly as many times as claimed |
+| `@@ re` / `@@ new` | Replaces each match of a regular expression (Go's RE2), exactly as many as claimed; `$1` in `@@ new` is its first group |
 | `@@ create PATH` | Makes a file, payload is its whole content. Refuses if it exists |
 | `@@ delete PATH` | **Removes the whole file.** It is not a way to delete lines. Refuses a path that is a symlink; name the file it leads to |
 | `@@ append PATH` | Adds the payload at the end of the file |
@@ -391,7 +392,7 @@ its text taken out and then a `@@ delete`, which cannot see text added to the
 file since: that is deleted with it, so read the dry run. Under `--eol auto`
 the text goes back in the ending the file has most of by then, so a patch that
 took out a CRLF file's only line ending gets it back as LF. `@@ delete`,
-`@@ append`, `@@ prepend` and an empty `@@ new` have no inverse: the patch is
+`@@ append`, `@@ prepend`, `@@ re` and an empty `@@ new` have no inverse: the patch is
 refused at exit 1, each such hunk named, and the refusal is printed as an
 `@@ end` line that stops the `hunk` it is piped into.
 
@@ -421,6 +422,7 @@ mirror of the habit this replaces, and it costs the same thing: round trips.
 | Situation | Use |
 | --- | --- |
 | You are about to write `python3 - <<'PY'` that reads a file, replaces text and writes it back | `hunk`, always |
+| One change on texts that differ, a call whose argument varies at forty sites, where you would reach for `sed -i -E` | `@@ re x40` with `$1` in `@@ new`: `sed` exits 0 whether it matched nothing or twice the places meant, and this refuses any count but 40. Refusals list each match. `$` in `@@ new` that is text is `$$`, and in a CRLF file end the pattern with `[^\r\n]*`, not `.*` |
 | An edit that has to be **computed**: a block built from a list, a file split at an index | Python or the shell. `hunk` takes literal bytes in and literal bytes out, and has no expression language. Compute the patch if it helps, then pipe it in |
 | One literal edit repeated across files: a version bump, a year | `hunk`, with a loop that writes the patch (above) |
 | Replacing or deleting a whole block you know by its line numbers | `hunk quote`, piped into `hunk --dry-run` first (above) |
