@@ -294,14 +294,19 @@ func joinsEmptyLines(cur, next []byte, at, end, e int, repl []byte) (Slip, bool)
 }
 
 // firstTextLine is where the first line of b with anything in it but its
-// ending starts, or -1 when there is none.
+// ending starts, or -1 when there is none. It walks the lines by hand:
+// bytes.SplitAfterSeq is used nowhere else in the binary, and linking it in
+// cost 5 KB of the size budget, which three changes at once overran.
 func firstTextLine(b []byte) int {
-	off := 0
-	for l := range bytes.SplitAfterSeq(b, lf) {
-		if len(bytes.TrimSuffix(bytes.TrimSuffix(l, lf), cr)) > 0 {
+	for off := 0; off < len(b); {
+		end := len(b)
+		if i := bytes.IndexByte(b[off:], '\n'); i >= 0 {
+			end = off + i + 1
+		}
+		if len(bytes.TrimSuffix(bytes.TrimSuffix(b[off:end], lf), cr)) > 0 {
 			return off
 		}
-		off += len(l)
+		off = end
 	}
 	return -1
 }
