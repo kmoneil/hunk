@@ -183,6 +183,10 @@ FLAGS
                         which in a deliberate-break run means the suite missed
                         a break or hung on it, or a patch did not build under
                         --build. --timeout applies to each command separately.
+                        Each run's --build and command get HUNK_PATCH, the
+                        patch's name, or base for a run with no patch applied,
+                        and HUNK_ROUND, its round, 1 outside --measure, in
+                        their environment. A patch file named base is refused.
   --build CMD           With --try --each: run CMD once on the tree as it is,
                         then after each patch is applied and before the --try
                         command. A break that does not compile exits nonzero
@@ -200,15 +204,13 @@ FLAGS
                         and prints every run's --verify-lines tail under its
                         line. No status is a catch: the run with no patch is an
                         entry, not a gate, and a command piped into a filter is
-                        let through. Each run's --build and command get
-                        HUNK_PATCH, the patch's name or base, and HUNK_ROUND in
-                        their environment. The run ends with a table of the
-                        numbers its runs printed: a row for each number of each
-                        kind of line, named by the line's leading text and the
-                        number's unit, a column for base and each patch, each
-                        cell the median across the rounds, and each patch's
-                        ratio to base. The exit is 0 when every run ran to its
-                        end, 3 when one timed out or did not build.
+                        let through. The run ends with a table of the numbers
+                        its runs printed: a row for each number of each kind of
+                        line, named by the line's leading text and the number's
+                        unit, a column for base and each patch, each cell the
+                        median across the rounds, and each patch's ratio to
+                        base. The exit is 0 when every run ran to its end, 3
+                        when one timed out or did not build.
   --rounds N            With --measure: run base and the patches N times,
                         interleaved, so that drift falls on each alike. (1)
   --isolated            With --try: copy --root to a temporary directory once
@@ -489,11 +491,12 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 				return fail(exitUsage, fmt.Errorf("%s is listed twice", name), "")
 			}
 			seen[name] = true
-			// Under --measure the run with no patch applied is named base, on
-			// its lines, in --json and in HUNK_PATCH (#154), so a patch of
-			// that name would be two entries under one.
-			if *measure && name == measureBase {
-				return fail(exitUsage, fmt.Errorf("a patch file named %[1]s would read as --measure's run with no patch applied, which is named %[1]s; name it ./%[1]s", measureBase), "")
+			// The run with no patch applied is named base in HUNK_PATCH under
+			// every --each run (#168), and under --measure on its lines and in
+			// --json too (#154), so a patch of that name would be two runs
+			// under one.
+			if name == eachBase {
+				return fail(exitUsage, fmt.Errorf("a patch file named %[1]s would read as the run with no patch applied, which is named %[1]s; name it ./%[1]s", eachBase), "")
 			}
 		}
 	case fs.NArg() > 0:

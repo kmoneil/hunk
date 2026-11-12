@@ -529,7 +529,10 @@ last, keeping its own status as the exit: `--try 'zig build test > /tmp/out
 `--json` carries every patch's output either way. Do not pipe the command into
 `tail` instead: under `--each`, a command or `--build` whose last pipeline ends
 in one of `--verify`'s filters (below), or in a `grep -v`, is refused, exit 1,
-nothing tried.
+nothing tried. To keep each patch's whole output, write it to a file named by
+`HUNK_PATCH`, which every run's command and `--build` get (the patch's line
+name, or `base` with no patch applied), with `HUNK_ROUND`: `go test ./... >
+"/tmp/out/$(basename "$HUNK_PATCH").log" 2>&1`.
 
 **In a compiled language, add `--build CMD`.** A break that does not compile
 makes the test command exit nonzero, so `--each` alone scores it as caught: Zig
@@ -553,9 +556,9 @@ a row per number of each kind of line, named as benchstat names one
 (`BenchmarkParse-8 ns/op`), each cell the median across the rounds for base
 and each patch, and each patch's ratio to base; `--json` has it as
 `each.table`. Read that rather than writing a script to group the runs'
-output. Each run's command gets `HUNK_PATCH` and `HUNK_ROUND`, so one command
-can keep every run's output: `bench > "/tmp/b/$(basename
-"$HUNK_PATCH").$HUNK_ROUND"`. Do not loop `--try` per patch instead: that
+output. `HUNK_ROUND` counts the rounds, so one command can keep every run's
+output: `bench > "/tmp/b/$(basename "$HUNK_PATCH").$HUNK_ROUND"`. Do not loop
+`--try` per patch instead: that
 validates nothing up front and lets the tree go between runs.
 
 **When anything else reads the tree while you try, add `--isolated`.** `--try`

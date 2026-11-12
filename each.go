@@ -48,6 +48,12 @@ package main
 // run that fails there leaves every catch in doubt, and the exit is 3, as for
 // a break that passed.
 //
+// Every run's build and command get HUNK_PATCH and HUNK_ROUND in their
+// environment, from issue #168: the patch as its line names it, or base for a
+// run with no patch applied, and its round, which is 1 outside --measure. A
+// command that writes its output to a file named by them keeps what caught
+// each break, which a suite's last lines often do not say.
+//
 // A caught patch's output prints only when --verify-lines is given (#89): a
 // passing suite's forty lines under every catch would bury the misses, and
 // the caller who wants to know what caught each asks for the lines that say.
@@ -57,11 +63,9 @@ package main
 // every run's status and output is a result and none is a catch. The tree as
 // it is is an entry of the run, base, rather than a gate before it, and runs
 // first in each round; --rounds N repeats base and the patches N times,
-// interleaved, which is what evens out a machine's drift between them. Each
-// run's command and build get HUNK_PATCH and HUNK_ROUND in their environment,
-// so one command can name a file for each run's output. The exit is 0 when
-// every run ran to its end, and 3 when one timed out or did not build, since
-// a measurement is missing.
+// interleaved, which is what evens out a machine's drift between them, and
+// HUNK_ROUND counts them. The exit is 0 when every run ran to its end, and 3
+// when one timed out or did not build, since a measurement is missing.
 
 import (
 	"errors"
@@ -109,10 +113,11 @@ type eachConfig struct {
 	rounds  int // --rounds, 1 unless given
 }
 
-// measureBase is the name of a --measure run with no patch applied, on its
-// line, in --json and in HUNK_PATCH. A patch file of that name is refused
-// under --measure, so the name is never two entries'.
-const measureBase = "base"
+// eachBase is the name of a run with no patch applied: in HUNK_PATCH under
+// every --each run (#168), and under --measure on its line and in --json too
+// (#154). A patch file of that name is refused, so the name is never two
+// runs'.
+const eachBase = "base"
 
 // eachPatch is one patch of the run: the file as the caller spelled it, its
 // parsed form, and what happened to it.
@@ -145,15 +150,17 @@ type eachPatch struct {
 	figures []figure
 }
 
-// env is what a --measure run's build and command get in their environment
-// (#154): the entry's name and its round, so one command can name a file for
-// each run's output. Nil outside --measure.
+// env is what an --each run's build and command get in their environment: the
+// entry's name and its round, so one command can name a file for each run's
+// output (#154). Outside --measure, since #168, there is one round, and its
+// number is 1.
 func (ep *eachPatch) env() []string {
-	if ep.round == 0 {
-		return nil
-	}
-	return []string{"HUNK_PATCH=" + ep.name, "HUNK_ROUND=" + strconv.Itoa(ep.round)}
+	return []string{"HUNK_PATCH=" + ep.name, "HUNK_ROUND=" + strconv.Itoa(max(ep.round, 1))}
 }
+
+// baseEnv is env for a run on the tree as it is outside --measure, the one
+// before the first patch and the one after the last: base, round 1.
+var baseEnv = (&eachPatch{name: eachBase}).env()
 
 // inRound is name with the entry's round after it, under --measure with more
 // than one round, for the sentences that name an entry: "a.hunk in round 2".
@@ -177,7 +184,7 @@ func (ep *eachPatch) shown() string {
 func measureRuns(patches []*eachPatch, rounds int) []*eachPatch {
 	runs := make([]*eachPatch, 0, rounds*(len(patches)+1))
 	for r := 1; r <= rounds; r++ {
-		runs = append(runs, &eachPatch{name: measureBase, base: true, round: r, rounds: rounds})
+		runs = append(runs, &eachPatch{name: eachBase, base: true, round: r, rounds: rounds})
 		for i, ep := range patches {
 			run := &eachPatch{name: ep.name, p: ep.p, round: r, rounds: rounds, side: i + 1}
 			if r == 1 {
@@ -440,7 +447,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		// The build on the tree as it is, before any patch: one that fails
 		// here fails under every patch, and "did not build" would be true of
 		// each line and false about each patch.
-		b, err := runOnTheTree(cfg.build, cfg.verifyLines, cfg, tree, stop)
+		b, err := runOnTheTree(cfg.build, cfg.verifyLines, cfg, tree, stop, baseEnv...)
 		if err != nil {
 			return eachBaselineRefused(cfg, patches, bases, nil,
 				fmt.Sprintf("could not run the --build command: %v; nothing was tried", err), exitIO, stdout, stderr)
@@ -457,7 +464,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		// The command on the tree as it is, after the build's, which is the
 		// more precise refusal when the tree does not build: one that fails
 		// here, every patch would read as caught.
-		c, err := runOnTheTree(cfg.command, cfg.verifyLines, cfg, tree, stop)
+		c, err := runOnTheTree(cfg.command, cfg.verifyLines, cfg, tree, stop, baseEnv...)
 		if err != nil {
 			return eachBaselineRefused(cfg, patches, bases, nil,
 				fmt.Sprintf("could not run the --try command: %v; nothing was tried", err), exitIO, stdout, stderr)
@@ -693,7 +700,7 @@ func runBuild(cfg eachConfig, txn *Txn, tree *Tree, stop Stop, env ...string) (*
 // signal that ended either run, and the run that could not start.
 func eachAfter(cfg eachConfig, tree *Tree, stop Stop, bases *eachBaselines) (os.Signal, *afterCannotStart) {
 	if cfg.build != "" {
-		b, err := runOnTheTree(cfg.build, cfg.verifyLines, cfg, tree, stop)
+		b, err := runOnTheTree(cfg.build, cfg.verifyLines, cfg, tree, stop, baseEnv...)
 		if err != nil {
 			return nil, &afterCannotStart{who: "the --build command", err: err}
 		}
@@ -702,7 +709,7 @@ func eachAfter(cfg eachConfig, tree *Tree, stop Stop, bases *eachBaselines) (os.
 			return b.Signal, nil
 		}
 	}
-	c, err := runOnTheTree(cfg.command, cfg.verifyLines, cfg, tree, stop)
+	c, err := runOnTheTree(cfg.command, cfg.verifyLines, cfg, tree, stop, baseEnv...)
 	if err != nil {
 		return nil, &afterCannotStart{who: "the --try command", err: err}
 	}
