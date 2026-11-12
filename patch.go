@@ -987,7 +987,9 @@ A payload may be empty. "@@ new" followed immediately by another directive
 replaces the old text with nothing, which together with the blank-line rule
 deletes a line, newline included. Without the blank line under old, the
 line's text goes and its newline stays, an empty line, and a warning after
-the report names the hunk.
+the report names the hunk. A line with an empty line on each side, taken
+out, leaves the two touching, and a warning says so: a second blank line
+under old takes the one below with it.
 
 ORDER
 

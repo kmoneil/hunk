@@ -164,9 +164,12 @@ and an agent that has not seen this list reaches for `Write` or a shell instead:
 The blank line before `@@ new` is rule 1 below, and it is what carries the
 block's last newline out with it. Without it the text goes and that newline
 stays, an empty line where the block was: the batch applies, and a `warning:`
-names the hunk. `old` is still the exact bytes: `hunk` will not remove text it
-has not been shown, so if you no longer have what you inserted, read it back
-before you write the patch.
+names the hunk. A block with an empty line on each side, a function between
+two others, leaves the two touching: leave a second blank line under `old`
+so the one below goes with it, or the `warning:` says how many are in a row
+and what to take. `old` is still the exact bytes: `hunk` will not remove text
+it has not been shown, so if you no longer have what you inserted, read it
+back before you write the patch.
 
 ## The four rules that catch people
 
