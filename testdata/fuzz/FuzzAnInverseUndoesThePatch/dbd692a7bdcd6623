@@ -1,0 +1,7 @@
+go test fuzz v1
+[]byte("a\r\nv\r\nw\r\nx\r\ny0P\nQ\n")
+[]byte("a")
+[]byte("\nQ")
+[]byte("Q\r\nv\r\nw\r\nx\r\n")
+[]byte("\r\r\r\n")
+bool(false)

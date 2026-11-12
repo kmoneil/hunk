@@ -614,13 +614,18 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			continue
 		}
 		repl := x.convert(h.New, f.eol)
-		// Under --eol auto no copy is edited whose replacement would part a
-		// CRLF's two bytes (#122), or join a carriage return to a newline that
-		// did not follow it (#126). The diagnosis is attached past §7.2's cap
-		// as well: it prints no span to fill a context window, and without it
-		// the failure would read "expected 1 occurrence, found 1".
+		// Under --eol auto no copy is edited that old misreads, a CRLF line
+		// ending where old has a carriage return and a line break (#170), nor
+		// one whose replacement would part a CRLF's two bytes (#122), or join a
+		// carriage return to a newline that did not follow it (#126). Each
+		// diagnosis is attached past §7.2's cap as well: it prints no span to
+		// fill a context window, and without it the failure would read
+		// "expected 1 occurrence, found 1".
 		if x.opt.EOL != EOLStrict {
-			crlfFault := DiagnoseSplitCRLF(f.cur, old, repl, h.Count)
+			crlfFault := DiagnoseMisreadCRLF(f.cur, old, h.Count, f.eol)
+			if crlfFault == nil {
+				crlfFault = DiagnoseSplitCRLF(f.cur, old, repl, h.Count)
+			}
 			if crlfFault == nil {
 				crlfFault = DiagnoseJoinedCRLF(f.cur, old, repl, h.Count, f.eol)
 			}

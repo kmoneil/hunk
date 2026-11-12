@@ -1,0 +1,7 @@
+hunk: 1 hunk did not match; nothing was written
+
+hunk 1  f.txt  (patch line 2)
+  expected 1 occurrence, found 1, and old matched a CRLF line ending there as a carriage return and a newline
+  at line 1
+
+  old has a carriage return before a line break, and in this file a line break is a newline, so under --eol auto the two are the bytes of a CRLF line ending, and match one as if it were text; pass --eol strict to match old's bytes as they are

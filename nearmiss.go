@@ -57,6 +57,11 @@ const (
 	// that did not follow it, which reads back as a CRLF line ending the
 	// patch did not write (#126).
 	DiagJoinedCRLF
+	// DiagMisreadCRLF: under --eol auto, old occurs as many times as claimed,
+	// but in an LF file it has a carriage return before a line break, which
+	// converted are the bytes of a CRLF: each copy is a CRLF line ending that
+	// old reads as a carriage return and a newline (#170).
+	DiagMisreadCRLF
 	// DiagMatches: an @@ re hunk's pattern matched other than the claimed
 	// number of times, none included (#161). Matched lists each match.
 	DiagMatches
@@ -408,10 +413,10 @@ func DiagnoseSplitCRLF(file, old, repl []byte, n int) *Diagnosis {
 // after the copy (or after the run of touching copies it ends). new's closing
 // one meets the newline just after the copy, or the next copy's new when the
 // two touch. And in an LF file, one that new puts before a line break is
-// written just before that break's newline, unless old held as many CRLFs,
-// which is new keeping the ones the file had. A pair the file already had at
+// written just before that break's newline. A pair the file already had at
 // the same place is kept, not joined. One the replacement would part is
-// DiagnoseSplitCRLF's, which Validate asks first.
+// DiagnoseSplitCRLF's, and one old has before a line break is
+// DiagnoseMisreadCRLF's: Validate asks both first.
 //
 // Only --eol auto asks. There a CRLF is a line ending, so a carriage return
 // that comes to stand before a newline stops being text, and the file gains a
@@ -433,7 +438,7 @@ func DiagnoseJoinedCRLF(file, old, repl []byte, n int, eol string) *Diagnosis {
 		starts = append(starts, off+i)
 		off += i + len(old)
 	}
-	inside := eol == "\n" && bytes.Count(repl, crlf) > bytes.Count(old, crlf)
+	inside := eol == "\n" && bytes.Contains(repl, crlf)
 	var at []int
 	joined, run := 0, 0
 	var before, within, after bool
@@ -508,6 +513,56 @@ func DiagnoseJoinedCRLF(file, old, repl []byte, n int, eol string) *Diagnosis {
 			" would read as a CRLF line ending the patch did not write; " +
 			strings.Join(fix, ", ") + ", or pass --eol strict to edit the bytes as they are",
 		Found: joined, Lines: lineNumbers(file, at), MoreLines: joined - len(at),
+	}
+}
+
+// DiagnoseMisreadCRLF reports the copies of old in file that are a CRLF line
+// ending where old means a carriage return and a newline, or nil when there
+// are none (#170). old is the payload as --eol auto converted it to eol, the
+// file's dominant ending, and the copies are the first n left to right, the
+// ones bytes.Replace edits. Each is named at its first such CRLF.
+//
+// Converting to LF folds each CRLF of a payload to a newline, and leaves a
+// carriage return the payload had just before its line break where it was:
+// "\r\r\n", a carriage return and a line break, becomes "\r\n". Matched as
+// bytes, that is a CRLF, which under --eol auto is a line ending and no
+// carriage return of text, so every copy is old misread. Until 2026-11-12 it
+// applied at exit 0. The inverse of a patch that wrote two carriage returns
+// and a line break into a CRLF file, and so made its endings a tie that reads
+// as LF, matched one carriage return late and left the other behind, and the
+// inverse's next hunk then found its text only on another line, at the right
+// count: the nightly fuzz found that. In a CRLF file the conversion keeps the
+// carriage return, "\r\r\n", and old reads as the file does.
+//
+// Only --eol auto asks, before a split or a join: a copy old misreads is not
+// the text a replacement can be judged against.
+func DiagnoseMisreadCRLF(file, old []byte, n int, eol string) *Diagnosis {
+	k := bytes.Index(old, crlf)
+	if eol != "\n" || k < 0 {
+		return nil
+	}
+	var at []int
+	found := 0
+	for off := 0; found < n; {
+		i := bytes.Index(file[off:], old)
+		if i < 0 {
+			break
+		}
+		found++
+		if len(at) < tooManyLimit {
+			at = append(at, off+i+k)
+		}
+		off += i + len(old)
+	}
+	if found == 0 {
+		return nil
+	}
+	return &Diagnosis{
+		Kind: DiagMisreadCRLF, Cause: "misread line ending",
+		Detail: "old has a carriage return before a line break, and in this file a line break is a newline, " +
+			"so under --eol auto the two are the bytes of a CRLF line ending, and match one as if it were text; " +
+			"pass --eol strict to match old's bytes as they are",
+		Found: found, Lines: lineNumbers(file, at), MoreLines: found - len(at),
 	}
 }
 
@@ -1389,7 +1444,7 @@ func (d *Diagnosis) Render(indent string) string {
 	case DiagMatches:
 		d.renderMatches(&b, indent)
 
-	case DiagSplitCRLF, DiagJoinedCRLF:
+	case DiagSplitCRLF, DiagJoinedCRLF, DiagMisreadCRLF:
 		at := make([]string, len(d.Lines))
 		for i, l := range d.Lines {
 			at[i] = fmt.Sprint(l)
