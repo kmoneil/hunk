@@ -32,6 +32,13 @@ import (
 // undone by the lines around it, an append by the text at the file's end, a
 // delete by a create of the bytes it took.
 //
+// A copy whose quote overlaps the text the hunk before it put back is undone
+// in that hunk (#176). Undone alone, two thousand copies on one minified line
+// were two thousand hunks, each quoting the whole line: 151 MB to undo a
+// 37 KB file. The fuzzer's empty match at every byte of a 3.5 KB line made
+// one of 75 MB, longer to read back than a fuzz worker may take. Merged, the
+// line is quoted once.
+//
 // Nothing is trusted to that reasoning. The inverse is parsed back and
 // validated against the batch's final bytes in memory, by the same Validate
 // any patch goes through, and every file has to come out as it was before
@@ -252,18 +259,72 @@ func (x *Txn) inverseHunks() ([]Hunk, error) {
 		}
 		state := f.cur
 		path := f.target.Orig()
+		var u undoing
 		for i := len(mine) - 1; i >= 0; i-- {
-			var hs []Hunk
-			hs, state = undo(mine[i], path, state)
-			out = append(out, hs...)
+			hs, at, prev := undo(mine[i], path, state)
+			for k, h := range hs {
+				a := -1
+				if at != nil {
+					a = at[k]
+				}
+				u.push(h, a)
+			}
+			state = prev
 		}
+		out = append(out, u.hs...)
 	}
 	return out, nil
 }
 
+// undoing is one file's undo as it is written, last edit first: its hunks,
+// and where the old text of each starts in the file as the hunks before it
+// leave it, or -1 for a hunk that does not quote one text once.
+type undoing struct {
+	hs []Hunk
+	at []int
+}
+
+// push adds h, whose old text starts at at, or -1. Where that text overlaps
+// the text the hunk before it put back, the two are one hunk, and so on back
+// while the one they make overlaps the one before that: a line that holds a
+// thousand copies is quoted once, not once for each (#176). A hunk at -1 is
+// merged with nothing, either way.
+func (u *undoing) push(h Hunk, at int) {
+	for n := len(u.hs) - 1; at >= 0 && n >= 0 && u.at[n] >= 0 && overlaps(u.hs[n], h, u.at[n], at); n-- {
+		h, at = merged(u.hs[n], h, u.at[n], at)
+		u.hs, u.at = u.hs[:n], u.at[:n]
+	}
+	u.hs = append(u.hs, h)
+	u.at = append(u.at, at)
+}
+
+// overlaps reports whether q's old text, at qa in the file as p leaves it,
+// shares a byte with the text p put back there at pa.
+func overlaps(p, q Hunk, pa, qa int) bool {
+	return qa < pa+len(p.New) && pa < qa+len(q.Old)
+}
+
+// merged is the one hunk that does p and then q, whose old text at qa
+// overlaps the text p put back at pa, and where its old text starts. Its old
+// text is p's, with the part of q's that reaches past either end of what p
+// put back; its new text is q's, with the part of what p put back that
+// reaches past either end of q's old text. It holds p's old text, which the
+// file held once, so the file holds it once too.
+func merged(p, q Hunk, pa, qa int) (Hunk, int) {
+	pe, qe := pa+len(p.New), qa+len(q.Old)
+	// q's old text before and after what p put back, and what p put back
+	// before and after q's old text: each empty where the other reaches as
+	// far.
+	head, tail := q.Old[:max(pa-qa, 0)], q.Old[min(pe-qa, len(q.Old)):]
+	before, after := p.New[:max(qa-pa, 0)], p.New[min(qe-pa, len(p.New)):]
+	q.Old, q.New = slices.Concat(head, p.Old, tail), slices.Concat(before, q.New, after)
+	return q, min(pa, qa)
+}
+
 // undo is the hunks that take state, the file as e left it, back to the file
-// as it was before e, and that file.
-func undo(e edit, path string, state []byte) ([]Hunk, []byte) {
+// as it was before e; where the old text of each starts, or nil when none of
+// them quotes one text once; and that file.
+func undo(e edit, path string, state []byte) ([]Hunk, []int, []byte) {
 	switch e.h.Op {
 	case OpCreate:
 		// The file did not exist before: take the text out, so that a file
@@ -273,20 +334,20 @@ func undo(e edit, path string, state []byte) ([]Hunk, []byte) {
 		if len(state) > 0 {
 			hs = append(hs, Hunk{Op: OpReplace, Path: path, Old: state, New: nil, Count: 1})
 		}
-		return append(hs, Hunk{Op: OpDelete, Path: path}), nil
+		return append(hs, Hunk{Op: OpDelete, Path: path}), nil, nil
 	case OpDelete:
-		return []Hunk{{Op: OpCreate, Path: path, Body: e.before}}, e.before
+		return []Hunk{{Op: OpCreate, Path: path, Body: e.before}}, nil, e.before
 	case OpAppend:
 		// What append added is everything from the old end on, a line ending
 		// it put first included; widen starts the quote at the line that
 		// holds the old end, so that line goes whole.
 		end := len(e.before)
 		a, b := widen(state, end, len(state), true, false)
-		return []Hunk{{Op: OpReplace, Path: path, Old: state[a:b], New: state[a:end], Count: 1}}, e.before
+		return []Hunk{{Op: OpReplace, Path: path, Old: state[a:b], New: state[a:end], Count: 1}}, nil, e.before
 	case OpPrepend:
 		added := len(state) - len(e.before)
 		a, b := widen(state, 0, lineEnd(state, added-1), false, true)
-		return []Hunk{{Op: OpReplace, Path: path, Old: state[a:b], New: state[added:b], Count: 1}}, e.before
+		return []Hunk{{Op: OpReplace, Path: path, Old: state[a:b], New: state[added:b], Count: 1}}, nil, e.before
 	}
 	return undoReplace(e, path, state)
 }
@@ -294,19 +355,27 @@ func undo(e edit, path string, state []byte) ([]Hunk, []byte) {
 // undoReplace undoes a replacement: as hunk invert writes it where that
 // applies, its new text in the file exactly as many times as it wrote it;
 // otherwise one copy at a time, last first, so that the copies before it
-// stay where they were, each widened until the file holds its old text once.
-// A file the replacement emptied has no old text to find: it is deleted and
-// made again, which commits as a modify and keeps the file's mode.
-func undoReplace(e edit, path string, state []byte) ([]Hunk, []byte) {
+// stay where they were, each widened until the file holds its old text once,
+// and merged into the hunk before it where their quotes overlap. A file the
+// replacement emptied has no old text to find: it is deleted and made again,
+// which commits as a modify and keeps the file's mode.
+func undoReplace(e edit, path string, state []byte) ([]Hunk, []int, []byte) {
 	prev := restoreCopies(state, e)
 	c := len(e.at)
 	switch {
 	case len(state) == 0:
-		return []Hunk{{Op: OpDelete, Path: path}, {Op: OpCreate, Path: path, Body: prev}}, prev
+		return []Hunk{{Op: OpDelete, Path: path}, {Op: OpCreate, Path: path, Body: prev}}, nil, prev
 	case len(e.repl) > 0 && bytes.Count(state, e.repl) == c && !copiesPast(state, e.repl, c):
-		return []Hunk{{Op: OpReplace, Path: path, Old: e.repl, New: e.old, Count: c}}, prev
+		var at []int
+		if c == 1 {
+			// One copy, at its place: a regex's match is one, and the
+			// matches after it on its line may have quoted it already.
+			at = e.at
+		}
+		return []Hunk{{Op: OpReplace, Path: path, Old: e.repl, New: e.old, Count: c}}, at, prev
 	}
 	var hs []Hunk
+	var at []int
 	cur := state
 	d := len(e.repl) - len(e.old)
 	for j := c - 1; j >= 0; j-- {
@@ -314,9 +383,10 @@ func undoReplace(e edit, path string, state []byte) ([]Hunk, []byte) {
 		a, b := widen(cur, q, q+len(e.repl), true, true)
 		back := slices.Concat(cur[a:q], e.old, cur[q+len(e.repl):b])
 		hs = append(hs, Hunk{Op: OpReplace, Path: path, Old: slices.Clone(cur[a:b]), New: back, Count: 1})
+		at = append(at, a)
 		cur = slices.Concat(cur[:a], back, cur[b:])
 	}
-	return hs, cur
+	return hs, at, cur
 }
 
 // restoreCopies is state with every copy e wrote put back to the text it

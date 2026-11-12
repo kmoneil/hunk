@@ -227,14 +227,25 @@ func isControl(r rune) bool {
 // byte belongs to another character, as 0xA9 does to the é in "café", and is
 // not one. Any other byte that is not UTF-8 is not a control character.
 func controlAt(s string, i int) (name string, width int, ok bool) {
-	r, w := utf8.DecodeRuneInString(s[i:])
-	if r == utf8.RuneError && w == 1 && s[i] >= 0x80 && s[i] <= 0x9f {
+	w, ok := isControlAt(s, i)
+	switch {
+	case !ok:
+		return "", w, false
+	case w == 1 && s[i] >= 0x80:
 		return fmt.Sprintf("0x%02X", s[i]), 1, true
 	}
-	if isControl(r) {
-		return codePoint(r), w, true
-	}
-	return "", w, false
+	r, _ := utf8.DecodeRuneInString(s[i:])
+	return codePoint(r), w, true
+}
+
+// isControlAt is controlAt without the name: whether s[i:] starts with a
+// control character, and how many bytes it takes either way. Parse asks it of
+// every byte of every line that is not a directive, and a name formatted and
+// thrown away each time was most of what reading a payload of control
+// characters cost (#176).
+func isControlAt(s string, i int) (width int, ok bool) {
+	r, w := utf8.DecodeRuneInString(s[i:])
+	return w, (r == utf8.RuneError && w == 1 && s[i] >= 0x80 && s[i] <= 0x9f) || isControl(r)
 }
 
 // firstControl names the first control character in s, by controlAt.
@@ -281,8 +292,9 @@ func nearDirective(line []byte, marker string) (string, bool) {
 	s := string(line)
 	for _, as := range []string{"", " "} {
 		var b strings.Builder
+		b.Grow(len(s))
 		for i := 0; i < len(s); {
-			_, w, ok := controlAt(s, i)
+			w, ok := isControlAt(s, i)
 			if ok {
 				b.WriteString(as)
 			} else {

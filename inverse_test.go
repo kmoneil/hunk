@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -83,11 +84,40 @@ func TestInverseToUndoesTheBatch(t *testing.T) {
 			want:  "@@ file a.txt\n@@ old x2\nX\n@@ new\nx\n", asInvert: true,
 		},
 		{
-			name:  "@@ old x2 whose new is there once more: each copy alone, last first",
+			// Each copy alone, the second's quote was the first's line and the
+			// two after it, and the first's that line and the one after: line
+			// 2 quoted twice. Merged, once (#176).
+			name:  "@@ old x2 whose new is there once more: copies whose quotes overlap, one hunk",
 			files: map[string]string{"a.txt": "x\nX\nx\nend\n"},
 			patch: "@@ file a.txt\n@@ old x2\nx\n@@ new\nX\n",
-			want: "@@ file a.txt\n@@ old\nX\nX\nend\n\n@@ new\nX\nx\nend\n\n" +
+			want:  "@@ file a.txt\n@@ old\nX\nX\nX\nend\n\n@@ new\nx\nX\nx\nend\n\n",
+		},
+		{
+			name:  "@@ old x2 whose quotes only touch: a hunk each, last first",
+			files: map[string]string{"a.txt": "x\nX\na\nx\nb\n"},
+			patch: "@@ file a.txt\n@@ old x2\nx\n@@ new\nX\n",
+			want: "@@ file a.txt\n@@ old\na\nX\nb\n\n@@ new\na\nx\nb\n\n" +
 				"@@ old\nX\nX\n\n@@ new\nx\nX\n\n",
+		},
+		{
+			name:  "a regex's matches on one line: the line quoted once",
+			files: map[string]string{"r.txt": "foo boo\n0\n"},
+			patch: "@@ file r.txt\n@@ re x4\no\n@@ new\n0\n",
+			want:  "@@ file r.txt\n@@ old\nf00 b00\n\n@@ new\nfoo boo\n\n",
+		},
+		{
+			// The first match's new text is in the file once, so alone it is
+			// undone as hunk invert would; the second's line quotes it first.
+			name:  "a regex match undone as hunk invert would, inside the line quoted after it",
+			files: map[string]string{"r.txt": "a1 a2 X2\n"},
+			patch: "@@ file r.txt\n@@ re x2\na(\\d)\n@@ new\nX$1\n",
+			want:  "@@ file r.txt\n@@ old\nX1 X2 X2\n\n@@ new\na1 a2 X2\n\n",
+		},
+		{
+			name:  "two hunks on one line: the line quoted once",
+			files: map[string]string{"l.txt": "left right\nL\n"},
+			patch: "@@ file l.txt\n@@ old\nleft\n@@ new\nL\n@@ old\nright\n@@ new\nL\n",
+			want:  "@@ file l.txt\n@@ old\nL L\n\n@@ new\nleft right\n\n",
 		},
 		{
 			name:  "deleting a line",
@@ -282,6 +312,119 @@ func TestInverseToUndoesTheBatch(t *testing.T) {
 				t.Fatalf("undo: exit %d: %s%s\ninverse:\n%s", code, out, errOut, src)
 			}
 			assertUnchanged(t, root, before)
+		})
+	}
+}
+
+// Many copies on one line were a hunk each, each quoting the whole line
+// (#176): the inverse of two thousand on a 37 KB minified line was 151 MB,
+// and of the fuzzer's empty match at every byte of a 3.5 KB line, 75 MB. Now
+// the line is quoted once: one hunk, whose old text is the file as the batch
+// left it and whose new text the file as it was.
+func TestInverseToQuotesALineOnce(t *testing.T) {
+	var line strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&line, "var a%d=foo(%d);", i, i)
+	}
+	minified := line.String() + "bar(0)\n"
+	for _, c := range []struct{ name, file, patch string }{
+		{"a literal whose new text is there already", minified, "@@ file a.txt\n@@ old x300\nfoo(\n@@ new\nbar(\n"},
+		{"a regex", minified, "@@ file a.txt\n@@ re x300\nfoo\\(\n@@ new\nbar(\n"},
+		{"the fuzzer's empty match at every byte", strings.Repeat("\xab", 300) + "0\n", "@@ file a.txt\n@@ re x303\n1*\n@@ new\n\x00\x02\x00\x00\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := cliTree(t, map[string]string{"a.txt": c.file})
+			inv := filepath.Join(t.TempDir(), "undo.hunk")
+			code, out, errOut := runCLI(t, root, []string{"--json", "--inverse-to", inv}, c.patch)
+			if code != exitOK {
+				t.Fatalf("apply: exit %d: %s%s", code, out, errOut)
+			}
+			now := readFile(t, root, "a.txt")
+			src, err := os.ReadFile(inv)
+			must(t, err)
+			p, err := Parse(src, DefaultMarker)
+			must(t, err)
+			if len(p.Hunks) != 1 || string(p.Hunks[0].Old) != now || string(p.Hunks[0].New) != c.file {
+				t.Errorf("the inverse is %d hunks, %d bytes, for a file of %d bytes and then %d:\n%.300q",
+					len(p.Hunks), len(src), len(c.file), len(now), src)
+			}
+			if code, out, errOut := undoWith(t, inverseOf(t, out).Inverse.Args); code != exitOK {
+				t.Fatalf("undo: exit %d: %s%s", code, out, errOut)
+			}
+			if got := readFile(t, root, "a.txt"); got != c.file {
+				t.Errorf("a.txt is %.80q after the undo, was %.80q", got, c.file)
+			}
+		})
+	}
+}
+
+// An undo merges a quote into the hunk before it where its old text overlaps
+// the text that hunk put back, and on back while the hunk that makes overlaps
+// the one before that (#176). Each row is a file and the steps of an undo,
+// each replacing s[a:b] with back in the file as the steps before it left it,
+// or at a of -1, a hunk that is not a quote, the whole file for itself. The
+// hunks are what comes out, with where each one's old text starts; applied in
+// order at those places, they make the file the steps made.
+func TestAnUndoMergesOverlappingQuotes(t *testing.T) {
+	type step struct {
+		a, b int
+		back string
+	}
+	type out struct {
+		at       int
+		old, new string
+	}
+	for _, c := range []struct {
+		name  string
+		s     string
+		steps []step
+		want  []out
+	}{
+		{"apart: a hunk each", "one two", []step{{4, 7, "2"}, {0, 3, "1"}}, []out{{4, "two", "2"}, {0, "one", "1"}}},
+		{"touching: a hunk each", "aabb", []step{{2, 4, "B"}, {0, 2, "A"}}, []out{{2, "bb", "B"}, {0, "aa", "A"}}},
+		{"over the start of what it put back", "abcdef", []step{{3, 6, "D"}, {2, 4, "X"}}, []out{{2, "cdef", "X"}}},
+		{"over its end", "abcdef", []step{{1, 3, "BCDE"}, {4, 7, "x"}}, []out{{1, "bcde", "BCDx"}}},
+		{"inside it", "abcdef", []step{{1, 5, "BCDE"}, {2, 3, "c"}}, []out{{1, "bcde", "BcDE"}}},
+		{"past both its ends", "abcdef", []step{{2, 4, "C"}, {1, 4, "x"}}, []out{{1, "bcde", "x"}}},
+		{"it reaching past both ends", "abcdef", []step{{1, 3, "BCDE"}, {2, 4, "y"}}, []out{{1, "bc", "ByE"}}},
+		{"nothing put back, inside the quote", "abc", []step{{1, 2, ""}, {0, 2, "AC"}}, []out{{0, "abc", "AC"}}},
+		{"nothing put back, at the quote's end: apart", "abc", []step{{1, 2, ""}, {0, 1, "A"}}, []out{{1, "b", ""}, {0, "a", "A"}}},
+		{"on back through the one before", "aaaa|bbbb|cccc", []step{{10, 14, "CC"}, {5, 9, "B"}, {3, 9, "Z"}}, []out{{3, "a|bbbb|cccc", "Z"}}},
+		{"not into a hunk that is not a quote", "abc", []step{{-1, 0, ""}, {0, 3, "x"}}, []out{{-1, "abc", "abc"}, {0, "abc", "x"}}},
+		{"nor a hunk that is not a quote into one", "abc", []step{{0, 1, "x"}, {-1, 0, ""}}, []out{{0, "a", "x"}, {-1, "xbc", "xbc"}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var u undoing
+			state := []byte(c.s)
+			for _, st := range c.steps {
+				if st.a < 0 {
+					u.push(Hunk{Op: OpReplace, Path: "f", Old: slices.Clone(state), New: slices.Clone(state), Count: 1}, -1)
+					continue
+				}
+				u.push(Hunk{Op: OpReplace, Path: "f", Old: slices.Clone(state[st.a:st.b]), New: []byte(st.back), Count: 1}, st.a)
+				state = slices.Concat(state[:st.a], []byte(st.back), state[st.b:])
+			}
+			var got []out
+			for i, h := range u.hs {
+				got = append(got, out{u.at[i], string(h.Old), string(h.New)})
+			}
+			if !slices.Equal(got, c.want) {
+				t.Errorf("hunks %+v, want %+v", got, c.want)
+			}
+			b := []byte(c.s)
+			for i, h := range u.hs {
+				at := u.at[i]
+				if at < 0 {
+					at = bytes.Index(b, h.Old)
+				}
+				if at < 0 || !bytes.HasPrefix(b[at:], h.Old) || h.Op != OpReplace || h.Path != "f" || h.Count != 1 {
+					t.Fatalf("hunk %d, %q, is not at %d in %q", i, h.Old, at, b)
+				}
+				b = slices.Concat(b[:at], h.New, b[at+len(h.Old):])
+			}
+			if !bytes.Equal(b, state) {
+				t.Errorf("the hunks make %q, the steps %q", b, state)
+			}
 		})
 	}
 }
@@ -722,6 +865,7 @@ func FuzzInverseToUndoesTheBatch(f *testing.F) {
 		{"b\r\nb\nc\n", "c", "b", "b", "c"},
 		{"@@ old\nv\n@@ old\nw\n", "w", "v", "v", "w"},
 		{"keep", "keep", "kept", "kept", "k"},
+		{"a a a a\nb\n", "a", "b", "b b", "c"},
 		{"", "", "", "", ""},
 	} {
 		f.Add([]byte(c[0]), []byte(c[1]), []byte(c[2]), []byte(c[3]), []byte(c[4]), byte(0), false)
