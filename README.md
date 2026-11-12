@@ -553,6 +553,8 @@ undo.hunk`. Each of its hunks quotes as many whole lines around its change as
 the file needs to hold that text once, so a deletion, a new text the file
 holds elsewhere, a `@@ delete`, an `@@ append` and a `@@ prepend` all undo; a
 replacement that `hunk invert` could undo is written as it would write it.
+Changes whose quotes would overlap, as many on one line do, are undone by one
+hunk, so a line is quoted once however many changes it holds.
 Before anything is written the inverse is read back and applied in memory to
 the files as the batch leaves them, and has to put every one back exactly,
 bytes and whether it is there at all. Where the file holds lines that read as

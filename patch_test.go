@@ -553,6 +553,32 @@ func TestShowControls(t *testing.T) {
 	}
 }
 
+// isControlAt is controlAt's reading without the name, and Parse's reading of
+// every line for a directive with a control character in it is isControlAt's
+// (#176): a name formatted for each control character it passed and thrown
+// away was 85% of the time reading back the fuzzer's 75 MB inverse took. The
+// two agree on every byte, and a line of control characters costs that
+// reading no more allocations than a line as long with none.
+func TestReadingALineNamesNoControl(t *testing.T) {
+	for _, s := range []string{"plain.go", "x\x1b[31m", "a\rb\x00", "a\u009bb\u0085", "a\x7f\tb", "café", "bad\xff", "a\x9bb\x80", "\xc2", "\uFFFD"} {
+		for i := 0; i < len(s); {
+			name, w, ok := controlAt(s, i)
+			if gw, gok := isControlAt(s, i); gw != w || gok != ok || ok != (name != "") {
+				t.Errorf("%q at %d: controlAt %q, %d, %v; isControlAt %d, %v", s, i, name, w, ok, gw, gok)
+			}
+			i += w
+		}
+	}
+	plain := bytes.Repeat([]byte("abcdef"), 1000)
+	controls := bytes.Repeat([]byte("a\x00\x1b\x9b\u0085"), 1000)
+	allocs := func(line []byte) float64 {
+		return testing.AllocsPerRun(10, func() { nearDirective(line, DefaultMarker) })
+	}
+	if p, c := allocs(plain), allocs(controls); c > p {
+		t.Errorf("reading a line of 4,000 control characters allocates %v times, and one as long with none %v", c, p)
+	}
+}
+
 // §2 goal 8: "An agent that has never seen the tool uses it correctly on its
 // second call." That only holds if what `hunk format` prints is what the parser
 // accepts, so the help text's own example is parsed here. A grammar change the

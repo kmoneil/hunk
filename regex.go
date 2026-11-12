@@ -341,7 +341,8 @@ func (x *Txn) validateRegex(n int, h Hunk, f *file, diagnosed *int) *Failure {
 	if x.inverseTo != "" {
 		// Each match is an edit of its own, a literal replacement of one
 		// copy, at its place in the file as the matches before it left it,
-		// which the inverse undoes last first like any other (inverse.go).
+		// which the inverse undoes last first like any other, in one hunk
+		// with the matches after it where their quotes overlap (inverse.go).
 		d := 0
 		for _, c := range changes {
 			one := Hunk{Op: OpReplace, Path: h.Path, Line: h.Line, Count: 1, Old: f.cur[c.at:c.end], New: c.repl}

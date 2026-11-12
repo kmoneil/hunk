@@ -267,8 +267,8 @@ func TestARegexTooLargeAsCRLFIsRefused(t *testing.T) {
 	assertUnchanged(t, root, before)
 }
 
-// A regex hunk is undone by --inverse-to, a match at a time, and the undo
-// put back the file's bytes.
+// A regex hunk is undone by --inverse-to, a match at a time, matches whose
+// quotes overlap in one hunk, and the undo put back the file's bytes.
 func TestRegexInverseTo(t *testing.T) {
 	for _, c := range []struct{ name, file, patch string }{
 		{"the issue's example", "x := oldName(a)\ny := oldName(bb)\n", regexHunk(" x2", `\boldName\((\w+)\)`, "newName($1, ctx)")},
@@ -305,7 +305,8 @@ func TestInvertRefusesRegex(t *testing.T) {
 // groups, against any file it matches, under either --eol. Under strict it
 // applies, and the file is regexp.ReplaceAll's; under auto it applies or is
 // refused, never a panic. Applied, the diffstat's added less removed is the
-// file's own change in lines, and --inverse-to's undo puts the file back.
+// file's own change in lines, and --inverse-to's undo puts the file back,
+// quoting no byte of the file twice, before or after (#176).
 func FuzzRegexHunk(f *testing.F) {
 	for _, s := range [][3]string{
 		{"x := oldName(a)\ny := oldName(bb)\n", `\boldName\((\w+)\)`, "newName($1, ctx)"},
@@ -316,6 +317,13 @@ func FuzzRegexHunk(f *testing.F) {
 		{"1 22 333\n", `\d*`, "<$0>"},
 		{"a\rb\n", "b", "\nb"},
 		{"x\n", "x", ""},
+		// #176, the nightly's find: an empty match at every byte of a line,
+		// each its own hunk quoting the whole line, made a 75 MB inverse that
+		// took the fuzz worker past its minute to read back.
+		{strings.Repeat("\xab", 3527) + "000000000000\n", "1*", "\x00\x02\x00\x00"},
+		// A file the matches empty is made again as it was before the last
+		// one, and the quotes after start from that: up to three times.
+		{"0217", ".", ""},
 	} {
 		f.Add(s[0], s[1], s[2], false)
 		f.Add(s[0], s[1], s[2], true)
@@ -380,6 +388,20 @@ func FuzzRegexHunk(f *testing.F) {
 		p, err := Parse(src, marker)
 		if err != nil {
 			t.Fatalf("the inverse does not parse: %v\n%q", err, src)
+		}
+		// No byte of the file, before or after, is quoted twice. A file the
+		// matches emptied is made again as it was before the last of them,
+		// a part of the file, and the quotes after it quote that once and the
+		// file once: three times at most.
+		quoted, limit := 0, len(file)+len(now)
+		if len(now) == 0 {
+			limit = 3 * len(file)
+		}
+		for _, h := range p.Hunks {
+			quoted += len(h.Old) + len(h.New) + len(h.Body)
+		}
+		if quoted > limit {
+			t.Fatalf("the inverse quotes %d bytes of a file of %d and then %d\n%.2000q", quoted, len(file), len(now), src)
 		}
 		if _, err := NewTxn(tree, uopt).Run(p); err != nil {
 			t.Fatalf("the inverse does not apply: %v\n%q", err, src)
