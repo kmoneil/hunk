@@ -737,6 +737,14 @@ output, given or not. That is the way to shorten it: a command or a `--build`
 whose last pipeline ends in one of `--verify`'s filters, or in a `grep -v`, is
 refused under `--each`, exit 1, nothing tried, since the exit scored would be
 the filter's.
+
+To keep every patch's whole output, let the command name a file for it. Each
+run's build and command get `HUNK_PATCH` in their environment, the patch as its
+line names it, or `base` for a run with no patch applied, and `HUNK_ROUND`, the
+run's round, which is 1 outside `--measure`: `--try 'go test ./... >
+"/tmp/out/$(basename "$HUNK_PATCH").log" 2>&1'`. Keep the files outside the
+tree, which `--isolated` removes. A patch file named `base` is refused; give it
+as `./base`.
 The run stops at once
 where carrying on would lie: a file not put back (exit 4, the block names
 it), a patch refused after the preflight passed (the tree changed under the
@@ -851,11 +859,9 @@ whatever it exited, and 3 when one timed out or did not build, since a
 measurement is missing; a stop is as under `--each`. Under `--quiet` only a run
 that timed out, did not build or stopped the run prints its line.
 
-Each run's build and command get `HUNK_PATCH`, the patch as its line names it
-or `base`, and `HUNK_ROUND`, from 1, in their environment, so one command can
-keep each run's whole output, outside the tree, which `--isolated` removes:
-`bench > "/tmp/bench/$(basename "$HUNK_PATCH").$HUNK_ROUND"`. A patch file named
-`base` is refused under `--measure`; give it as `./base`. In `--json`,
+`HUNK_ROUND` counts the rounds from 1, so with `HUNK_PATCH` one command can keep
+each run's whole output: `bench > "/tmp/bench/$(basename
+"$HUNK_PATCH").$HUNK_ROUND"`. In `--json`,
 `each.measure` is true, `each.rounds` is N, and once the runs begin
 `each.patches` has an entry per run, in the order they ran, each with its
 `round`, and `base: true` on the runs with no patch. Once every run has run,

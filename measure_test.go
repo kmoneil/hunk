@@ -315,7 +315,8 @@ func TestMeasureBuild(t *testing.T) {
 }
 
 // TestMeasureEnvironment: HUNK_PATCH and HUNK_ROUND are each run's own, over
-// whatever the caller's environment had, and only under --measure.
+// whatever the caller's environment had, under --measure and, since #168,
+// every --each run.
 func TestMeasureEnvironment(t *testing.T) {
 	t.Run("over an inherited value", func(t *testing.T) {
 		t.Setenv("HUNK_PATCH", "inherited")
@@ -343,28 +344,54 @@ func TestMeasureEnvironment(t *testing.T) {
 		})
 	})
 
-	t.Run("not set outside --measure", func(t *testing.T) {
-		t.Setenv("HUNK_PATCH", "")
-		t.Setenv("HUNK_ROUND", "")
-		must(t, os.Unsetenv("HUNK_PATCH"))
-		must(t, os.Unsetenv("HUNK_ROUND"))
-		root, patches := eachFixture(t)
+	// Outside --measure the runs on the tree as it is, before the first patch
+	// and after the last, are base, and every run is round 1: the build's
+	// and the command's, in the tree and in an --isolated copy, over an
+	// inherited value. Until #168 none of them got either variable.
+	for _, isolated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("every --each run, isolated %v", isolated), func(t *testing.T) {
+			t.Setenv("HUNK_PATCH", "inherited")
+			t.Setenv("HUNK_ROUND", "inherited")
+			root, patches := eachFixture(t)
+			log, builds := pidFile(t, "log"), pidFile(t, "builds")
+			args := []string{
+				"--try", measureLog(log) + "; " + catchesAll,
+				"--build", fmt.Sprintf(`printf '%%s %%s\n' "${HUNK_PATCH-unset}" "${HUNK_ROUND-unset}" >> '%s'`, builds),
+				"--each", patches[0], patches[1],
+			}
+			if isolated {
+				args = append([]string{"--isolated"}, args...)
+			}
+			code, out, errOut := runCLI(t, root, args, "")
+			if code != exitOK {
+				t.Fatalf("exit %d: %s%s", code, out, errOut)
+			}
+			sameLines(t, "the commands", measureLines(t, log), []string{
+				"base 1 alpha beta gamma", patches[0] + " 1 ALPHA beta gamma", patches[1] + " 1 alpha BETA gamma", "base 1 alpha beta gamma",
+			})
+			sameLines(t, "the builds", measureLines(t, builds), []string{"base 1", patches[0] + " 1", patches[1] + " 1", "base 1"})
+		})
+	}
+
+	t.Run("a break set's entries by FILE:NAME, outside --measure", func(t *testing.T) {
+		root, _ := eachFixture(t)
+		set := writePatch(t, t.TempDir(), "set.hunk",
+			"@@ patch up\n@@ file a.txt\n@@ old\nalpha\n@@ new\nALPHA\n@@ patch down\n@@ file b.txt\n@@ old\nbeta\n@@ new\nBETA\n")
 		log := pidFile(t, "log")
-		code, out, errOut := runCLI(t, root, []string{"--try", measureLog(log) + "; grep -q alpha a.txt", "--each", patches[0]}, "")
+		code, out, errOut := runCLI(t, root, []string{"--try", measureLog(log) + "; " + catchesAll, "--each", set}, "")
 		if code != exitOK {
 			t.Fatalf("exit %d: %s%s", code, out, errOut)
 		}
-		for _, l := range measureLines(t, log) {
-			if !strings.HasPrefix(l, "unset unset ") {
-				t.Errorf("a run outside --measure got %q", l)
-			}
-		}
+		sameLines(t, "the runs", measureLines(t, log), []string{
+			"base 1 alpha beta gamma", set + ":up 1 ALPHA beta gamma", set + ":down 1 alpha BETA gamma", "base 1 alpha beta gamma",
+		})
 	})
 
-	// The documents name the variables the code sets, every one of them.
+	// The documents name the variables the code sets, every one of them, for
+	// an entry outside --measure as for one in it.
 	t.Run("the variables are documented", func(t *testing.T) {
 		names := map[string]bool{}
-		for _, kv := range (&eachPatch{name: "p", round: 1}).env() {
+		for _, kv := range (&eachPatch{name: "p"}).env() {
 			name, _, _ := strings.Cut(kv, "=")
 			names[name] = true
 		}
@@ -545,7 +572,11 @@ func TestMeasureFlagRefusals(t *testing.T) {
 		},
 		{
 			"a patch named base", func(cmd string) []string { return []string{"--try", cmd, "--measure", "--each", patches[0], "base"} },
-			"a patch file named base would read as --measure's run with no patch applied, which is named base; name it ./base",
+			"a patch file named base would read as the run with no patch applied, which is named base; name it ./base",
+		},
+		{
+			"a patch named base outside --measure", func(cmd string) []string { return []string{"--try", cmd, "--each", patches[0], "base"} },
+			"a patch file named base would read as the run with no patch applied, which is named base; name it ./base",
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -571,9 +602,9 @@ func TestMeasureFlagRefusals(t *testing.T) {
 		}
 	})
 
-	// The name is refused, not the file: ./base is the same file, and
-	// outside --measure base is a name like any other.
-	t.Run("./base under --measure, and base without it", func(t *testing.T) {
+	// The name is refused, not the file: ./base is the same file, and its
+	// runs are ./base, under --measure or not (#168).
+	t.Run("./base under --measure and without it", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Chdir(dir)
 		writePatch(t, dir, "base", "@@ file a.txt\n@@ old\nalpha\n@@ new\nALPHA\n")
@@ -583,10 +614,12 @@ func TestMeasureFlagRefusals(t *testing.T) {
 			t.Fatalf("exit %d: %s%s", code, out, errOut)
 		}
 		sameLines(t, "the runs", measureLines(t, log), []string{"base 1 alpha beta gamma", "./base 1 ALPHA beta gamma"})
-		code, out, errOut = runCLI(t, root, []string{"--try", catchesAll, "--each", "base"}, "")
+		log = pidFile(t, "log")
+		code, out, errOut = runCLI(t, root, []string{"--try", measureLog(log) + "; " + catchesAll, "--each", "./base"}, "")
 		if code != exitOK || !strings.Contains(out, "tried 1 patch and put back every file") {
 			t.Errorf("exit %d: %s%s", code, out, errOut)
 		}
+		sameLines(t, "the runs", measureLines(t, log), []string{"base 1 alpha beta gamma", "./base 1 ALPHA beta gamma", "base 1 alpha beta gamma"})
 	})
 }
 
@@ -709,7 +742,7 @@ func TestTryBase(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			tr := tree(t)
 			t.Setenv("PATH", brokenShell(t))
-			ep := &eachPatch{name: measureBase, base: true, round: 1, rounds: 1}
+			ep := &eachPatch{name: eachBase, base: true, round: 1, rounds: 1}
 			err := tryBase(eachConfig{command: "true", build: c.build, verifyLines: 40}, ep, tr, nil, Stop{})
 			if err == nil || !strings.HasPrefix(err.Error(), c.says) || !strings.HasSuffix(err.Error(), "; no patch was applied") {
 				t.Fatalf("err = %v", err)
@@ -725,7 +758,7 @@ func TestTryBase(t *testing.T) {
 		mark := pidFile(t, "ran")
 		sigs := make(chan os.Signal, 1)
 		sigs <- syscall.SIGTERM
-		ep := &eachPatch{name: measureBase, base: true, round: 1, rounds: 1}
+		ep := &eachPatch{name: eachBase, base: true, round: 1, rounds: 1}
 		// The build runs with no signals of its own to see, as one does
 		// that exited before the signal came.
 		cfg := eachConfig{command: counted(mark, "true"), build: "true", verifyLines: 40}
@@ -748,7 +781,7 @@ func TestTryBase(t *testing.T) {
 func TestMeasureReportGoldens(t *testing.T) {
 	run := func(name string, round, rounds, status int, tail ...string) *eachPatch {
 		ep := &eachPatch{
-			name: name, base: name == measureBase, round: round, rounds: rounds,
+			name: name, base: name == eachBase, round: round, rounds: rounds,
 			v: &Verify{
 				Ran: true, Try: true, Command: "go test -run '^$' -bench Parse .", Status: status, OK: status == 0,
 				Seconds: 3.1, Tail: tail, TotalLines: len(tail),
