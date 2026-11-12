@@ -733,11 +733,12 @@ The command's output is printed only under a patch whose command exited 0 or
 timed out, since those are the ones to investigate. To see what caught the
 others, give `--verify-lines N`: then the last N lines of every patch's output
 print under its line, the caught ones too, and a suite whose last lines name
-the failing test says what caught each break. `--json` carries every patch's
-output, given or not. That is the way to shorten it: a command or a `--build`
-whose last pipeline ends in one of `--verify`'s filters, or in a `grep -v`, is
-refused under `--each`, exit 1, nothing tried, since the exit scored would be
-the filter's.
+the failing test says what caught each break. That is the way to shorten it:
+a command or a `--build` whose last pipeline ends in one of `--verify`'s
+filters, or in a `grep -v`, is refused under `--each`, exit 1, nothing tried,
+since the exit scored would be the filter's. `--json` carries the same tail
+for every patch, given or not: its last `--verify-lines` lines, 40 by default,
+not its whole output.
 
 To keep every patch's whole output, let the command name a file for it. Each
 run's build and command get `HUNK_PATCH` in their environment, the patch as its
@@ -746,11 +747,11 @@ run's round, which is 1 outside `--measure`: `--try 'go test ./... >
 "/tmp/out/$(basename "$HUNK_PATCH").log" 2>&1'`. Keep the files outside the
 tree, which `--isolated` removes. A patch file named `base` is refused; give it
 as `./base`.
-The run stops at once
-where carrying on would lie: a file not put back (exit 4, the block names
-it), a patch refused after the preflight passed (the tree changed under the
-run, by the command or by another writer), a command that cannot start, a
-signal. Patches the stop left untried are listed as not tried.
+
+The run stops at once where carrying on would lie: a file not put back (exit
+4, the block names it), a patch refused after the preflight passed (the tree
+changed under the run, by the command or by another writer), a command that
+cannot start, a signal. Patches the stop left untried are listed as not tried.
 
 The exit is the run's, never a command's: 0 when every patch was tried and
 put back and every command exited nonzero; 3, as a verify whose verdict went

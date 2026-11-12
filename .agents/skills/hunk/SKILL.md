@@ -529,10 +529,11 @@ With it, the last N lines of every patch's command print under its line. A
 suite that names the failing test far from its end can be made to print it
 last, keeping its own status as the exit: `--try 'zig build test > /tmp/out
 2>&1; s=$?; grep -m3 "error: .*failed" /tmp/out; exit $s' --verify-lines 3`.
-`--json` carries every patch's output either way. Do not pipe the command into
-`tail` instead: under `--each`, a command or `--build` whose last pipeline ends
-in one of `--verify`'s filters (below), or in a `grep -v`, is refused, exit 1,
-nothing tried. To keep each patch's whole output, write it to a file named by
+`--json` carries every patch's last `--verify-lines` lines either way, 40 by
+default, not its whole output. Do not pipe the command into `tail` instead:
+under `--each`, a command or `--build` whose last pipeline ends in one of
+`--verify`'s filters (below), or in a `grep -v`, is refused, exit 1, nothing
+tried. To keep each patch's whole output, write it to a file named by
 `HUNK_PATCH`, which every run's command and `--build` get (the patch's line
 name, or `base` with no patch applied), with `HUNK_ROUND`: `go test ./... >
 "/tmp/out/$(basename "$HUNK_PATCH").log" 2>&1`.
