@@ -1,0 +1,4 @@
+go test fuzz v1
+[]byte("\n\n\r\r\r\n\n")
+[]byte("\n\r\r")
+[]byte("\n")

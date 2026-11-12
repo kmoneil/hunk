@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // A Slip is a replacement whose two ends disagree about a newline (#111),
@@ -31,6 +32,12 @@ import (
 // the text goes and the break stays, an empty line where it was (#150): in the
 // field, a row taken out of a markdown table, whose empty line ended the
 // table there. The same empty line #111 leaves, reached from the other side.
+//
+// And a deletion whose ends agree can still leave an empty line too many
+// (#169): text that stood between two empty lines, taken out, lets them touch.
+// In the field it was a function between two others, whose formatter check
+// then refused the file three rounds running with no word of which hunk did
+// it; a blank line under @@ new, the obvious fix, made it three.
 type Slip struct {
 	Kind SlipKind
 	Hunk int    // 1-based, in the patch
@@ -43,6 +50,13 @@ type Slip struct {
 	// before the empty line, the joined one, or the file's last. For an
 	// emptied line it is the line as it was, before its text went.
 	Text []byte
+	// For joined empty lines, of the first: how many empty lines in a row it
+	// leaves, the most either side had, and how many of the ones below old it
+	// would have to take as well to leave that many; whether its old stopped
+	// before its line break, which goes too; and whether its new was line
+	// breaks rather than empty.
+	Run, Kept, Take int
+	Emptied, Breaks bool
 }
 
 // SlipKind says which way the ends disagreed and what that left.
@@ -67,6 +81,12 @@ const (
 	// newline, started a line and stopped before its break: the break stays,
 	// an empty line where the text was.
 	SlipEmptiedLine
+	// The new text is empty or only line breaks, the old text has a line of
+	// text and stood between empty lines, and with it gone they touch: one
+	// run of empty lines where there were two. An emptied line between two
+	// empty lines is this, not SlipEmptiedLine, so that one remedy covers
+	// both.
+	SlipJoinedEmptyLines
 )
 
 // jsonKind is the kind as --json's warnings carry it. Both ways of changing
@@ -74,7 +94,7 @@ const (
 // So are both ways of leaving an empty line.
 func (k SlipKind) jsonKind() string {
 	switch k {
-	case SlipEmptyLine, SlipEmptiedLine:
+	case SlipEmptyLine, SlipEmptiedLine, SlipJoinedEmptyLines:
 		return "empty_line"
 	case SlipJoinedLine:
 		return "joined_line"
@@ -142,12 +162,19 @@ func (x *Txn) noteSlips(n int, h Hunk, f *file, old, repl, next []byte) {
 // was empty already. An empty one of an old that ends in a newline is how
 // lines are deleted (§3.3), and ends that agree are what was meant.
 //
+// Before those, a run of touching changes whose new text is empty or only
+// line breaks, with an empty line just above it and one just below, is judged
+// whole (#169): with its text gone the two empty lines touch, and the warning
+// says how many are in a row now. Its changes are then not judged again, so
+// an emptied line between two empty lines has the one warning whose remedy
+// covers both.
+//
 // The k-th change starts in next where it started in f.cur, moved by the
 // difference in length of every change before it.
 func (x *Txn) noteChangeSlips(n int, h Hunk, f *file, changes []change, next []byte) {
 	cur := f.cur
 	first := len(x.slips)
-	note := func(kind SlipKind, text []byte) {
+	note := func(kind SlipKind, text []byte) *Slip {
 		s := x.slipOf(first, kind)
 		if s == nil {
 			x.slips = append(x.slips, noted{Slip{
@@ -156,13 +183,39 @@ func (x *Txn) noteChangeSlips(n int, h Hunk, f *file, changes []change, next []b
 			s = &x.slips[len(x.slips)-1].Slip
 		}
 		s.Count++
+		return s
+	}
+	joined := make([]bool, len(changes))
+	for i, d := 0, 0; i < len(changes); {
+		j, e := i, changes[i].at+d
+		var repl []byte
+		for ; ; j++ {
+			c := changes[j]
+			repl = append(repl, c.repl...)
+			d += len(c.repl) - (c.end - c.at)
+			if j+1 == len(changes) || changes[j+1].at != c.end {
+				break
+			}
+		}
+		if s, ok := joinsEmptyLines(cur, next, changes[i].at, changes[j].end, e, repl); ok {
+			if slip := note(SlipJoinedEmptyLines, s.Text); slip.Count == 1 {
+				slip.Run, slip.Kept, slip.Take, slip.Emptied, slip.Breaks = s.Run, s.Kept, s.Take, s.Emptied, s.Breaks
+			}
+			for k := i; k <= j; k++ {
+				joined[k] = true
+			}
+		}
+		i = j + 1
 	}
 	d, last := 0, -1
-	for _, c := range changes {
+	for i, c := range changes {
 		old, repl := cur[c.at:c.end], c.repl
 		e := c.at + d
 		end := e + len(repl)
 		d += len(repl) - len(old)
+		if joined[i] {
+			continue
+		}
 		oldNL, newNL := bytes.HasSuffix(old, lf), bytes.HasSuffix(repl, lf)
 		if len(repl) == 0 && !oldNL {
 			if len(old) == 0 || e == last || (e > 0 && next[e-1] != '\n') ||
@@ -192,6 +245,97 @@ func (x *Txn) noteChangeSlips(n int, h Hunk, f *file, changes []change, next []b
 			kind = SlipNoFinalNewline
 		}
 		note(kind, lineAt(next, end-1))
+	}
+}
+
+// joinsEmptyLines reports whether replacing cur[at:end] with repl, which is
+// next[e:] onwards, lets two runs of empty lines touch, and if so the slip's
+// text and counts. It does when repl is empty or only line breaks, the old
+// text starts a line and has a line with text, empty lines stand both above
+// and below that text, and the run left where it was is longer than either.
+// Above counts old's own empty lines before its first line of text; below
+// counts those after its last, and the ones after its line break, or after
+// the one that follows it when it stops before its own, which stays. An
+// empty line is one with nothing but its ending. How many are in a row is
+// counted in next, where an earlier change may have touched them too.
+func joinsEmptyLines(cur, next []byte, at, end, e int, repl []byte) (Slip, bool) {
+	old := cur[at:end]
+	off := firstTextLine(old)
+	if off < 0 || len(bytes.ReplaceAll(bytes.ReplaceAll(repl, crlf, nil), lf, nil)) > 0 ||
+		(at > 0 && cur[at-1] != '\n') {
+		return Slip{}, false
+	}
+	below, trail := end, 0
+	emptied := !bytes.HasSuffix(old, lf)
+	if !emptied {
+		trail = emptyAbove(old, len(old))
+	} else {
+		switch {
+		case bytes.HasPrefix(cur[end:], lf):
+			below++
+		case bytes.HasPrefix(cur[end:], crlf):
+			below += 2
+		default:
+			return Slip{}, false
+		}
+	}
+	lead := emptyBelow(old, 0)
+	a, b := emptyAbove(cur, at)+lead, trail+emptyBelow(cur, below)
+	run := emptyAbove(next, e) + emptyBelow(next, e)
+	if a == 0 || b == 0 || run <= max(a, b) {
+		return Slip{}, false
+	}
+	// The line quoted is the file's whole, as an emptied line's is: old may
+	// stop before the end of its last.
+	return Slip{
+		Text: lineAt(cur, at+off), Run: run, Kept: max(a, b), Take: max(0, min(a, b)-lead-trail),
+		Emptied: emptied, Breaks: len(repl) > 0,
+	}, true
+}
+
+// firstTextLine is where the first line of b with anything in it but its
+// ending starts, or -1 when there is none.
+func firstTextLine(b []byte) int {
+	off := 0
+	for l := range bytes.SplitAfterSeq(b, lf) {
+		if len(bytes.TrimSuffix(bytes.TrimSuffix(l, lf), cr)) > 0 {
+			return off
+		}
+		off += len(l)
+	}
+	return -1
+}
+
+// emptyAbove is how many empty lines end just before b[at], which starts a
+// line, counted up to the first line that is not empty.
+func emptyAbove(b []byte, at int) int {
+	n := 0
+	for at > 0 {
+		start := bytes.LastIndexByte(b[:at-1], '\n') + 1
+		if !bytes.Equal(b[start:at-1], cr) && start != at-1 {
+			break
+		}
+		n++
+		at = start
+	}
+	return n
+}
+
+// emptyBelow is how many empty lines start at b[at] onwards, which starts a
+// line, counted down to the first line that is not empty. A last line with
+// no newline after it is not one.
+func emptyBelow(b []byte, at int) int {
+	n := 0
+	for {
+		switch {
+		case bytes.HasPrefix(b[at:], lf):
+			at++
+		case bytes.HasPrefix(b[at:], crlf):
+			at += 2
+		default:
+			return n
+		}
+		n++
 	}
 }
 
@@ -297,6 +441,46 @@ func slipMessage(patchName string, s Slip, onDisk bool) string {
 		fix = "leave a blank line under its old text, so the line break goes with it"
 		if onDisk {
 			fix = "remove the empty line" + plural + " from " + path
+		}
+	case SlipJoinedEmptyLines:
+		run := count(s.Run, "empty line")
+		msg = fmt.Sprintf("%s leaves %s in a row where %s was in %s", where, run, line, path)
+		if of != "" {
+			msg = fmt.Sprintf("%s leaves %s in a row where %s was in %s, the first where %s was", where, run, of, path, line)
+		}
+		what := "is empty"
+		if s.Breaks {
+			what = "is only line breaks"
+		}
+		stops := ","
+		if s.Emptied {
+			stops = ", its old text stops before the line break,"
+		}
+		msg += ": its new text " + what + stops + " and the empty lines above and below its old text now touch"
+		below := "an empty line"
+		if s.Take > 1 {
+			below = fmt.Sprintf("%d empty lines", s.Take)
+		}
+		var parts []string
+		if s.Breaks {
+			parts = append(parts, "take the blank lines out from under its new text")
+		}
+		switch {
+		case s.Emptied && s.Take == 0:
+			parts = append(parts, "leave a blank line under its old text, so its line break goes with it")
+		case s.Emptied:
+			parts = append(parts, fmt.Sprintf("leave %d blank lines under its old text, so its line break and %s below go with it", s.Take+1, below))
+		case s.Take == 1:
+			parts = append(parts, "leave another blank line under its old text, so an empty line below goes with it")
+		case s.Take > 1:
+			parts = append(parts, fmt.Sprintf("leave %d more blank lines under its old text, so %s below go with it", s.Take, below))
+		}
+		fix = strings.Join(parts, ", and ")
+		if onDisk {
+			fix = "remove the extra empty line from " + path
+			if s.Run-s.Kept > 1 || s.Count > 1 {
+				fix = "remove the extra empty lines from " + path
+			}
 		}
 	case SlipJoinedLine:
 		msg = fmt.Sprintf("%s joins the next line onto its replacement in %s, making %s", where, path, line)

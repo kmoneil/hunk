@@ -240,11 +240,12 @@ Three rules worth knowing before the first patch:
    after the replacement, and the other way round joins the next line onto it
    or takes away the file's final newline. An empty `@@ new` under an
    `@@ old` of whole lines with no blank line under it takes the lines' text
-   and leaves the last one's line break, an empty line where they were. The
-   batch applies as written, and the report ends with a `warning:` on stderr,
-   under `--quiet` too, naming the hunk, the line it left and the fix. To add
-   an empty line on purpose, end both with the blank line and give `@@ new` a
-   second.
+   and leaves the last one's line break, an empty line where they were. And
+   text taken out from between two empty lines lets them touch, two in a row
+   where there was one on each side. The batch applies as written, and the
+   report ends with a `warning:` on stderr, under `--quiet` too, naming the
+   hunk, the line it left and the fix. To add an empty line on purpose, end
+   both with the blank line and give `@@ new` a second.
 2. **Hunks apply in order, against the file as earlier hunks left it.** So a
    later hunk can match text an earlier one created. A hunk that fails stops the
    later hunks against *that file*, which are reported as skipped rather than

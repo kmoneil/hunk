@@ -680,6 +680,18 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 		{"abc\n", "b", ""},
 		{"a\n\r\nb\n", "\r", ""},
 		{"a\n\nb\n", "a\n", ""},
+		// #169: text between two empty lines, taken out.
+		{"fn a\n\nfn b\n\nfn c\n", "fn b\n", ""},
+		{"a\n\nb\n\nc\n", "b\n", "\n"},
+		{"a\n\nb\n\nc\n", "b", ""},
+		{"a\n\nb\n\nc\n", "\nb", ""},
+		{"a\n\n\nb\n\n\nc\n", "b\n", ""},
+		{"a\r\n\r\nb\r\n\r\nc\r\n", "b\r\n", ""},
+		{"a\n\nX\nX\n\nc\n", "X\n", ""},
+		// The fuzzer's: old stops two carriage returns into a line of three,
+		// before a CRLF, and the warning quoted old's part of the line rather
+		// than the line.
+		{"\n\n\r\r\r\n\n", "\n\r\r", "\n"},
 	} {
 		f.Add([]byte(c[0]), []byte(c[1]), []byte(c[2]))
 	}
@@ -714,12 +726,24 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 		}
 		emptied := len(repl) == 0 && !bytes.HasSuffix(old, lf)
 		agree := !emptied && (bytes.HasSuffix(old, lf) == bytes.HasSuffix(repl, lf) || len(repl) == 0)
-		if agree && len(slips) > 0 {
-			t.Fatalf("ends that agree were warned of: %+v\nstart %q old %q new %q", slips, start, old, repl)
+		// Empty, or nothing but line breaks: the new text #169's slip needs.
+		breaks := len(bytes.ReplaceAll(bytes.ReplaceAll(repl, crlf, nil), lf, nil)) == 0
+		for _, s := range slips {
+			if agree && s.Kind != SlipJoinedEmptyLines {
+				t.Fatalf("ends that agree were warned of: %+v\nstart %q old %q new %q", slips, start, old, repl)
+			}
 		}
 		var before []string
 		for l := range strings.SplitSeq(string(start), "\n") {
 			before = append(before, strings.TrimSuffix(l, "\r"))
+		}
+		had := func(text string) bool {
+			for _, l := range before {
+				if l == text {
+					return true
+				}
+			}
+			return false
 		}
 		kinds := map[SlipKind]bool{}
 		for _, s := range slips {
@@ -727,20 +751,28 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 				t.Fatalf("slip %+v\nstart %q old %q new %q", s, start, old, repl)
 			}
 			kinds[s.Kind] = true
-			if emptied != (s.Kind == SlipEmptiedLine) {
+			if s.Kind == SlipEmptiedLine && !emptied ||
+				emptied && s.Kind != SlipEmptiedLine && s.Kind != SlipJoinedEmptyLines {
 				t.Fatalf("slip %v from an empty new %v\nstart %q old %q new %q", s.Kind, emptied, start, old, repl)
 			}
 			text, found := string(s.Text), false
 			switch s.Kind {
-			case SlipEmptiedLine:
-				had := false
-				for _, l := range before {
-					had = had || l == text
+			case SlipJoinedEmptyLines:
+				// The text was a line of the file, and what the edit left
+				// has as many empty lines in a row as the warning says.
+				for i := 0; i+s.Run <= real; i++ {
+					all := true
+					for _, l := range lines[i : i+s.Run] {
+						all = all && l == ""
+					}
+					found = found || all
 				}
+				found = found && had(text) && text != "" && breaks && s.Run > s.Kept && s.Kept >= 1
+			case SlipEmptiedLine:
 				for i := range real {
 					found = found || lines[i] == ""
 				}
-				found = found && had && text != ""
+				found = found && had(text) && text != ""
 			case SlipEmptyLine:
 				for i := 0; i+1 < real; i++ {
 					found = found || (lines[i] == text && lines[i+1] == "")
@@ -755,6 +787,27 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 			if !found {
 				t.Errorf("slip %v quoting %q is not in what the edit left, %q\nstart %q old %q new %q", s.Kind, text, got, start, old, repl)
 			}
+		}
+		// And #169's shape is warned of, read off the lines rather than the
+		// bytes: one copy of whole lines whose first and last have text,
+		// nothing put back, and an empty line just above and just below. (An
+		// old that takes an empty line of its own shortens the run, and is
+		// warned of only if what is left is still longer than either side.)
+		if n != 1 || len(repl) != 0 || !bytes.HasSuffix(old, lf) {
+			return
+		}
+		at := bytes.Index(start, old)
+		if at > 0 && start[at-1] != '\n' {
+			return
+		}
+		realBefore := len(before)
+		if before[realBefore-1] == "" {
+			realBefore--
+		}
+		i := bytes.Count(start[:at], lf)
+		j := i + bytes.Count(old, lf)
+		if before[i] != "" && before[j-1] != "" && i > 0 && before[i-1] == "" && j < realBefore && before[j] == "" && !kinds[SlipJoinedEmptyLines] {
+			t.Errorf("text between two empty lines taken out, and no warning: %+v\nstart %q old %q", slips, start, old)
 		}
 	})
 }

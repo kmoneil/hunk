@@ -1,0 +1,6 @@
+M x.zig +0 -1
+M p.py  +1 -2
+2 files, 2 hunks, +1 -3
+
+warning: hunk 1 (patch line 2) leaves 2 empty lines in a row where "fn b() {}" was in x.zig: its new text is empty, and the empty lines above and below its old text now touch; if that was not meant, remove the extra empty line from x.zig
+warning: hunk 2 (patch line 7) leaves 5 empty lines in a row where "def b():" was in p.py: its new text is only line breaks, and the empty lines above and below its old text now touch; if that was not meant, remove the extra empty lines from p.py

@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "exit": 0,
+  "files": [
+    {
+      "path": "x.zig",
+      "op": "modify",
+      "added": 0,
+      "removed": 1
+    },
+    {
+      "path": "p.py",
+      "op": "modify",
+      "added": 1,
+      "removed": 2
+    }
+  ],
+  "hunks": 2,
+  "warnings": [
+    {
+      "kind": "empty_line",
+      "hunk": 1,
+      "patch_line": 2,
+      "path": "x.zig",
+      "text": "fn b() {}",
+      "message": "hunk 1 (patch line 2) leaves 2 empty lines in a row where \"fn b() {}\" was in x.zig: its new text is empty, and the empty lines above and below its old text now touch; if that was not meant, remove the extra empty line from x.zig"
+    },
+    {
+      "kind": "empty_line",
+      "hunk": 2,
+      "patch_line": 7,
+      "path": "p.py",
+      "text": "def b():",
+      "message": "hunk 2 (patch line 7) leaves 5 empty lines in a row where \"def b():\" was in p.py: its new text is only line breaks, and the empty lines above and below its old text now touch; if that was not meant, remove the extra empty lines from p.py"
+    }
+  ]
+}

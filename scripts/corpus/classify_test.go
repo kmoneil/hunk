@@ -887,6 +887,11 @@ var reportGoldens = map[string]int{
 	"cli-slip-emptied":         0,
 	"cli-slip-emptied-dry-run": 0,
 	"cli-slip-emptied-json":    0,
+	// #169: a warning of text taken out from between two empty lines, which
+	// left them touching.
+	"cli-slip-joined-empty":         0,
+	"cli-slip-joined-empty-dry-run": 0,
+	"cli-slip-joined-empty-json":    0,
 	// #100: a break set, one file of several patches under "@@ patch"
 	// headings. A heading fault refuses the run at 1, and a heading outside
 	// --each is a parse error.
