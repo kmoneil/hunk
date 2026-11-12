@@ -143,7 +143,8 @@ FLAGS
                         Under --each, given, it prints under every patch's
                         line, a caught one's too, to say what caught it; not
                         given, only under a command that exited 0 or timed
-                        out.
+                        out. --json carries the same tail, for every patch
+                        under --each, given or not.
   --keep-on-fail        Leave the applied changes in place when verify fails,
                         for inspection. Still exits 3.
   --inverse-to FILE     Also write FILE, the patch that undoes this batch, for
