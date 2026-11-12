@@ -453,10 +453,17 @@ func writeFailureBlocks(w io.Writer, failures []Failure) {
 			default:
 				fmt.Fprintf(w, ", and replacing %d of them would join %s", f.Near.Found, pairs)
 			}
+		case DiagMisreadCRLF:
+			// Every copy is one, since each holds the CRLF old's bytes have.
+			where := "there"
+			if f.Found > 1 {
+				where = "in each"
+			}
+			fmt.Fprintf(w, ", and old matched a CRLF line ending %s as a carriage return and a newline", where)
 		}
 		fmt.Fprintln(w)
 		switch f.Near.Kind {
-		case DiagTooMany, DiagOverlap, DiagMixedEndings, DiagSplitCRLF, DiagJoinedCRLF:
+		case DiagTooMany, DiagOverlap, DiagMixedEndings, DiagSplitCRLF, DiagJoinedCRLF, DiagMisreadCRLF:
 		default:
 			fmt.Fprintln(w)
 		}
@@ -1177,7 +1184,7 @@ func jsonFailureOf(f Failure) jsonFailure {
 		switch d.Kind {
 		case DiagTooMany, DiagMatches:
 			jf.Lines, jf.Shifted = d.Lines, d.Shifted
-		case DiagOverlap, DiagMixedEndings, DiagSplitCRLF, DiagJoinedCRLF:
+		case DiagOverlap, DiagMixedEndings, DiagSplitCRLF, DiagJoinedCRLF, DiagMisreadCRLF:
 			// The lines where copies are, as for too many, and the cause
 			// and the remedy, since found alone does not say why a count
 			// that equals the claim was refused.

@@ -220,6 +220,12 @@ deletion closes one up to a newline. Each is refused with exit 2, the line
 named. A replacement that keeps a CRLF the file had still applies, and
 `--eol strict` edits the bytes as they are.
 
+Nor may `old` misread one. In a file whose line ending is LF, a carriage return
+just before a line break in `old` converts to the bytes of a CRLF, and a CRLF is
+a line ending, not a carriage return of text, so what such an `old` matches is
+not what it says. It is refused with exit 2 when it matches, the line of each
+copy named, and `--eol strict` matches its bytes as they are.
+
 Three rules worth knowing before the first patch:
 
 1. **A payload never gains a trailing newline.** To match text that ends in a

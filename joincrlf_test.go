@@ -70,16 +70,6 @@ func TestAReplacementThatJoinsACRLFIsRefused(t *testing.T) {
 			want: "a\r\nY\r\r\nZ\r\nb\r\n",
 		},
 		{
-			name: "new keeping a CRLF its old matched, in an LF file",
-			file: "a\r\nb\nc\nd\n", old: "a\r\r\nb", new: "A\r\r\nB", count: 1,
-			want: "A\r\nB\nc\nd\n",
-		},
-		{
-			name: "new with more of them than old matched",
-			file: "a\r\nb\nc\nd\n", old: "a\r\r\nb", new: "A\r\r\nB\r\r\nC", count: 1,
-			lines: []int{1}, joined: 1, detail: joinWithin,
-		},
-		{
 			name: "new ending on a carriage return before the file's newline",
 			file: "aX\nb\nc\n", old: "X", new: "Y\r", count: 1,
 			lines: []int{1}, joined: 1, detail: joinAfter,
@@ -433,7 +423,8 @@ func TestThePatchThatFlippedItsInverseIsRefused(t *testing.T) {
 // that is not inside one copy of new whether the file had a CRLF at the same
 // place: the CR stands just before file offset q, the LF at q, and file[q-1:q+1]
 // is a CRLF. One inside new is counted, as the rule counts it: in an LF file,
-// more CRLFs in new than in old.
+// any. An old with one of its own there is a misread (#170), which Validate
+// refuses first.
 func joinsACRLF(file, old, repl string, n int, eol string) bool {
 	type from struct{ copy, at int } // copy -1 is the file's byte at; else new's byte at, in that copy
 	var out []byte
@@ -483,13 +474,15 @@ func joinsACRLF(file, old, repl string, n int, eol string) bool {
 			return true
 		}
 	}
-	return eol == "\n" && len(starts) > 0 && strings.Count(repl, "\r\n") > strings.Count(old, "\r\n")
+	return eol == "\n" && len(starts) > 0 && strings.Contains(repl, "\r\n")
 }
 
 // A replacement under --eol auto applies only if it joins no carriage return
 // to a newline, and is refused as a join only if it does, by joinsACRLF's
 // count. Bare carriage returns are the point here, so unlike the counted-copies
-// target nothing is skipped for one.
+// target nothing is skipped for one. And in an LF file it applies only if old,
+// converted, has no CRLF, which would be a CRLF line ending of the file's read
+// as text, and is refused as a misread only then (#170).
 func FuzzAJoinIsRefusedAndOnlyThen(f *testing.F) {
 	for _, s := range []struct {
 		file, old, repl string
@@ -505,6 +498,7 @@ func FuzzAJoinIsRefusedAndOnlyThen(f *testing.F) {
 		{"a\r\nb\nc\nd\n", "a\r\r\nb", "A\r\r\nB", 0},
 		{"a\r\nX\r\nb\r\n", "X", "Y\r\r\nZ", 0},
 		{"\r\r\n\x800\n", "0", "\r\r\n", 0},
+		{"p\r\r\r\nq\nr\n", "\r\r\r\n", "X\n", 0},
 	} {
 		f.Add(s.file, s.old, s.repl, s.count)
 	}
@@ -541,15 +535,23 @@ func FuzzAJoinIsRefusedAndOnlyThen(f *testing.F) {
 			return strings.ReplaceAll(s, "\n", "\r\n")
 		}
 		joins := joinsACRLF(file, conv(old), conv(repl), n, eol)
+		misreads := eol == "\n" && strings.Contains(conv(old), "\r\n")
 		if len(failures) == 0 {
 			if joins {
 				t.Fatalf("applied %q -> %q x%d in %q, joining a carriage return to a newline: %q",
+					old, repl, n, file, x.hunkFile[0].cur)
+			}
+			if misreads {
+				t.Fatalf("applied %q -> %q x%d in %q, whose old matched a CRLF line ending as text: %q",
 					old, repl, n, file, x.hunkFile[0].cur)
 			}
 			return
 		}
 		if d := failures[0].Near; d != nil && d.Kind == DiagJoinedCRLF && !joins {
 			t.Fatalf("refused %q -> %q x%d in %q as a join, which it is not", old, repl, n, file)
+		}
+		if d := failures[0].Near; d != nil && d.Kind == DiagMisreadCRLF && !misreads {
+			t.Fatalf("refused %q -> %q x%d in %q as a misread, which it is not", old, repl, n, file)
 		}
 	})
 }

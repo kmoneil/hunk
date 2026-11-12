@@ -920,7 +920,9 @@ are refused rather than edited. Under --eol auto, so is a copy whose replacement
 would split a CRLF: one that begins on its newline, or ends on its carriage
 return, when new does not do the same. And so is one whose replacement would
 put a carriage return just before a newline, which would read as a CRLF line
-ending the patch did not write.
+ending the patch did not write. And so is a copy old misreads: in an LF file, a
+carriage return before a line break in old is the bytes of a CRLF, and matches
+a CRLF line ending as if it were text.
 
 REGEX
 

@@ -62,7 +62,9 @@ most of when the inverse is applied, as any patch's is. A patch that changed
 which ending that is, as joining the only two lines of a CRLF file does, gets
 its text back in the other one. Where that text would begin or end inside a
 CRLF, or put a carriage return just before a newline, the inverse is refused, as
-any replacement that would split a CRLF or join one is.
+any replacement that would split a CRLF or join one is. So is one whose old has
+a carriage return before a line break once the file's ending is LF, since there
+the two are the bytes of a CRLF.
 
 WHAT HAS NO INVERSE
 
