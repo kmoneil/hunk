@@ -189,8 +189,19 @@ corpus:
 # Two destinations, one per convention: ~/.agents/skills is the unified folder
 # most agents read, and ~/.claude/skills is the one folder Claude Code reads.
 # Identical copies, so every tool finds the same skill.
+#
+# A destination that is a link is Homebrew's skill, which the README links in
+# and every brew upgrade keeps current. cp would write through it into the
+# Cellar (#179), so install refuses it before anything else and installs
+# nothing, the binary included.
 SKILLDIRS ?= $(HOME)/.claude/skills/hunk $(HOME)/.agents/skills/hunk
 install:
+	@for dir in $(SKILLDIRS); do \
+		if [ -L "$$dir" ]; then \
+			echo "make install: $$dir is a link to $$(readlink "$$dir"), and copying the skill there would write through it; nothing was installed. Remove the link to install this clone's skill there, or run make install SKILLDIRS= to install the binary alone." >&2; \
+			exit 1; \
+		fi; \
+	done
 	$(GO) install .
 	@echo "binary:  $$($(GO) env GOPATH)/bin/hunk"
 	@for dir in $(SKILLDIRS); do \
