@@ -27,17 +27,20 @@ import (
 //
 // Here the bytes are known, so nothing is refused for want of them. A
 // replacement whose inverse would apply as hunk invert writes it is written
-// that way. Any other is undone one copy at a time, last first, each copy's
-// old text widened by whole lines until the file holds it once. A deletion is
-// undone by the lines around it, an append by the text at the file's end, a
-// delete by a create of the bytes it took.
+// that way. Any other is undone a run of copies at a time, last first: the
+// last copy's old text widened by whole lines until the file holds it once,
+// and every copy before it that lands in that quote. A deletion is undone by
+// the lines around it, an append by the text at the file's end, a delete by a
+// create of the bytes it took.
 //
 // A copy whose quote overlaps the text the hunk before it put back is undone
 // in that hunk (#176). Undone alone, two thousand copies on one minified line
 // were two thousand hunks, each quoting the whole line: 151 MB to undo a
 // 37 KB file. The fuzzer's empty match at every byte of a 3.5 KB line made
 // one of 75 MB, longer to read back than a fuzz worker may take. Merged, the
-// line is quoted once.
+// line is quoted once. Merged only once built, it still took memory
+// quadratic in the copies on a line, which a replacement's run now avoids
+// by building its hunk once (#178).
 //
 // Nothing is trusted to that reasoning. The inverse is parsed back and
 // validated against the batch's final bytes in memory, by the same Validate
@@ -354,9 +357,13 @@ func undo(e edit, path string, state []byte) ([]Hunk, []int, []byte) {
 
 // undoReplace undoes a replacement: as hunk invert writes it where that
 // applies, its new text in the file exactly as many times as it wrote it;
-// otherwise one copy at a time, last first, so that the copies before it
-// stay where they were, each widened until the file holds its old text once,
-// and merged into the hunk before it where their quotes overlap. A file the
+// otherwise a run of copies at a time, last first, so that the copies before
+// it stay where they were. A run starts at a copy widened until the file
+// holds its old text once, and takes in every copy before it that starts
+// inside that text or reaches into it: the run's quote already holds text
+// the file holds once, so a copy it takes in needs no widening of its own,
+// and the run is one hunk, built once. Built a copy at a time and merged
+// after, 101,772 copies on one 712 KB line held 9 GB (#178). A file the
 // replacement emptied has no old text to find: it is deleted and made again,
 // which commits as a modify and keeps the file's mode.
 func undoReplace(e edit, path string, state []byte) ([]Hunk, []int, []byte) {
@@ -378,31 +385,60 @@ func undoReplace(e edit, path string, state []byte) ([]Hunk, []int, []byte) {
 	var at []int
 	cur := state
 	d := len(e.repl) - len(e.old)
-	for j := c - 1; j >= 0; j-- {
-		q := e.at[j] + j*d
-		a, b := widen(cur, q, q+len(e.repl), true, true)
-		back := slices.Concat(cur[a:q], e.old, cur[q+len(e.repl):b])
+	// The run is copies j to k, quoted by cur[a:b], cur being the file with
+	// every copy after k put back. Each copy in it is at the place it has in
+	// state, since only copies after it have been put back.
+	var k, a, b int
+	end := func(j int) {
+		back := restoredAt(cur, e, j, k, a, b)
 		hs = append(hs, Hunk{Op: OpReplace, Path: path, Old: slices.Clone(cur[a:b]), New: back, Count: 1})
 		at = append(at, a)
 		cur = slices.Concat(cur[:a], back, cur[b:])
 	}
+	for j := c - 1; j >= 0; j-- {
+		q := e.at[j] + j*d
+		switch {
+		case j == c-1:
+		case q >= a:
+			// Inside the quote. No scan here: a line holding every copy
+			// would be scanned once for each.
+			continue
+		case q+len(e.repl) > a:
+			// Reaching into it across a line ending: the quote starts at
+			// the copy's line. Lines wholly before the quote are apart from
+			// it, since it starts at a line start.
+			a = lineStart(cur, q)
+			continue
+		default:
+			end(j + 1)
+		}
+		k = j
+		a, b = widen(cur, q, q+len(e.repl), true, true)
+	}
+	end(0)
 	return hs, at, cur
 }
 
 // restoreCopies is state with every copy e wrote put back to the text it
 // replaced: the file as it was before e.
 func restoreCopies(state []byte, e edit) []byte {
-	var b bytes.Buffer
+	return restoredAt(state, e, 0, len(e.at)-1, 0, len(state))
+}
+
+// restoredAt is s[a:b] with copies j to k of e put back to the text each
+// replaced: s holds every copy up to k where e wrote it, and s[a:b] holds
+// copies j to k.
+func restoredAt(s []byte, e edit, j, k, a, b int) []byte {
 	d := len(e.repl) - len(e.old)
-	last := 0
-	for j, p := range e.at {
-		q := p + j*d
-		b.Write(state[last:q])
-		b.Write(e.old)
+	out := make([]byte, 0, b-a-(k-j+1)*d)
+	last := a
+	for i := j; i <= k; i++ {
+		q := e.at[i] + i*d
+		out = append(out, s[last:q]...)
+		out = append(out, e.old...)
 		last = q + len(e.repl)
 	}
-	b.Write(state[last:])
-	return b.Bytes()
+	return append(out, s[last:b]...)
 }
 
 // widen is the region of s to quote for the text at s[lo:hi]: whole lines,

@@ -100,6 +100,31 @@ func TestInverseToUndoesTheBatch(t *testing.T) {
 				"@@ old\nX\nX\n\n@@ new\nx\nX\n\n",
 		},
 		{
+			// A copy in its run's quote is not widened (#178). Widened, the
+			// first copy's quote was the whole file, since "ba\n" is in
+			// "aba\n" once the second is put back, and the file was quoted
+			// as one hunk: as many bytes as these two, each a line.
+			name:  "@@ old x4: a copy in the quote of the copies after it is not widened",
+			files: map[string]string{"a.txt": "aa\naba\n"},
+			patch: "@@ file a.txt\n@@ old x4\na\n@@ new\nb\n",
+			want:  "@@ file a.txt\n@@ old\nbbb\n\n@@ new\naba\n\n@@ old\nbb\n\n@@ new\naa\n\n",
+		},
+		{
+			// The first x, taken out, is at the start of the quote the second
+			// widened to: in it. Widened alone it would take "z" too, since
+			// "q" is on two lines.
+			name:  "@@ old x2 taken out: a copy at the start of its run's quote is in it",
+			files: map[string]string{"a.txt": "z\nxq\nAx\nB\nA\nq\n"},
+			patch: "@@ file a.txt\n@@ old x2\nx\n@@ new\n",
+			want:  "@@ file a.txt\n@@ old\nq\nA\nB\n\n@@ new\nxq\nAx\nB\n\n",
+		},
+		{
+			name:  "@@ old x2: a copy reaching into the next one's line across a line ending, one hunk",
+			files: map[string]string{"a.txt": "]\n[a,b,c\n"},
+			patch: "@@ file a.txt\n@@ old x2\n,\n@@ new\n]\n[\n",
+			want:  "@@ file a.txt\n@@ old\n[a]\n[b]\n[c\n\n@@ new\n[a,b,c\n\n",
+		},
+		{
 			name:  "a regex's matches on one line: the line quoted once",
 			files: map[string]string{"r.txt": "foo boo\n0\n"},
 			patch: "@@ file r.txt\n@@ re x4\no\n@@ new\n0\n",
@@ -353,6 +378,58 @@ func TestInverseToQuotesALineOnce(t *testing.T) {
 			}
 			if got := readFile(t, root, "a.txt"); got != c.file {
 				t.Errorf("a.txt is %.80q after the undo, was %.80q", got, c.file)
+			}
+		})
+	}
+}
+
+// Copies on one line were undone a hunk each, each quoting the line, and only
+// then merged: memory quadratic in the copies on a line, 2.8 GB for 16,000
+// on a 48 KB line and past 9 GB for the fuzzer's 101,772 on 712 KB (#178).
+// The merged inverse was right, so no output could show it. This measures the
+// cost as bytes allocated, exact where time is not: doubling the copies costs
+// x2 when the undo is linear and near x4 once a quadratic term dominates (see
+// TestTheNearMissSearchIsLinearInEachDimension for the limit of 3). In the
+// second shape each copy reaches into the next one's line across a line
+// ending, which a run takes in too; the run in both is one hunk.
+//
+// It is a budget, not a measurement: if a change moves it, decide whether the
+// change is worth it rather than editing the number.
+func TestUndoingCopiesIsLinear(t *testing.T) {
+	const limit = 3.0
+	for _, c := range []struct {
+		name      string
+		file      func(n int) string
+		old, repl string
+	}{
+		{"copies on one line", func(n int) string { return "yy," + strings.Repeat("x,", n) + "\n" }, "x,", "yy,"},
+		{"copies reaching into the next one's line", func(n int) string {
+			var s strings.Builder
+			s.WriteString("]\n[")
+			for i := range n {
+				fmt.Fprintf(&s, "a%d,", i)
+			}
+			return s.String() + "\n"
+		}, ",", "]\n["},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cost := func(n int) float64 {
+				prev, old, repl := []byte(c.file(n)), []byte(c.old), []byte(c.repl)
+				state := bytes.ReplaceAll(prev, old, repl)
+				e := edit{h: Hunk{Op: OpReplace}, old: old, repl: repl, at: copiesAt(prev, old, n)}
+				hs, _, back := undo(e, "a.txt", state)
+				if len(hs) != 1 || bytes.Count(state, hs[0].Old) != 1 || !bytes.Equal(back, prev) ||
+					!bytes.Equal(bytes.Replace(state, hs[0].Old, hs[0].New, 1), prev) {
+					t.Fatalf("%d copies: %d hunks, the first %.60q to %.60q", n, len(hs), hs[0].Old, hs[0].New)
+				}
+				return bytesPerRun(3, func() { undo(e, "a.txt", state) })
+			}
+			small, big := cost(2000), cost(4000)
+			ratio := big / small
+			t.Logf("x%.2f in bytes allocated, %.0f to %.0f", ratio, small, big)
+			if ratio >= limit {
+				t.Errorf("doubling the copies costs x%.2f in bytes allocated (%.0f to %.0f), limit x%.1f: "+
+					"the undo is superlinear in the copies (#178)", ratio, small, big, limit)
 			}
 		})
 	}
@@ -873,6 +950,11 @@ func FuzzInverseToUndoesTheBatch(f *testing.F) {
 		f.Add([]byte(c[0]), []byte(c[1]), []byte(c[2]), []byte(c[3]), []byte(c[4]), byte(2), false)
 		f.Add([]byte(c[0]), []byte(c[1]), []byte(c[2]), []byte(c[3]), []byte(c[4]), byte(3), false)
 	}
+	// #178, the nightly's find: 36 zeros each made 2,827 bytes of 0xE2 and
+	// then each of those seven, 101,772 copies on one 712 KB line, held 9 GB
+	// undone a copy at a time.
+	f.Add([]byte("\xa9"+strings.Repeat("0", 36)), []byte("0"), []byte(strings.Repeat("\xe2", 2827)+"\xa9\x98d\xd0"),
+		[]byte("\xe2"), []byte(strings.Repeat("\xe2", 7)), byte(']'), false)
 	f.Fuzz(func(t *testing.T, start, a, b, c, d []byte, end byte, strict bool) {
 		opt := Options{}
 		if strict {
