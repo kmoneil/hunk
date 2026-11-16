@@ -1134,9 +1134,18 @@ per convention, and every `brew upgrade` moves both along with the binary:
 
 ```sh
 mkdir -p ~/.claude/skills ~/.agents/skills
+rm -rf ~/.claude/skills/hunk ~/.agents/skills/hunk
 ln -s "$(brew --prefix)/opt/hunk/share/hunk/skill" ~/.claude/skills/hunk
 ln -s "$(brew --prefix)/opt/hunk/share/hunk/skill" ~/.agents/skills/hunk
+readlink ~/.claude/skills/hunk
 ```
+
+The `rm` clears what an earlier install left there, a folder from `make install`
+in a clone: `ln -s` onto a folder puts the link inside it and says nothing, and
+the agent goes on reading the old copy. `rm` of a link removes the link, not
+what it points to. `readlink` prints the skill's path under your Homebrew
+prefix; if it prints nothing, the link is not there. From then on `make install`
+in a clone refuses to copy over these links, since they are Homebrew's.
 
 ### Windows
 
