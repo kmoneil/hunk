@@ -20,8 +20,11 @@ GOVULNCHECK_VERSION    := v1.6.0
 # large table would move it and nothing else in the gate would notice.
 # Raised from 4,718,592 on 2026-11-10, when ordinary code had grown the binary
 # to within 3.9 KB of it (4,714,702 on CI) and the next two changes, about 15
-# KB and 80 KB of code and no embed, dependency or table, tripped it.
-SIZE_BUDGET_BYTES := 5242880
+# KB and 80 KB of code and no embed, dependency or table, tripped it. Raised
+# from 5,242,880 on 2026-11-19 for the same reason: main read 5,237,310 on CI,
+# and #182's refusal, about 17 KB of code once a generic sort was taken out of
+# it, would have read about 5,254,000.
+SIZE_BUDGET_BYTES := 5767168
 
 # The toolchain `make fuzz` runs, which is not go.mod's. Every go1.26 release
 # has a fuzz coordinator that can fail a clean run on its own -fuzztime

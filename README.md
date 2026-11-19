@@ -226,6 +226,16 @@ a line ending, not a carriage return of text, so what such an `old` matches is
 not what it says. It is refused with exit 2 when it matches, the line of each
 copy named, and `--eol strict` matches its bytes as they are.
 
+Nor may a hunk take one in that an earlier hunk kept. An `old` and `new` that
+both end on a CRLF's carriage return keep that line ending, as the payloads of
+CRLF lines pasted into an LF heredoc do. When a later hunk of the batch replaces
+the line ending, carriage return and newline both, and the batch leaves the file
+with LF line endings where it had CRLF, an inverse would write the line break
+back as a newline alone, and the carriage return the earlier hunk's inverse
+looks for would be gone. That hunk is refused with exit 2, the line of each such
+line ending named, and the hunks that kept them. Write the two hunks as one, or
+pass `--eol strict` to edit the bytes as they are.
+
 Three rules worth knowing before the first patch:
 
 1. **A payload never gains a trailing newline.** To match text that ends in a

@@ -65,6 +65,11 @@ const (
 	// DiagMatches: an @@ re hunk's pattern matched other than the claimed
 	// number of times, none included (#161). Matched lists each match.
 	DiagMatches
+	// DiagTakenCRLF: under --eol auto, old occurs as many times as claimed,
+	// but a copy takes in a CRLF line ending an earlier hunk kept, by ending
+	// its old and new on the carriage return, and the batch leaves the file LF
+	// where it was CRLF, so the inverse would lose that carriage return (#182).
+	DiagTakenCRLF
 )
 
 // A Diagnosis explains why a hunk did not apply. It renders to both the text
@@ -1444,7 +1449,7 @@ func (d *Diagnosis) Render(indent string) string {
 	case DiagMatches:
 		d.renderMatches(&b, indent)
 
-	case DiagSplitCRLF, DiagJoinedCRLF, DiagMisreadCRLF:
+	case DiagSplitCRLF, DiagJoinedCRLF, DiagMisreadCRLF, DiagTakenCRLF:
 		at := make([]string, len(d.Lines))
 		for i, l := range d.Lines {
 			at[i] = fmt.Sprint(l)
