@@ -60,7 +60,7 @@ jobs:
       # Everything except the fuzz sweep, whose verdict is a matter of luck and
       # timing and should not decide whether a release happens.
       - name: gate
-        run: make fmt-check vet lint gates test corpus-test vuln size
+        run: make fmt-check vet lint gates test corpus-test nightly-find-test vuln size
 
   build:
     name: build the binaries

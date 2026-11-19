@@ -1,0 +1,20 @@
+Nightly run 7 on abc (not in this clone: git fetch to describe it): u
+
+Job "fuzz (FuzzInverseToUndoesTheBatch)", toolchain line "fuzz: toolchain go1.27.3": a find of time or memory: the fuzzing worker hung or died on the input. The only new input in the artifact is testdata/fuzz/FuzzInverseToUndoesTheBatch/b63b19337e4dd6b4 (copied).
+
+```
+--- FAIL: FuzzInverseToUndoesTheBatch (479.56s)
+    fuzzing process hung or terminated unexpectedly: exit status 2
+    Failing input written to testdata/fuzz/FuzzInverseToUndoesTheBatch/b63b19337e4dd6b4
+    To re-run:
+    go test -run=FuzzInverseToUndoesTheBatch/b63b19337e4dd6b4
+```
+
+Job "fuzz (FuzzLooksLikeDelimiter)", no toolchain line: golang/go#75804's deadline flake, as nothing was found on a toolchain without the fix: re-run the job and commit nothing. The artifact holds no input the tree has not committed.
+
+```
+--- FAIL: FuzzLooksLikeDelimiter (600.07s)
+    context deadline exceeded
+```
+
+done: root cause, the fix, and the test that covers it

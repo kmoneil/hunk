@@ -39,7 +39,7 @@ FUZZ_GO_VERSION := 1.27.3
 
 FUZZTIME ?= 20s
 
-.PHONY: all build fmt fmt-check vet lint test gates deps-gate check corpus corpus-test skill-grade skill-grade-test install hooks tools vuln size fuzz fuzz-targets clean
+.PHONY: all build fmt fmt-check vet lint test gates deps-gate check corpus corpus-test nightly-find nightly-find-test skill-grade skill-grade-test install hooks tools vuln size fuzz fuzz-targets clean
 
 all: check
 
@@ -52,6 +52,7 @@ build:
 fmt:
 	git ls-files -z -- '*.go' ':(exclude).agents/*' | xargs -0 gofumpt -w --
 	cd scripts/corpus && gofumpt -w .
+	cd scripts/nightly-find && gofumpt -w .
 
 # The eval fixtures under .agents/skills/*-workspace/ include deliberately
 # unformatted Go, because one eval case is about a verify command that
@@ -85,6 +86,7 @@ lint:
 vuln:
 	govulncheck ./...
 	cd scripts/corpus && govulncheck ./...
+	cd scripts/nightly-find && govulncheck ./...
 
 # The tripwire, not a target. See SIZE_BUDGET_BYTES.
 #
@@ -151,7 +153,7 @@ deps-gate:
 		exit 1; \
 	fi
 
-check: fmt-check vet lint gates test corpus-test
+check: fmt-check vet lint gates test corpus-test nightly-find-test
 
 # Grade the skill eval runs in .agents/skills/hunk-workspace/. Does not launch
 # the runs (those are agent invocations); it scores the trees they left behind.
@@ -182,6 +184,18 @@ corpus:
 	cd scripts/corpus && $(GO) run . > ../../_reports/corpus-$$(date +%Y-%m-%d).txt
 	cd scripts/corpus && $(GO) run . --json > ../../_reports/corpus-$$(date +%Y-%m-%d).json
 	@echo "wrote _reports/corpus-$$(date +%Y-%m-%d).{txt,json}"
+
+# scripts/nightly-find takes in what the nightly fuzz sweep found: each failed
+# job's verdict and toolchain line, the inputs the tree has not committed,
+# copied into testdata/fuzz, and the body of the card that works it. RUN is the
+# run's number or URL; without it, the latest failed fuzz-nightly run. It reads
+# GitHub through gh, so gh has to be logged in. Its own module for the corpus
+# module's reasons, and tested under `make check` the same way.
+nightly-find:
+	cd scripts/nightly-find && $(GO) run . --root ../.. $(RUN)
+
+nightly-find-test:
+	cd scripts/nightly-find && $(GO) vet ./... && $(GO) test -count=1 ./...
 
 # Install the binary and the agent skill for personal use.
 #

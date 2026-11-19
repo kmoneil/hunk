@@ -1,0 +1,30 @@
+﻿2026-11-18T16:48:37.5313694Z Current runner version: '2.338.2'
+2026-11-18T16:48:37.5331402Z ##[group]Runner Image Provisioner
+2026-11-18T16:48:57.6509434Z [36;1mmake fuzz FUZZTARGET="$TARGET" FUZZTIME="$FUZZTIME"[0m
+2026-11-18T16:48:57.6966896Z go: downloading go1.27.3 (linux/amd64)
+2026-11-18T16:49:01.1348582Z fuzz: toolchain go1.27.3
+2026-11-18T16:49:01.1349079Z fuzz: FuzzAnInverseUndoesThePatch
+2026-11-18T16:49:18.3225899Z fuzz: elapsed: 0s, gathering baseline coverage: 0/752 completed
+2026-11-18T16:49:19.8091118Z fuzz: elapsed: 2s, gathering baseline coverage: 752/752 completed, now fuzzing with 4 workers
+2026-11-18T16:49:21.3230002Z fuzz: elapsed: 3s, execs: 19554 (6517/sec), new interesting: 1 (total: 753)
+2026-11-18T16:52:06.3234139Z fuzz: elapsed: 2m48s, execs: 750332 (5396/sec), new interesting: 106 (total: 858)
+2026-11-18T16:52:08.4773450Z fuzz: minimizing 114-byte failing input file
+2026-11-18T16:52:09.3235958Z fuzz: elapsed: 2m51s, minimizing
+2026-11-18T16:52:09.5688801Z fuzz: elapsed: 2m51s, minimizing
+2026-11-18T16:52:09.5691252Z --- FAIL: FuzzAnInverseUndoesThePatch (171.26s)
+2026-11-18T16:52:09.5691839Z     --- FAIL: FuzzAnInverseUndoesThePatch (0.00s)
+2026-11-18T16:52:09.5693679Z         invert_test.go:786: the ending flipped, and the inverse left "\n\xe7\r", not "\xe7\r\n\r" but for CRs
+2026-11-18T16:52:09.5694240Z             after the patch "0\r"
+2026-11-18T16:52:09.5694788Z             a "\xe7\r" b "\r" c "\n" d "0"
+2026-11-18T16:52:09.5695094Z     
+2026-11-18T16:52:09.5695587Z     Failing input written to testdata/fuzz/FuzzAnInverseUndoesThePatch/f1b1d2a859bcf497
+2026-11-18T16:52:09.5696132Z     To re-run:
+2026-11-18T16:52:09.5696813Z     go test -run=FuzzAnInverseUndoesThePatch/f1b1d2a859bcf497
+2026-11-18T16:52:09.5697403Z FAIL
+2026-11-18T16:52:09.5750124Z exit status 1
+2026-11-18T16:52:09.5750622Z FAIL	github.com/kmoneil/hunk	171.272s
+2026-11-18T16:52:09.6055403Z make: *** [Makefile:120: fuzz] Error 1
+2026-11-18T16:52:09.6072313Z ##[error]Process completed with exit code 2.
+2026-11-18T16:52:09.6135888Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+2026-11-18T16:52:09.6136269Z with:
+2026-11-18T16:52:09.6136565Z   name: crasher-FuzzAnInverseUndoesThePatch
