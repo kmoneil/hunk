@@ -741,6 +741,13 @@ func FuzzAnInverseUndoesThePatch(f *testing.F) {
 	// misreads a CRLF.
 	f.Add([]byte("a\r\nv\r\nw\r\nx\r\ny0P\nQ\n"), []byte("a"), []byte("\nQ"),
 		[]byte("Q\r\nv\r\nw\r\nx\r\n"), []byte("\r\r\r\n"), false)
+	// #182, the nightly's find: a and b both end on the carriage return of the
+	// file's CRLF, which keeps it, and c takes that CRLF in. That left the file
+	// with no newline, which reads as LF, so the inverse wrote the line break
+	// back as a newline alone, and its "\r" -> "\xe7\r" found the file's other
+	// carriage return. Refused now when the patch is applied, as taking in a
+	// line ending an earlier hunk kept.
+	f.Add([]byte("\xe7\r\n\r"), []byte("\xe7\r"), []byte("\r"), []byte("\n"), []byte("0"), false)
 	f.Fuzz(func(t *testing.T, start, a, b, c, d []byte, strict bool) {
 		n1 := bytes.Count(start, a)
 		if len(a) == 0 || n1 == 0 {

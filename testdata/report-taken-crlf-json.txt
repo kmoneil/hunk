@@ -1,0 +1,21 @@
+{
+  "ok": false,
+  "exit": 2,
+  "failures": [
+    {
+      "hunk": 2,
+      "path": "f.txt",
+      "patch_line": 6,
+      "expected": 1,
+      "found": 1,
+      "lines": [
+        1
+      ],
+      "near_miss": {
+        "cause": "taken line ending",
+        "detail": "hunk 1's old and new end on that line ending's carriage return, and the batch leaves the file's line ending LF where it was CRLF, so the batch's inverse would write the line break back as a newline alone, and the carriage return hunk 1's inverse looks for would be gone; write this hunk and hunk 1 as one, or pass --eol strict to edit the bytes as they are",
+        "shifted_by_hunks": 1
+      }
+    }
+  ]
+}

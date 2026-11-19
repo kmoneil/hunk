@@ -1,0 +1,9 @@
+hunk: 1 of 2 hunks did not match; nothing was written
+
+hunk 2  f.txt  (patch line 6)
+  expected 1 occurrence, found 1, and replacing it would take in a CRLF line ending kept earlier in the batch
+  at line 1
+
+  hunk 1's old and new end on that line ending's carriage return, and the batch leaves the file's line ending LF where it was CRLF, so the batch's inverse would write the line break back as a newline alone, and the carriage return hunk 1's inverse looks for would be gone; write this hunk and hunk 1 as one, or pass --eol strict to edit the bytes as they are
+  line numbers count against the file as the hunk before this one would have left it,
+  not as it is on disk: nothing was written.

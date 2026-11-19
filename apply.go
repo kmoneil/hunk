@@ -243,8 +243,13 @@ type file struct {
 
 	failedAt int // the first hunk against this file that did not match
 	applied  int // hunks that changed this file before the current one
-	added    int
-	removed  int
+	// kept are the carriage returns replacements ended old and new on, where
+	// the file had a CRLF, and taken the hunks that took one in with its
+	// newline (takencrlf.go, #182). Followed under --eol auto only.
+	kept    []keptCR
+	taken   []takenCRLF
+	added   int
+	removed int
 
 	// wrote is the hash of what commit put on disk. Rollback compares against
 	// it to tell a formatter from a second writer (§6.3), which is
@@ -557,6 +562,9 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			continue
 		}
 		if h.Op == OpRegex {
+			// What a pattern rewrote is not followed, and a patch that holds
+			// one has no inverse for a kept carriage return to be lost from.
+			f.kept = nil
 			if fail := x.validateRegex(n, h, f, &diagnosed); fail != nil {
 				f.failedAt = n
 				failures = append(failures, *fail)
@@ -564,6 +572,13 @@ func (x *Txn) Validate(p *Patch) []Failure {
 			continue
 		}
 		if h.Op != OpReplace {
+			// Neither is followed past a whole-file hunk. A delete, an append
+			// and a prepend have no inverse, and a create replaces the text a
+			// kept or taken line ending was in, as a delete takes it out.
+			f.kept = nil
+			if h.Op == OpCreate || h.Op == OpDelete {
+				f.taken = nil
+			}
 			before, applied := f.cur, f.applied
 			x.applyWhole(f, h)
 			if h.Op == OpCreate {
@@ -648,6 +663,9 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		if bytes.Equal(next, f.cur) {
 			x.noteNoChange(n, h, f)
 		} else {
+			if x.opt.EOL != EOLStrict {
+				f.trackKept(n, old, repl, h.Count)
+			}
 			f.changed = true
 			f.applied++
 			// The file's lines the replacement changed, per occurrence
@@ -664,11 +682,12 @@ func (x *Txn) Validate(p *Patch) []Failure {
 		}
 		f.cur = next
 	}
-	// A path conflict is a property of the final state, so it can only be
-	// found once the walk is over, and its failures join the others in hunk
-	// order.
-	if conflicts := x.pathConflicts(p); len(conflicts) > 0 {
-		failures = append(failures, conflicts...)
+	// A path conflict is a property of the final state, and so is a file's
+	// line ending, which says whether a taken one is refused. Both can only
+	// be found once the walk is over, and their failures join the others in
+	// hunk order.
+	if late := append(x.pathConflicts(p), x.takenCRLFs(p)...); len(late) > 0 {
+		failures = append(failures, late...)
 		sort.SliceStable(failures, func(i, j int) bool { return failures[i].Hunk < failures[j].Hunk })
 	}
 	return failures
