@@ -1,0 +1,26 @@
+﻿2026-11-15T15:16:45.1214856Z Current runner version: '2.338.2'
+2026-11-15T15:16:45.1277052Z ##[group]Runner Image Provisioner
+2026-11-15T15:16:55.8144087Z [36;1mmake fuzz FUZZTARGET="$TARGET" FUZZTIME="$FUZZTIME"[0m
+2026-11-15T15:16:55.8298622Z go: downloading go1.27.3 (linux/amd64)
+2026-11-15T15:16:59.5250288Z fuzz: toolchain go1.27.3
+2026-11-15T15:16:59.5251022Z fuzz: FuzzInverseToUndoesTheBatch
+2026-11-15T15:17:20.6333831Z fuzz: elapsed: 0s, gathering baseline coverage: 0/859 completed
+2026-11-15T15:17:23.6342530Z fuzz: elapsed: 3s, gathering baseline coverage: 390/859 completed
+2026-11-15T15:17:26.4701863Z fuzz: elapsed: 6s, gathering baseline coverage: 859/859 completed, now fuzzing with 4 workers
+2026-11-15T15:25:11.6389722Z fuzz: elapsed: 7m51s, execs: 540559 (21/sec), new interesting: 359 (total: 1218)
+2026-11-15T15:25:14.6342439Z fuzz: elapsed: 7m54s, execs: 540559 (0/sec), new interesting: 359 (total: 1218)
+2026-11-15T15:25:17.9835362Z fuzz: elapsed: 7m57s, execs: 540559 (0/sec), new interesting: 359 (total: 1218)
+2026-11-15T15:25:20.1642633Z fuzz: elapsed: 8m0s, execs: 541441 (349/sec), new interesting: 360 (total: 1219)
+2026-11-15T15:25:20.1663186Z --- FAIL: FuzzInverseToUndoesTheBatch (479.56s)
+2026-11-15T15:25:20.2336432Z     fuzzing process hung or terminated unexpectedly: exit status 2
+2026-11-15T15:25:20.2337401Z     Failing input written to testdata/fuzz/FuzzInverseToUndoesTheBatch/b63b19337e4dd6b4
+2026-11-15T15:25:20.2338244Z     To re-run:
+2026-11-15T15:25:20.3335788Z     go test -run=FuzzInverseToUndoesTheBatch/b63b19337e4dd6b4
+2026-11-15T15:25:20.3336403Z FAIL
+2026-11-15T15:25:21.0286307Z exit status 1
+2026-11-15T15:25:21.0303668Z FAIL	github.com/kmoneil/hunk	480.129s
+2026-11-15T15:25:21.7207311Z make: *** [Makefile:120: fuzz] Error 1
+2026-11-15T15:25:21.8228511Z ##[error]Process completed with exit code 2.
+2026-11-15T15:25:22.0726108Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+2026-11-15T15:25:22.0726695Z with:
+2026-11-15T15:25:22.0727153Z   name: crasher-FuzzInverseToUndoesTheBatch

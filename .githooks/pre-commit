@@ -57,4 +57,8 @@ go test -count=1 -timeout=180s ./...
 echo "pre-commit: corpus module"
 (cd scripts/corpus && go vet ./... && go test -count=1 ./...)
 
+# The same, for the same reasons: the nightly's intake.
+echo "pre-commit: nightly-find module"
+(cd scripts/nightly-find && go vet ./... && go test -count=1 ./...)
+
 echo "pre-commit: ok"

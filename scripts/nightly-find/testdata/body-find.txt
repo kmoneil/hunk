@@ -1,0 +1,20 @@
+GitHub issue #182, fuzz: the nightly sweep found something
+https://github.com/kmoneil/hunk/issues/182, opened 2026-11-18 by the nightly fuzz workflow.
+
+Nightly run 44348995564 on b667022 (v0.3.49-1-gb667022): https://github.com/kmoneil/hunk/actions/runs/44348995564
+
+Job "fuzz (FuzzAnInverseUndoesThePatch)", toolchain line "fuzz: toolchain go1.27.3": a find. The only new input in the artifact is testdata/fuzz/FuzzAnInverseUndoesThePatch/f1b1d2a859bcf497 (copied).
+
+```
+--- FAIL: FuzzAnInverseUndoesThePatch (171.26s)
+    --- FAIL: FuzzAnInverseUndoesThePatch (0.00s)
+        invert_test.go:786: the ending flipped, and the inverse left "\n\xe7\r", not "\xe7\r\n\r" but for CRs
+            after the patch "0\r"
+            a "\xe7\r" b "\r" c "\n" d "0"
+    
+    Failing input written to testdata/fuzz/FuzzAnInverseUndoesThePatch/f1b1d2a859bcf497
+    To re-run:
+    go test -run=FuzzAnInverseUndoesThePatch/f1b1d2a859bcf497
+```
+
+done: root cause, the fix, and the test that covers it

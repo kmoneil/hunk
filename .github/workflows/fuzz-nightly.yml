@@ -135,6 +135,10 @@ jobs:
               "" \
               "Run: $RUN" \
               "" \
+              "\`make nightly-find RUN=$RUN\` takes it in: each failed job's verdict" \
+              "and toolchain line, the inputs the tree has not committed, copied into" \
+              "testdata/fuzz, and the body of the card that works it." \
+              "" \
               "The failing input is attached to that run as an artifact. Commit it" \
               "under testdata/fuzz **and** add it as an \`f.Add\` seed in the same" \
               "change, so the regression is visible in the test source and not only" \

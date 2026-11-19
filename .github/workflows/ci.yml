@@ -118,6 +118,11 @@ jobs:
       # has been wrong twice, both times after its numbers had been reported.
       - name: test
         run: cd scripts/corpus && go vet ./... && go test -count=1 ./...
+      # The nightly's intake, its own module for the same reasons. A step of
+      # this job and not a job of its own, because the ruleset requires this
+      # job by name and a new one would run without being required.
+      - name: test the nightly-find module
+        run: cd scripts/nightly-find && go vet ./... && go test -count=1 ./...
 
   vuln:
     name: vulnerability scan
