@@ -841,6 +841,32 @@ func TestMeasureReportGoldens(t *testing.T) {
 		golden(t, "report-each-measure-json", out.String())
 	})
 
+	// #186: the iterations and the package's time are one value in every
+	// run, so the table is the one row that moved and a line for the two.
+	t.Run("numbers the same in every run", func(t *testing.T) {
+		runs := []*eachPatch{
+			run("base", 1, 2, 0, bench("2911")...), run("v1.hunk", 1, 2, 0, bench("2604")...),
+			run("base", 2, 2, 0, bench("2897")...), run("v1.hunk", 2, 2, 0, bench("2611")...),
+		}
+		c := cfg(2)
+		for i, ep := range runs {
+			ep.side = i % 2
+			ep.measured(40)
+		}
+		c.table = measureTableOf(runs, 2)
+		got, code := stream(c, runs, eachOutcome{tried: 4, zeros: 4, stopAt: -1, seconds: 12.4})
+		if code != exitOK {
+			t.Fatalf("exit %d", code)
+		}
+		golden(t, "report-each-measure-same", got)
+
+		var out, errOut bytes.Buffer
+		if code := eachJSON(c, runs, eachBaselines{}, exitOK, "", &out, &errOut); code != exitOK {
+			t.Fatalf("exit %d: %s", code, errOut.String())
+		}
+		golden(t, "report-each-measure-same-json", out.String())
+	})
+
 	t.Run("a measurement missing", func(t *testing.T) {
 		c := cfg(1)
 		c.build = "go vet ./..."

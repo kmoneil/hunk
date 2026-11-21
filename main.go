@@ -210,8 +210,10 @@ FLAGS
                         line, named by the line's leading text and the number's
                         unit, a column for base and each patch, each cell the
                         median across the rounds, and each patch's ratio to
-                        base. The exit is 0 when every run ran to its end, 3
-                        when one timed out or did not build.
+                        base. A number that was the same in every run is left
+                        out, and a line under the table counts them. The exit
+                        is 0 when every run ran to its end, 3 when one timed
+                        out or did not build.
   --rounds N            With --measure: run base and the patches N times,
                         interleaved, so that drift falls on each alike. (1)
   --isolated            With --try: copy --root to a temporary directory once

@@ -36,6 +36,15 @@ import (
 // the 1000000's. Rows that would share a label have the number's place in
 // its line after it, "(2)"; rows that would share that too, and a row with no
 // label at all, are labelled by their shape.
+//
+// A number that was one value in every run, on every side, is not printed
+// (#186): a line under the table counts them. A bench line holds its input's
+// size, its stream's size and its memory beside the one or two numbers that
+// move, so eight inputs were 72 rows of which 16 were wanted, found by their
+// place in the line and in the end by a grep in a wrapper. A label is
+// settled over every row before any is left out, so a row is named the same
+// whatever else stood still that run, and as --json names it, which carries
+// every row and marks these.
 
 // figure is one number in one line of a run's output.
 type figure struct {
@@ -214,6 +223,25 @@ type measureRow struct {
 	samples [][]figure // by side
 }
 
+// same reports whether the row's number was one value in every run (#186):
+// every side printed its line, and no sample differs from another, by value,
+// so 5 and 5.0 are one. A row a side did not print is not the same on every
+// side, and its dash is the news.
+func (r *measureRow) same() bool {
+	if !r.everywhere() {
+		return false
+	}
+	first := r.samples[0][0].value
+	for _, side := range r.samples {
+		for _, f := range side {
+			if f.value != first {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // everywhere reports whether every side printed the row's line.
 func (r *measureRow) everywhere() bool {
 	for _, s := range r.samples {
@@ -348,7 +376,9 @@ func (r *measureRow) ratio(side int) (float64, bool) {
 // write prints the table: a header of the sides' names, then a row a line,
 // the label, base's cell, and each patch's cell and ratio. Text the command
 // printed, in a label, is shown as its output is, a control character by
-// name. A cell a side has no sample for, and its ratio, is "-".
+// name. A cell a side has no sample for, and its ratio, is "-". A row that
+// was the same in every run is left out, and a line after the rows says how
+// many were; where every row was, that line is all there is.
 func (t *measureTable) write(w io.Writer) {
 	header := []string{"", showControls(t.sides[0])}
 	for _, s := range t.sides[1:] {
@@ -356,6 +386,9 @@ func (t *measureTable) write(w io.Writer) {
 	}
 	grid := [][]string{header}
 	for _, r := range t.rows {
+		if r.same() {
+			continue
+		}
 		line := []string{shown([]byte(r.label), false)}
 		for side := range t.sides {
 			text := "-"
@@ -374,6 +407,11 @@ func (t *measureTable) write(w io.Writer) {
 		}
 		grid = append(grid, line)
 	}
+	left := len(t.rows) + 1 - len(grid)
+	if left == len(t.rows) {
+		// No row to print, so no header over none.
+		grid = nil
+	}
 	widths := make([]int, len(header))
 	for _, line := range grid {
 		for i, c := range line {
@@ -391,11 +429,29 @@ func (t *measureTable) write(w io.Writer) {
 		}
 		fmt.Fprintln(w, strings.TrimRight(b.String(), " "))
 	}
+	if left > 0 {
+		fmt.Fprintln(w, sameLine(left, len(t.rows)))
+	}
+}
+
+// sameLine is the line under the table for the left rows, of its of, that
+// were the same in every run.
+func sameLine(left, of int) string {
+	switch {
+	case left == of && of == 1:
+		return "the one number the runs printed was the same in every run"
+	case left == of:
+		return fmt.Sprintf("all %d numbers the runs printed were the same in every run", of)
+	case left == 1:
+		return "1 number was the same in every run and is left out"
+	}
+	return fmt.Sprintf("%d numbers were the same in every run and are left out", left)
 }
 
 // jsonMeasureTable is the table for --json: the sides, and each row with a
 // median, a ratio and a count of samples for each side, null where the side
-// has none and base's ratio always.
+// has none and base's ratio always. Every row is here, and same marks one
+// the text leaves out (#186), so a reader of rows since v0.3.45 loses none.
 type jsonMeasureTable struct {
 	Sides []string         `json:"sides"`
 	Rows  []jsonMeasureRow `json:"rows"`
@@ -408,12 +464,13 @@ type jsonMeasureRow struct {
 	Medians []*float64 `json:"medians"`
 	Ratios  []*float64 `json:"ratios"`
 	Samples []int      `json:"samples"`
+	Same    bool       `json:"same,omitempty"`
 }
 
 func (t *measureTable) json() *jsonMeasureTable {
 	jt := &jsonMeasureTable{Sides: t.sides, Rows: []jsonMeasureRow{}}
 	for _, r := range t.rows {
-		jr := jsonMeasureRow{Label: r.label, Line: r.shape, Number: r.place}
+		jr := jsonMeasureRow{Label: r.label, Line: r.shape, Number: r.place, Same: r.same()}
 		for side := range t.sides {
 			jr.Samples = append(jr.Samples, len(r.samples[side]))
 			var m, q *float64

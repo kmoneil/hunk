@@ -1,0 +1,120 @@
+{
+  "ok": true,
+  "exit": 0,
+  "each": {
+    "command": "go test -run '^$' -bench Parse .",
+    "measure": true,
+    "rounds": 2,
+    "patches": [
+      {
+        "patch": "base",
+        "base": true,
+        "round": 1,
+        "ran": true,
+        "status": 0,
+        "seconds": 3.1,
+        "output": [
+          "BenchmarkParse-10   \t  412345\t      2911 ns/op",
+          "ok  \texample.com/parse\t3.012s"
+        ]
+      },
+      {
+        "patch": "v1.hunk",
+        "round": 1,
+        "ran": true,
+        "status": 0,
+        "seconds": 3.1,
+        "output": [
+          "BenchmarkParse-10   \t  412345\t      2604 ns/op",
+          "ok  \texample.com/parse\t3.012s"
+        ],
+        "rolled_back": 1
+      },
+      {
+        "patch": "base",
+        "base": true,
+        "round": 2,
+        "ran": true,
+        "status": 0,
+        "seconds": 3.1,
+        "output": [
+          "BenchmarkParse-10   \t  412345\t      2897 ns/op",
+          "ok  \texample.com/parse\t3.012s"
+        ]
+      },
+      {
+        "patch": "v1.hunk",
+        "round": 2,
+        "ran": true,
+        "status": 0,
+        "seconds": 3.1,
+        "output": [
+          "BenchmarkParse-10   \t  412345\t      2611 ns/op",
+          "ok  \texample.com/parse\t3.012s"
+        ],
+        "rolled_back": 1
+      }
+    ],
+    "table": {
+      "sides": [
+        "base",
+        "v1.hunk"
+      ],
+      "rows": [
+        {
+          "label": "BenchmarkParse-10",
+          "line": "BenchmarkParse-10 # # ns/op",
+          "number": 1,
+          "medians": [
+            412345,
+            412345
+          ],
+          "ratios": [
+            null,
+            1
+          ],
+          "samples": [
+            2,
+            2
+          ],
+          "same": true
+        },
+        {
+          "label": "BenchmarkParse-10 ns/op",
+          "line": "BenchmarkParse-10 # # ns/op",
+          "number": 2,
+          "medians": [
+            2904,
+            2607.5
+          ],
+          "ratios": [
+            null,
+            0.8978994490358126
+          ],
+          "samples": [
+            2,
+            2
+          ]
+        },
+        {
+          "label": "ok example.com/parse s",
+          "line": "ok example.com/parse #s",
+          "number": 1,
+          "medians": [
+            3.012,
+            3.012
+          ],
+          "ratios": [
+            null,
+            1
+          ],
+          "samples": [
+            2,
+            2
+          ],
+          "same": true
+        }
+      ]
+    }
+  }
+}

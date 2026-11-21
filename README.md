@@ -870,6 +870,17 @@ the rest, with `-` in the cells it has no sample for, and a ratio is `-` where
 base's median is 0. A run that stopped prints no table, and neither does
 `--quiet` on success.
 
+A number that was one value in every run, on every side, is left out of the
+table, and a line under it counts them: `12 numbers were the same in every run
+and are left out`. A bench line holds its input's size and its memory beside
+the one or two numbers that move, and a row of `N  N  1.00x` for each says
+nothing a count does not. The same is by value, so `5` and `5.0` are one, and
+across every sample: a number that moved in one round of one side stays, and
+so does one that a side did not print, since its `-` is the news. A row keeps
+the name it would have had among them all, `(4)` for the fourth number of its
+line. Where every number was the same there is no table, only `all 16 numbers
+the runs printed were the same in every run`.
+
 No status is a catch. The run with no patch applied is an entry rather than a
 gate, nothing runs again after the last patch, and a command piped into `tail`
 or `grep` is let through, as a single `--try`'s is, since no exit is scored; a
@@ -888,7 +899,8 @@ each run's whole output: `bench > "/tmp/bench/$(basename
 `each.table` is the table: its `sides`, base first, and its `rows`, each with
 its `label`, its `line` with the numbers taken out, the `number`'s place in
 that line, and per side a `medians`, a `ratios` and a `samples` entry, `null`
-where the side has none and for base's ratio.
+where the side has none and for base's ratio. Every row is there, and one the
+text leaves out as the same in every run has `same: true`.
 
 ### Trying in a copy: `--isolated`
 
