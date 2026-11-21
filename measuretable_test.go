@@ -216,8 +216,11 @@ func TestMeasureTable(t *testing.T) {
 	})
 
 	t.Run("a zero base has no ratio, nor one past float64", func(t *testing.T) {
+		// zz's medians are both 0, from samples that are not all one value:
+		// the same everywhere, it would be left out (#186) and 0 over 0, which
+		// is NaN, would not be printed.
 		runs := measuredRuns([]string{"base", "p"},
-			[][]string{{"z 0", "zz 0", "huge 1e-300"}, {"z 5", "zz 0", "huge 1e300"}},
+			[][]string{{"z 0", "zz -1", "zz 0", "zz 1", "huge 1e-300"}, {"z 5", "zz 0", "huge 1e300"}},
 		)
 		want := "" +
 			"      base    p\n" +
@@ -288,6 +291,134 @@ func TestMeasureTable(t *testing.T) {
 		got := render(measureTableOf(runs, 2))
 		if strings.ContainsAny(got, "\x07\x1b") || !strings.Contains(got, "a<U+0007>b") || !strings.Contains(got, "p<U+001B>") {
 			t.Errorf("table = %q", got)
+		}
+	})
+
+	// #186: a number that was one value in every run, on every side, is left
+	// out of the text, and a line under the rows counts them.
+	t.Run("#186: the numbers of a line that stood still are left out, and counted", func(t *testing.T) {
+		line := func(name, size, speed, ratio string) string {
+			return name + "      " + size + "  5   52809   " + speed + "   707.2  " + ratio + "  276089  299735"
+		}
+		runs := measuredRuns([]string{"base", "a.hunk"}, [][]string{
+			{line("alice29.txt@q5", "152089", "760.1", "107.4"), line("mapsdatazrh@q5", "285886", "520.7", "96.6")},
+			{line("alice29.txt@q5", "152089", "912.3", "128.9"), line("mapsdatazrh@q5", "285886", "625.0", "115.9")},
+		})
+		// A kept row has the place it would have had among all eight.
+		want := "" +
+			"                    base   a.hunk\n" +
+			"alice29.txt@q5 (4)  760.1  912.3   1.20x\n" +
+			"alice29.txt@q5 (6)  107.4  128.9   1.20x\n" +
+			"mapsdatazrh@q5 (4)  520.7  625.0   1.20x\n" +
+			"mapsdatazrh@q5 (6)  96.6   115.9   1.20x\n" +
+			"12 numbers were the same in every run and are left out\n"
+		tab := measureTableOf(runs, 2)
+		if got := render(tab); got != want {
+			t.Errorf("table:\n%s\nwant:\n%s", got, want)
+		}
+		if len(tab.rows) != 16 {
+			t.Errorf("%d rows, want all 16 kept for --json", len(tab.rows))
+		}
+	})
+
+	for _, c := range []struct {
+		name  string
+		names []string
+		runs  [][][]string
+		want  string
+	}{
+		{
+			"one left out is said in the singular",
+			[]string{"base", "p"},
+			[][][]string{{{"a 1", "n 7"}, {"a 2", "n 7"}}},
+			"   base  p\n" +
+				"a  1     2  2.00x\n" +
+				"1 number was the same in every run and is left out\n",
+		},
+		{
+			// Alone in the table, the third number of its line is still
+			// "(3)": the name --json gives it, whatever else stood still.
+			"a row keeps the place it has among all its line's numbers",
+			[]string{"base", "p"},
+			[][][]string{{{"row 100 5 17 42"}, {"row 100 5 27 42"}}},
+			"         base  p\n" +
+				"row (3)  17    27  1.59x\n" +
+				"3 numbers were the same in every run and are left out\n",
+		},
+		{
+			"every number the same: the line alone, with no header",
+			[]string{"base", "p"},
+			[][][]string{{{"size 100", "n 7"}, {"size 100", "n 7"}}},
+			"all 2 numbers the runs printed were the same in every run\n",
+		},
+		{
+			"the only number the same",
+			[]string{"base", "p"},
+			[][][]string{{{"size 100"}, {"size 100"}}},
+			"the one number the runs printed was the same in every run\n",
+		},
+		{
+			"the same in every round on each side, and not on both, stays",
+			[]string{"base", "p"},
+			[][][]string{{{"n 5"}, {"n 6"}}, {{"n 5"}, {"n 6"}}},
+			"   base  p\n" +
+				"n  5     6  1.20x\n",
+		},
+		{
+			"the same but for one round of one side stays",
+			[]string{"base", "p"},
+			[][][]string{{{"n 5"}, {"n 5"}}, {{"n 5"}, {"n 6"}}},
+			"   base  p\n" +
+				"n  5     5.5  1.10x\n",
+		},
+		{
+			"the same by its value, however it is printed",
+			[]string{"base", "p"},
+			[][][]string{{{"n 5", "m 1"}, {"n 5.0", "m 2"}}},
+			"   base  p\n" +
+				"m  1     2  2.00x\n" +
+				"1 number was the same in every run and is left out\n",
+		},
+		{
+			"medians that are the same from samples that are not stay",
+			[]string{"base", "p"},
+			[][][]string{{{"n 1", "n 3"}, {"n 2"}}},
+			"   base  p\n" +
+				"n  2     2  1.00x\n",
+		},
+		{
+			// x is 7 wherever it was printed, and b did not print it: its
+			// dash is the news, so it stays.
+			"the same on the sides that printed it, and a side that did not, stays",
+			[]string{"base", "a", "b"},
+			[][][]string{{{"x 7", "v 1"}, {"x 7", "v 2"}, {"v 3"}}},
+			"   base  a         b\n" +
+				"v  1     2  2.00x  3  3.00x\n" +
+				"x  7     7  1.00x  -  -\n",
+		},
+		{
+			"no number at all prints nothing",
+			[]string{"base", "p"},
+			[][][]string{{{"PASS"}, {"PASS"}}},
+			"",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := render(measureTableOf(measuredRuns(c.names, c.runs...), len(c.names))); got != c.want {
+				t.Errorf("table:\n%s\nwant:\n%s", got, c.want)
+			}
+		})
+	}
+
+	t.Run("json: every row, and same on the ones the text leaves out", func(t *testing.T) {
+		runs := measuredRuns([]string{"base", "p"}, [][]string{{"a 1", "n 7"}, {"a 2", "n 7"}})
+		out, err := json.Marshal(measureTableOf(runs, 2).json())
+		must(t, err)
+		want := `{"sides":["base","p"],"rows":[` +
+			`{"label":"a","line":"a #","number":1,"medians":[1,2],"ratios":[null,2],"samples":[1,1]},` +
+			`{"label":"n","line":"n #","number":1,"medians":[7,7],"ratios":[null,1],"samples":[1,1],"same":true}]}`
+		if string(out) != want {
+			t.Errorf("json = %s\nwant   %s", out, want)
 		}
 	})
 }
@@ -381,6 +512,52 @@ func TestMeasureEndsWithTheTable(t *testing.T) {
 		}
 	})
 
+	t.Run("#186's repro: the numbers that stood still are left out, and counted", func(t *testing.T) {
+		root, a, _ := measureTree(t)
+		command := `v=$(tr -dc 0-9 < f.txt); echo "row 100 5 ${v}7 42"`
+		code, out, errOut := runCLI(t, root, []string{"--measure", "--rounds", "3", "--try", command, "--each", a}, "")
+		if code != exitOK {
+			t.Fatalf("exit %d: %s", code, errOut)
+		}
+		table, summary, _ := strings.Cut(out, "tried ")
+		want := "" +
+			"         base  " + a + "\n" +
+			"row (3)  17    27" + strings.Repeat(" ", len(a)) + "1.59x\n" +
+			"3 numbers were the same in every run and are left out\n"
+		if table != want {
+			t.Errorf("table:\n%s\nwant:\n%s", table, want)
+		}
+		if !strings.HasPrefix(summary, "base and 1 patch in 3 rounds and put back every file; every command exited 0") {
+			t.Errorf("summary = %q", summary)
+		}
+
+		code, out, errOut = runCLI(t, root, []string{"--measure", "--json", "--try", command, "--each", a}, "")
+		if code != exitOK {
+			t.Fatalf("exit %d: %s", code, errOut)
+		}
+		var r struct {
+			Each struct {
+				Table *jsonMeasureTable `json:"table"`
+			} `json:"each"`
+		}
+		must(t, json.Unmarshal([]byte(out), &r))
+		var same []bool
+		for _, row := range r.Each.Table.Rows {
+			same = append(same, row.Same)
+		}
+		if !slices.Equal(same, []bool{true, true, false, true}) {
+			t.Errorf("--json's rows are the same: %v, want every row there and all but the third marked\n%s", same, out)
+		}
+	})
+
+	t.Run("every number the same: its line before the summary, and no table", func(t *testing.T) {
+		root, a, _ := measureTree(t)
+		code, out, errOut := runCLI(t, root, []string{"--measure", "--try", `echo "size 100"`, "--each", a}, "")
+		if code != exitOK || !strings.HasPrefix(out, "the one number the runs printed was the same in every run\ntried base and 1 patch") {
+			t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
+		}
+	})
+
 	t.Run("none under --quiet, which prints nothing on success", func(t *testing.T) {
 		root, a, _ := measureTree(t)
 		code, out, errOut := runCLI(t, root, []string{"--measure", "--quiet", "--try", measureWords, "--each", a}, "")
@@ -457,21 +634,77 @@ func FuzzLineFigures(f *testing.F) {
 }
 
 // FuzzMeasureTable: a table of any two runs' output renders, and --json can
-// carry it, whatever the numbers.
+// carry it, whatever the numbers. And a row is left out of the text just when
+// its number was one value in every run (#186), read off the figures and not
+// off the table: the text has a line for every other row under a header, the
+// line that counts the ones left out when there are any, and nothing else;
+// and --json has every row, marked just when the text leaves it out.
 func FuzzMeasureTable(f *testing.F) {
 	f.Add("a 1\nb 2", "a 3\nb 0")
 	f.Add("z 0\nhuge 1e-300", "z 5\nhuge 1e300")
 	f.Add("time: [1 µs 2 µs]", "6\n6")
+	f.Add("row 100 5 17 42", "row 100 5 27 42")
+	f.Add("size 100", "size 100")
+	f.Add("n 5\nm 1", "n 5.0\nm 2")
+	f.Add("n 1\nn 3", "n 2")
+	f.Add("x 7\nv 1", "v 2")
+	f.Add("PASS", "PASS")
+	// One value but for a side's second printing, or its third.
+	f.Add("n 5\nn 5", "n 5\nn 6")
+	f.Add("n 5\nn 5\nn 7", "n 5")
 	f.Fuzz(func(t *testing.T, base, patch string) {
 		runs := measuredRuns([]string{"base", "p"}, [][]string{strings.Split(base, "\n"), strings.Split(patch, "\n")})
 		tab := measureTableOf(runs, 2)
 		var b bytes.Buffer
 		tab.write(&b)
-		if _, err := json.Marshal(tab.json()); err != nil {
+		jt := tab.json()
+		if _, err := json.Marshal(jt); err != nil {
 			t.Fatalf("--json cannot carry the table: %v", err)
 		}
-		if got := strings.Count(b.String(), "\n"); got != len(tab.rows)+1 {
-			t.Fatalf("%d lines for %d rows:\n%s", got, len(tab.rows), b.String())
+		// Each row's values, by side, from the figures themselves.
+		type key struct {
+			shape string
+			place int
+		}
+		values := map[key][2][]float64{}
+		for _, ep := range runs {
+			for _, fg := range ep.figures {
+				v := values[key{fg.shape, fg.place}]
+				v[ep.side] = append(v[ep.side], fg.value)
+				values[key{fg.shape, fg.place}] = v
+			}
+		}
+		if len(jt.Rows) != len(values) {
+			t.Fatalf("--json has %d rows for %d numbers", len(jt.Rows), len(values))
+		}
+		left := 0
+		for _, row := range jt.Rows {
+			v := values[key{row.Line, row.Number}]
+			same := len(v[0]) > 0 && len(v[1]) > 0
+			for _, side := range v {
+				for _, x := range side {
+					same = same && x == v[0][0]
+				}
+			}
+			if row.Same != same {
+				t.Fatalf("row %q number %d has same %v, and its values are %v", row.Line, row.Number, row.Same, v)
+			}
+			if same {
+				left++
+			}
+		}
+		want := 0
+		if kept := len(jt.Rows) - left; kept > 0 {
+			want = kept + 1
+		}
+		if left > 0 {
+			want++
+			if !strings.Contains(b.String(), "the same in every run") {
+				t.Fatalf("%d rows left out and no line says so:\n%s", left, b.String())
+			}
+		}
+		if got := strings.Count(b.String(), "\n"); got != want {
+			t.Fatalf("%d lines for %d rows, %d of them the same in every run:\n%s", got, len(jt.Rows), left, b.String())
 		}
 	})
 }
