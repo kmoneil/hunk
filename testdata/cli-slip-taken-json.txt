@@ -1,0 +1,43 @@
+{
+  "ok": true,
+  "exit": 0,
+  "files": [
+    {
+      "path": "notes.md",
+      "op": "modify",
+      "added": 1,
+      "removed": 0
+    },
+    {
+      "path": "s.txt",
+      "op": "modify",
+      "added": 1,
+      "removed": 2
+    },
+    {
+      "path": "x.txt",
+      "op": "modify",
+      "added": 2,
+      "removed": 4
+    }
+  ],
+  "hunks": 3,
+  "warnings": [
+    {
+      "kind": "taken_empty_line",
+      "hunk": 2,
+      "patch_line": 10,
+      "path": "s.txt",
+      "text": "A",
+      "message": "hunk 2 (patch line 10) takes the empty line after \"A\" out of s.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty line back in s.txt"
+    },
+    {
+      "kind": "taken_empty_line",
+      "hunk": 3,
+      "patch_line": 16,
+      "path": "x.txt",
+      "text": "A",
+      "message": "hunk 3 (patch line 16) takes the empty line after each of its 2 replacements out of x.txt, the first after \"A\": its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty lines back in x.txt"
+    }
+  ]
+}

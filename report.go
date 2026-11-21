@@ -893,7 +893,8 @@ func jsonCopyOf(m *copyMade) *jsonCopy {
 // jsonWarning is one warning, and kind says which. A stray line,
 // "mistyped_delimiter": where it is in the patch, the file its payload is
 // for, the line, how many payload lines follow it, and the text report's
-// sentence. A slip, "empty_line", "joined_line" or "no_final_newline": the
+// sentence. A slip, "empty_line", "joined_line", "taken_empty_line" (#185)
+// or "no_final_newline": the
 // hunk, its patch line, its file, the line the slip leaves, and the
 // sentence. A hunk that changed nothing, "no_change": the same, with its old
 // text's first line (#118). Patch names the patch file under --each alone,

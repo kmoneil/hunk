@@ -160,6 +160,117 @@ func TestASlipIsWarnedOf(t *testing.T) {
 			map[string]string{"a.txt": "Ab\n", "b.txt": "A\n\nb\n"},
 		},
 
+		// #185: the line after the match is empty, so no text is joined on:
+		// its line break ends the replacement's last line, and it is gone.
+		{
+			"#185: the empty line after the match, taken",
+			map[string]string{"a.txt": "a\n\nb\n"},
+			"@@ file a.txt\n@@ old\na\n\n@@ new\nA\n",
+			[]string{`hunk 1 (patch line 2) takes the empty line after "A" out of a.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty line back in a.txt`},
+			map[string]string{"a.txt": "A\nb\n"},
+		},
+		{
+			"taken, in a CRLF file, quoted without the CR",
+			map[string]string{"a.txt": "a\r\n\r\nb\r\n"},
+			"@@ file a.txt\n@@ old\na\n\n@@ new\nA\n",
+			[]string{`hunk 1 (patch line 2) takes the empty line after "A" out of a.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty line back in a.txt`},
+			map[string]string{"a.txt": "A\r\nb\r\n"},
+		},
+		{
+			"taken, after a new text on two lines, quotes its last",
+			map[string]string{"a.txt": "a\n\nb\n"},
+			"@@ file a.txt\n@@ old\na\n\n@@ new\nA\nZ\n",
+			[]string{`hunk 1 (patch line 2) takes the empty line after "Z" out of a.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty line back in a.txt`},
+			map[string]string{"a.txt": "A\nZ\nb\n"},
+		},
+		{
+			"taken, from inside a line, quotes the whole line",
+			map[string]string{"a.txt": "x = 1\n\ny\n"},
+			"@@ file a.txt\n@@ old\n1\n\n@@ new\n2\n",
+			[]string{`hunk 1 (patch line 2) takes the empty line after "x = 2" out of a.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty line back in a.txt`},
+			map[string]string{"a.txt": "x = 2\ny\n"},
+		},
+		{
+			"taken, the first of two empty lines",
+			map[string]string{"a.txt": "a\n\n\nb\n"},
+			"@@ file a.txt\n@@ old\na\n\n@@ new\nA\n",
+			[]string{`hunk 1 (patch line 2) takes the empty line after "A" out of a.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty line back in a.txt`},
+			map[string]string{"a.txt": "A\n\nb\n"},
+		},
+		{
+			// It begins with its old text, and a line of text is where the
+			// empty line was: beginning with the old text is not enough.
+			"taken, by a new text that begins with its old text and then a line of text",
+			map[string]string{"a.txt": "a\n\nc\n"},
+			"@@ file a.txt\n@@ old\na\n\n@@ new\na\nb\n",
+			[]string{`hunk 1 (patch line 2) takes the empty line after "b" out of a.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty line back in a.txt`},
+			map[string]string{"a.txt": "a\nb\nc\n"},
+		},
+		{
+			// An empty line stands where the file's did, and it is the new
+			// text's own, after a line that changed. Decided 2026-11-21: only
+			// a new text that begins with its old text is let through, and
+			// this one is told what its ends did.
+			"taken, by a new text with a changed line, a blank line and a line more",
+			map[string]string{"a.txt": "a\n\nc\n"},
+			"@@ file a.txt\n@@ old\na\n\n@@ new\nA\n\nb\n",
+			[]string{`hunk 1 (patch line 2) takes the empty line after "b" out of a.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty line back in a.txt`},
+			map[string]string{"a.txt": "A\n\nb\nc\n"},
+		},
+		{
+			// The file's empty line ends in LF and the new text's in the
+			// file's CRLF, so the new text does not begin with the old text
+			// and that line: the row says +2 -1, a line changed, not +1 -0.
+			"taken, where the empty line is in the file's other line ending",
+			map[string]string{"a.txt": "h\r\n\nb\r\nc\r\n"},
+			"@@ file a.txt\n@@ old\nh\n\n@@ new\nh\n\na\n",
+			[]string{`hunk 1 (patch line 2) takes the empty line after "a" out of a.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty line back in a.txt`},
+			map[string]string{"a.txt": "h\r\n\r\na\nb\r\nc\r\n"},
+		},
+		{
+			"@@ old x3: one taken, one joined and the last at the end of the file",
+			map[string]string{"a.txt": "a\n\na\nb\na\n"},
+			"@@ file a.txt\n@@ old x3\na\n\n@@ new\nA\n",
+			[]string{
+				`hunk 1 (patch line 2) takes the empty line after 1 of its 3 replacements out of a.txt, the first after "A": its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty line back in a.txt`,
+				`hunk 1 (patch line 2) joins the next line onto 1 of its 3 replacements in a.txt, the first making "Ab": its old text ends in a newline and its new text does not; if that was not meant, put the line break back in a.txt`,
+				`hunk 1 (patch line 2) leaves a.txt with no final newline: its old text ends in a newline at the end of the file and its new text does not; if that was not meant, end a.txt in a newline again`,
+			},
+			map[string]string{"a.txt": "A\nAb\nA"},
+		},
+		{
+			"@@ old x2, each taken",
+			map[string]string{"a.txt": "a\n\na\n\n"},
+			"@@ file a.txt\n@@ old x2\na\n\n@@ new\nA\n",
+			[]string{`hunk 1 (patch line 2) takes the empty line after each of its 2 replacements out of a.txt, the first after "A": its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, put the empty lines back in a.txt`},
+			map[string]string{"a.txt": "A\nA\n"},
+		},
+		{
+			// The line break after the first match is the start of the second,
+			// so what follows the first is the second's replacement and not an
+			// empty line of the file: a join, as it was before #185.
+			"@@ old x2, the second match starting on the line break after the first, joins",
+			map[string]string{"a.txt": "x\na\n\na\nq\n"},
+			"@@ file a.txt\n@@ old x2\n\na\n\n@@ new\nZ\n",
+			[]string{`hunk 1 (patch line 2) joins the next line onto each of its 2 replacements in a.txt, the first making "xZZq": its old text ends in a newline and its new text does not; if that was not meant, put the line breaks back in a.txt`},
+			map[string]string{"a.txt": "xZZq\n"},
+		},
+		{
+			// The first adds lines under its empty line and is not counted.
+			"@@ old x2, one adding under an empty line and one joined",
+			map[string]string{"a.txt": "h\n\nx\nh\ny\n"},
+			"@@ file a.txt\n@@ old x2\nh\n\n@@ new\nh\n\na\n",
+			[]string{`hunk 1 (patch line 2) joins the next line onto 1 of its 2 replacements in a.txt, the first making "ay": its old text ends in a newline and its new text does not; if that was not meant, put the line break back in a.txt`},
+			map[string]string{"a.txt": "h\n\na\nx\nh\n\nay\n"},
+		},
+		{
+			"a next line of spaces has text, and is joined",
+			map[string]string{"a.txt": "a\n  \nb\n"},
+			"@@ file a.txt\n@@ old\na\n\n@@ new\nA\n",
+			[]string{`hunk 1 (patch line 2) joins the next line onto its replacement in a.txt, making "A  ": its old text ends in a newline and its new text does not; if that was not meant, put the line break back in a.txt`},
+			map[string]string{"a.txt": "A  \nb\n"},
+		},
+
 		// #150: an empty new whose old is whole lines but for the last break.
 		{
 			"#150: an empty new under a whole line, without its break",
@@ -365,6 +476,44 @@ func TestASlipIsWarnedOf(t *testing.T) {
 			"@@ file a.txt\n@@ old\nb\n@@ new\n@@ delete a.txt\n",
 			nil,
 			map[string]string{"b.txt": "b\n"},
+		},
+		{
+			// The issue's patch: the new text begins with the old text and the
+			// empty line after it, so it adds a line under the empty line and
+			// changes no other.
+			"#185: a line added under the empty line the old text is above",
+			map[string]string{"notes.md": "# Log\n\n## Unreleased\n\n- second\n- third\n"},
+			"@@ file notes.md\n@@ old\n## Unreleased\n\n@@ new\n## Unreleased\n\n- first\n",
+			nil,
+			map[string]string{"notes.md": "# Log\n\n## Unreleased\n\n- first\n- second\n- third\n"},
+		},
+		{
+			"added under the empty line, in a CRLF file",
+			map[string]string{"a.txt": "h\r\n\r\nb\r\n"},
+			"@@ file a.txt\n@@ old\nh\n\n@@ new\nh\n\na\n",
+			nil,
+			map[string]string{"a.txt": "h\r\n\r\na\r\nb\r\n"},
+		},
+		{
+			"added under the empty line, with an empty line more of its own",
+			map[string]string{"a.txt": "h\n\nb\n"},
+			"@@ file a.txt\n@@ old\nh\n\n@@ new\nh\n\n\na\n",
+			nil,
+			map[string]string{"a.txt": "h\n\n\na\nb\n"},
+		},
+		{
+			"added under the empty line, from inside a line",
+			map[string]string{"a.txt": "x = 1\n\ny\n"},
+			"@@ file a.txt\n@@ old\n1\n\n@@ new\n1\n\nz\n",
+			nil,
+			map[string]string{"a.txt": "x = 1\n\nz\ny\n"},
+		},
+		{
+			"@@ old x2, each adding under its empty line",
+			map[string]string{"a.txt": "h\n\nx\nh\n\ny\n"},
+			"@@ file a.txt\n@@ old x2\nh\n\n@@ new\nh\n\na\n",
+			nil,
+			map[string]string{"a.txt": "h\n\na\nx\nh\n\na\ny\n"},
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -653,7 +802,12 @@ func TestASlipUnderEach(t *testing.T) {
 // emptied line (#150), an empty line, and the line it quotes one the file
 // had, with text. None is warned of where the ends agree, an empty new's only
 // warning is the emptied line, and none counts more replacements than the
-// hunk made.
+// hunk made. And where the old ends in a newline and the new does not (#185),
+// which of the three each copy is is read off the file as it was, and each
+// kind counts its own: an empty line taken where the line after the copy is
+// empty and no other copy's, a joined line where it has text or is another
+// copy's, no final newline where there is none; and where nothing is warned
+// of, the edit added lines and took none.
 func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 	for _, c := range [][3]string{
 		{"a\nb\nc\n", "a", "A\n"},
@@ -692,6 +846,17 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 		// before a CRLF, and the warning quoted old's part of the line rather
 		// than the line.
 		{"\n\n\r\r\r\n\n", "\n\r\r", "\n"},
+		// #185: the line after the match is empty.
+		{"a\n\nb\n", "a\n", "A"},
+		{"# Log\n\n## Unreleased\n\n- second\n", "## Unreleased\n", "## Unreleased\n\n- first"},
+		{"a\r\n\r\nb\r\n", "a\r\n", "A"},
+		{"h\r\n\r\nb\r\n", "h\r\n", "h\r\n\r\na"},
+		{"a\n\nc\n", "a\n", "a\nb"},
+		{"a\n\nc\n", "a\n", "A\n\nb"},
+		{"h\n\r\nb\n", "h\n", "h\n\na"},
+		{"x\na\n\na\nq\n", "\na\n", "Z"},
+		{"a\n\na\nb\na\n", "a\n", "A"},
+		{"a\n  \nb\n", "a\n", "A"},
 	} {
 		f.Add([]byte(c[0]), []byte(c[1]), []byte(c[2]))
 	}
@@ -777,7 +942,7 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 				for i := 0; i+1 < real; i++ {
 					found = found || (lines[i] == text && lines[i+1] == "")
 				}
-			case SlipJoinedLine:
+			case SlipJoinedLine, SlipTakenEmptyLine:
 				for i := range real {
 					found = found || lines[i] == text
 				}
@@ -786,6 +951,63 @@ func FuzzASlipSaysWhatTheEditDid(f *testing.F) {
 			}
 			if !found {
 				t.Errorf("slip %v quoting %q is not in what the edit left, %q\nstart %q old %q new %q", s.Kind, text, got, start, old, repl)
+			}
+		}
+		// An old that ends in a newline and a new, not empty, that does not
+		// (#185): what follows each copy in the file as it was says which
+		// warning it is counted in. The line after it is empty, and the
+		// file's own, when a line break follows it that no other copy starts
+		// in; then the empty line is taken, unless the new text begins with
+		// the old text and that line break, which is counted in none.
+		if bytes.HasSuffix(old, lf) && len(repl) > 0 && !bytes.HasSuffix(repl, lf) {
+			want, adds := map[SlipKind]int{}, 0
+			for k, at := 0, 0; k < n; k++ {
+				at += bytes.Index(start[at:], old) + len(old)
+				rest := start[at:]
+				var brk []byte
+				switch {
+				case bytes.HasPrefix(rest, lf):
+					brk = lf
+				case bytes.HasPrefix(rest, crlf):
+					brk = crlf
+				}
+				if k+1 < n && bytes.Index(rest, old) < len(brk) {
+					brk = nil
+				}
+				switch {
+				case brk != nil && bytes.HasPrefix(repl, append(append([]byte(nil), old...), brk...)):
+					adds++
+				case brk != nil:
+					want[SlipTakenEmptyLine]++
+				case len(rest) > 0:
+					want[SlipJoinedLine]++
+				default:
+					want[SlipNoFinalNewline]++
+				}
+			}
+			got3 := map[SlipKind]int{}
+			for _, s := range slips {
+				got3[s.Kind] = s.Count
+			}
+			for _, kind := range []SlipKind{SlipTakenEmptyLine, SlipJoinedLine, SlipNoFinalNewline} {
+				if got3[kind] != want[kind] {
+					t.Errorf("slip kind %d counts %d copies, want %d\nstart %q old %q new %q", kind, got3[kind], want[kind], start, old, repl)
+				}
+			}
+			// None warned of, so it only added lines: every line the file
+			// had is in what the edit left, with its ending and in order,
+			// and there are more of them.
+			if adds == n {
+				b, a := bytes.SplitAfter(start, lf), bytes.SplitAfter(got, lf)
+				i := 0
+				for _, l := range a {
+					if i < len(b) && bytes.Equal(l, b[i]) {
+						i++
+					}
+				}
+				if i != len(b) || len(a) <= len(b) {
+					t.Errorf("not warned of, and the edit did more than add lines: %q\nstart %q old %q new %q", got, start, old, repl)
+				}
 			}
 		}
 		// And #169's shape is warned of, read off the lines rather than the
@@ -833,6 +1055,69 @@ func TestAnEmptiedLineGoldens(t *testing.T) {
 	t.Run("json", func(t *testing.T) {
 		_, out, _ := runCLI(t, cliTree(t, files), []string{"--json"}, patch)
 		golden(t, "cli-slip-emptied-json", out)
+	})
+}
+
+// The taken empty line's goldens (#185), on the issue's shape, which is not
+// warned of, and on the slip it shared a warning with, alone and under
+// @@ old x2: applied, a dry run, whose remedy is the patch's, and --json,
+// whose kind is its own, taken_empty_line.
+func TestATakenEmptyLineGoldens(t *testing.T) {
+	files := map[string]string{
+		"notes.md": "# Log\n\n## Unreleased\n\n- second\n- third\n",
+		"s.txt":    "a\n\nb\n",
+		"x.txt":    "a\n\na\n\nc\n",
+	}
+	patch := "@@ file notes.md\n@@ old\n## Unreleased\n\n@@ new\n## Unreleased\n\n- first\n" +
+		"@@ file s.txt\n@@ old\na\n\n@@ new\nA\n" +
+		"@@ file x.txt\n@@ old x2\na\n\n@@ new\nA\n"
+	t.Run("text", func(t *testing.T) {
+		root := cliTree(t, files)
+		_, out, errOut := runCLI(t, root, nil, patch)
+		golden(t, "cli-slip-taken", out+errOut)
+		for name, want := range map[string]string{
+			"notes.md": "# Log\n\n## Unreleased\n\n- first\n- second\n- third\n",
+			"s.txt":    "A\nb\n",
+			"x.txt":    "A\nA\nc\n",
+		} {
+			if got := readFile(t, root, name); got != want {
+				t.Errorf("%s = %q, want %q", name, got, want)
+			}
+		}
+	})
+	t.Run("dry run", func(t *testing.T) {
+		_, out, errOut := runCLI(t, cliTree(t, files), []string{"--dry-run"}, patch)
+		golden(t, "cli-slip-taken-dry-run", out+errOut)
+	})
+	t.Run("json", func(t *testing.T) {
+		_, out, _ := runCLI(t, cliTree(t, files), []string{"--json"}, patch)
+		golden(t, "cli-slip-taken-json", out)
+		var r slipJSON
+		must(t, json.Unmarshal([]byte(out), &r))
+		if len(r.Warnings) != 2 {
+			t.Fatalf("%d warnings: %s", len(r.Warnings), out)
+		}
+		for i, want := range []struct {
+			hunk, line int
+			path       string
+		}{{2, 10, "s.txt"}, {3, 16, "x.txt"}} {
+			w := r.Warnings[i]
+			if w.Kind != "taken_empty_line" || w.Hunk != want.hunk || w.PatchLine != want.line || w.Path != want.path || w.Text != "A" || w.LinesAfter != nil {
+				t.Errorf("warning %d = %+v, want %+v", i+1, w, want)
+			}
+		}
+	})
+	t.Run("under --each, by the patch's name, with the patch's remedy", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "p.hunk")
+		must(t, os.WriteFile(p, []byte("@@ file s.txt\n@@ old\na\n\n@@ new\nA\n"), 0o644))
+		code, out, errOut := runCLI(t, cliTree(t, files), []string{"--try", "grep -qx a s.txt", "--each", p}, "")
+		if code != exitOK {
+			t.Fatalf("exit %d: %s%s", code, out, errOut)
+		}
+		want := []string{p + ` hunk 1 (line 2) takes the empty line after "A" out of s.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, leave a blank line under its new text, as under its old text`}
+		if got := slipWarningsIn(errOut); strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Errorf("warnings\n got %q\nwant %q", got, want)
+		}
 	})
 }
 
