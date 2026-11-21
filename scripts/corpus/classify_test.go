@@ -894,6 +894,11 @@ var reportGoldens = map[string]int{
 	"cli-slip-joined-empty":         0,
 	"cli-slip-joined-empty-dry-run": 0,
 	"cli-slip-joined-empty-json":    0,
+	// #185: a warning of an empty line taken, where the join's next line was
+	// empty, beside the same shape adding lines under it, which has none.
+	"cli-slip-taken":         0,
+	"cli-slip-taken-dry-run": 0,
+	"cli-slip-taken-json":    0,
 	// #100: a break set, one file of several patches under "@@ patch"
 	// headings. A heading fault refuses the run at 1, and a heading outside
 	// --each is a parse error.

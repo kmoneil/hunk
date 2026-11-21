@@ -248,7 +248,12 @@ Three rules worth knowing before the first patch:
    to agree: a blank line under `@@ new` and none under `@@ old`, which a
    blank line left between hunks for readability gives, leaves an empty line
    after the replacement, and the other way round joins the next line onto it
-   or takes away the file's final newline. An empty `@@ new` under an
+   or takes away the file's final newline. Where that next line is empty
+   there is no text to join: its line break ends the replacement, and the
+   empty line is what goes, which the warning says. A `@@ new` that begins
+   with its `@@ old` and that empty line, a heading with an entry added under
+   the blank line below it, adds whole lines there and changes no other, and
+   is not warned of. An empty `@@ new` under an
    `@@ old` of whole lines with no blank line under it takes the lines' text
    and leaves the last one's line break, an empty line where they were. And
    text taken out from between two empty lines lets them touch, two in a row
@@ -324,7 +329,8 @@ the line and the file, counts any lines after it and says they never ran as
 commands. `--json` carries each line in `warnings` either way: its `kind`,
 `mistyped_delimiter`, the patch line, the path, the line, how many payload lines
 follow it, and the sentence. The warnings of rule 1 are there too, as
-`empty_line`, `joined_line` and `no_final_newline`, with the hunk, and a
+`empty_line`, `joined_line`, `taken_empty_line` and `no_final_newline`, with
+the hunk, and a
 hunk that changed nothing as `no_change`, with its `@@ old`'s first line.
 
 A replacement whose `@@ new` is its `@@ old` matches and changes nothing. It

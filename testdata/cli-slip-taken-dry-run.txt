@@ -1,0 +1,7 @@
+M notes.md +1 -0
+M s.txt    +1 -2
+M x.txt    +2 -4
+3 files, 3 hunks, +4 -6 (dry run: nothing written)
+
+warning: hunk 2 (patch line 10) takes the empty line after "A" out of s.txt: its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, leave a blank line under its new text, as under its old text
+warning: hunk 3 (patch line 16) takes the empty line after each of its 2 replacements out of x.txt, the first after "A": its old text ends in a newline and its new text does not, and the line after it was empty; if that was not meant, leave a blank line under its new text, as under its old text

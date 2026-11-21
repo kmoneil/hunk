@@ -54,7 +54,7 @@ success.
 | exit 5 | Assume the edit landed | Read the message. Unless it says otherwise, nothing was written, or it was put back. The cause is outside the patch: a missing shell, a name the filesystem refused, a full disk |
 | exit 6, `changed on disk` | Retry the same patch | Something else wrote the tree. Re-read the file and rebuild the patch against what is there now |
 | exit 6, `another hunk run holds` | Rebuild the patch, or retry it at once | Nothing was read. Another `hunk` run is mid-command in that tree, perhaps a `--try` or `--each` you started in the background. Wait for it to end, then send the same patch |
-| exit 0, then `warning: hunk 2 (patch line 7) leaves an empty line after "B"` | Take exit 0 as the edit you meant | The batch applied with that empty line, joined line or missing final newline in it. If you did not mean it, do what the warning ends with, in the file it names |
+| exit 0, then `warning: hunk 2 (patch line 7) leaves an empty line after "B"` | Take exit 0 as the edit you meant | The batch applied with that empty line, joined line, empty line taken or missing final newline in it. If you did not mean it, do what the warning ends with, in the file it names |
 | exit 0, then `warning: hunk 2 (patch line 6) changes nothing in f.txt` | Take exit 0 as the edit you meant | That hunk matched and wrote nothing: its new text is its old, or under `--eol auto` differs from it only in line endings. Send the change you meant, or for a line ending, the same hunk with `--eol strict` |
 | exit 1, `patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter` | Pass `--allow-mistyped-delimiter` to get it past | The patch was refused and nothing was written: take the line out of the patch and send it again. If it counts lines after it, they were the rest of your command: take them out too and run them yourself. The flag is for a line you mean as text, as in a document about `hunk`; under it the patch applies and a `warning:` names the line |
 
@@ -197,8 +197,12 @@ example at the top leaves that blank line on purpose. `@@ append` and
 Both ends of a replacement have to agree. A blank line under `@@ new` and none
 under `@@ old`, which a blank line left between hunks for readability gives,
 adds an empty line after the replacement. The other way round joins the next
-line onto it, or leaves the file with no final newline. Either applies at exit
-0, and a `warning:` after the report names the hunk and the fix. To add an
+line onto it, takes that line away when it is empty, or leaves the file with
+no final newline. Either applies at exit 0, and a `warning:` after the report
+names the hunk and the fix. One shape of it is no slip and gets no warning:
+where the line after `@@ old` is empty, a `@@ new` that begins with the
+`@@ old` text and that empty line only adds its other lines under it, which
+is how an entry goes under a heading and the blank line below it. To add an
 empty line on purpose, end both with a blank line and `@@ new` with two.
 
 **2. `@@ old` means exactly one occurrence.** `@@ old x3` means exactly three,

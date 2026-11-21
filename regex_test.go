@@ -176,6 +176,11 @@ func TestRegexApply(t *testing.T) {
 		{"after a literal hunk on the same file", "aaa\n", "@@ file a.txt\n@@ old\naaa\n@@ new\nbbb\n" + regexHunk("", "b+", "c"), "c\n", 2, 2, false, -1},
 		{"a replacement that ends in a line break where the match did not", "a\nc\n", regexHunk("", "a", "b\n"), "b\n\nc\n", 2, 1, false, SlipEmptyLine},
 		{"one that joins the next line on", "a\nc\n", regexHunk("", "a\n", "b"), "bc\n", 1, 2, false, SlipJoinedLine},
+		{"one that takes the empty line after it (#185)", "a\n\nc\n", regexHunk("", "a\n", "b"), "b\nc\n", 1, 2, false, SlipTakenEmptyLine},
+		{"one that adds a line under the empty line after it", "h\n\nc\n", regexHunk("", "h\n", "$0\nb"), "h\n\nb\nc\n", 1, 0, false, -1},
+		// The empty line's break is the second match's start, so the first
+		// is followed by the second's replacement: a join.
+		{"one whose next line's break another match starts on", "a\n\nc\n", regexHunk(" x2", `a\n|\nc`, "X"), "XX\n", 1, 3, false, SlipJoinedLine},
 		{"an empty one that leaves a line's break", "x\ny\n", regexHunk("", "x", ""), "\ny\n", 1, 1, false, SlipEmptiedLine},
 		{"one that changes nothing", "a\n", regexHunk("", "a", "a"), "a\n", 0, 0, false, SlipNoChange},
 	} {
