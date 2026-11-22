@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -188,6 +189,17 @@ FLAGS
                         patch's name, or base for a run with no patch applied,
                         and HUNK_ROUND, its round, 1 outside --measure, in
                         their environment. A patch file named base is refused.
+  --count RE            With --try --each: count the lines of each command's
+                        output that match RE, a Go regexp, and put the number
+                        on its line, "2 lines matched", and in --json: how many
+                        tests a break failed, with '^ *--- FAIL' for go test.
+                        Every line the command printed is read, not only the
+                        --verify-lines tail, a CR at a line's end left off. A
+                        command that exited nonzero with no line matched was
+                        stopped by something else, a panic or a compile error,
+                        and the summary counts those. The exit is as without
+                        it, and a --build's output is not counted. Refused,
+                        exit 1, without --each, or given twice.
   --build CMD           With --try --each: run CMD once on the tree as it is,
                         then after each patch is applied and before the --try
                         command. A break that does not compile exits nonzero
@@ -378,6 +390,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		marker       = fs.String("marker", DefaultMarker, "")
 		patchFile    = onceFlag{again: "one -f is one patch. To try several patches one at a time, use --try CMD --each"}
 		links        pathsFlag
+		count        patternFlag
 		asJSON       = fs.Bool("json", false, "")
 		quiet        = fs.Bool("quiet", false, "")
 		context      = fs.Int("context", DefaultContext, "")
@@ -391,6 +404,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	)
 	fs.Var(&patchFile, "f", "")
 	fs.Var(&links, "isolated-link", "")
+	fs.Var(&count, "count", "")
 
 	// fail reports an error found before the transaction runs. §4: a caller
 	// that passed --json "asked for it on every path", so it gets the object
@@ -537,6 +551,19 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 		return fail(exitUsage, errors.New("--rounds repeats a --measure run, and does nothing without --measure"), "")
 	case *rounds < 1:
 		return fail(exitUsage, fmt.Errorf("--rounds must be at least 1, not %d", *rounds), "")
+	}
+	// --count counts the lines of each run's output that match it (#189), and
+	// only --each has runs whose counts tell one patch from another.
+	var counter *regexp.Regexp
+	if count.set {
+		if !*each {
+			return fail(exitUsage, errors.New("--count counts the matching lines of each patch's output under --try CMD --each, and does nothing without --each"), "")
+		}
+		re, err := regexp.Compile(count.pattern)
+		if err != nil {
+			return fail(exitUsage, fmt.Errorf("--count %q is not a pattern Go's regexp reads: %v", count.pattern, err), "")
+		}
+		counter = re
 	}
 
 	// --verify-may-format only ever acts during a rollback, and --keep-on-fail
@@ -735,7 +762,7 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 			names: fs.Args(), command: *try, build: *build, marker: *marker, opt: opt, allowStrays: *allowStrays,
 			timeout: timeout, verifyLines: *verifyLines, everyTail: linesGiven, verifyFormat: *verifyFormat,
 			dryRun: *dryRun, asJSON: *asJSON, quiet: *quiet, isolated: *isolated, links: beside, letGo: unlock,
-			measure: *measure, rounds: *rounds,
+			measure: *measure, rounds: *rounds, count: counter,
 		}, tree, stdout, stderr, interrupted)
 	}
 
@@ -1027,13 +1054,16 @@ func emptyCommand(fs *flag.FlagSet) (name string) {
 	return name
 }
 
-// valueFlags are the flags that take a path or a duration, and what each
-// takes. Given empty, each read as left out until 2026-11-05, at exit 0:
-// --root "$DIR" with DIR unset edited the working directory, -f "$PATCH" read
-// the patch from stdin, --timeout "$T" set no limit, and quote's --root read
-// the working directory. The command flags have emptyCommand, and
-// --isolated-link refuses its own under --isolated.
+// valueFlags are the flags that take a path, a duration or a pattern, and
+// what each takes. Given empty, each read as left out until 2026-11-05, at
+// exit 0: --root "$DIR" with DIR unset edited the working directory, -f
+// "$PATCH" read the patch from stdin, --timeout "$T" set no limit, and
+// quote's --root read the working directory. The command flags have
+// emptyCommand, and --isolated-link refuses its own under --isolated. An
+// empty --count (#189) would match every line, as an empty @@ re matches at
+// every position.
 var valueFlags = map[string]string{
+	"count":      "pattern",
 	"f":          "path",
 	"root":       "path",
 	"new":        "path",
@@ -1146,6 +1176,36 @@ func (o *onceFlag) Set(v string) error {
 // givenEmpty reports whether the flag was given "" anywhere among the
 // arguments, which String, showing the value kept, cannot say.
 func (o *onceFlag) givenEmpty() bool { return o.empty }
+
+// patternFlag is --count (#189): one pattern, refused a second time rather
+// than replaced by it, as -f is, and an empty one noted for emptyValue. Two
+// patterns are one, joined by |, which counts a line either matches.
+type patternFlag struct {
+	set     bool
+	empty   bool
+	pattern string
+}
+
+func (p *patternFlag) String() string { return p.pattern }
+
+func (p *patternFlag) Set(v string) error {
+	if v == "" {
+		p.empty = true
+		return nil
+	}
+	switch {
+	case p.set && v == p.pattern:
+		return fmt.Errorf("already counting lines that match %q; give --count once", v)
+	case p.set:
+		return fmt.Errorf("already counting lines that match %q; --count takes one pattern, so to count the lines either matches give %q", p.pattern, p.pattern+"|"+v)
+	}
+	p.set, p.pattern = true, v
+	return nil
+}
+
+// givenEmpty reports whether --count was given "" anywhere among the
+// arguments, which String, showing the pattern kept, cannot say.
+func (p *patternFlag) givenEmpty() bool { return p.empty }
 
 // pathsFlag is a flag given once per path, as --isolated-link is (#140).
 type pathsFlag []string

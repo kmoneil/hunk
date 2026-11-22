@@ -761,18 +761,24 @@ func TestEachBuildReportGoldens(t *testing.T) {
 // one place the four counts meet.
 func TestEachVerdictCountsEveryKind(t *testing.T) {
 	cases := []struct {
-		tried, zeros, timeouts, notBuilt int
-		want                             string
+		tried, zeros, timeouts, notBuilt, unmatched int
+		want                                        string
 	}{
-		{3, 0, 0, 0, "every command exited nonzero"},
-		{3, 0, 0, 1, "2 exited nonzero, 1 did not build"},
-		{2, 0, 0, 2, "2 did not build"},
-		{4, 1, 1, 1, "1 exited nonzero, 1 exited 0, 1 timed out, 1 did not build"},
-		{1, 1, 0, 0, "1 exited 0"},
+		{3, 0, 0, 0, 0, "every command exited nonzero"},
+		{3, 0, 0, 1, 0, "2 exited nonzero, 1 did not build"},
+		{2, 0, 0, 2, 0, "2 did not build"},
+		{4, 1, 1, 1, 0, "1 exited nonzero, 1 exited 0, 1 timed out, 1 did not build"},
+		{1, 1, 0, 0, 0, "1 exited 0"},
+		// --count (#189): the caught patches with no line matched, after the
+		// count they are among.
+		{2, 0, 0, 0, 1, "every command exited nonzero, 1 with no line matched"},
+		{3, 0, 0, 0, 3, "every command exited nonzero, 3 with no line matched"},
+		{5, 1, 1, 0, 2, "3 exited nonzero, 2 with no line matched, 1 exited 0, 1 timed out"},
+		{4, 1, 0, 1, 1, "2 exited nonzero, 1 with no line matched, 1 exited 0, 1 did not build"},
 	}
 	for _, c := range cases {
-		if got := eachVerdict(c.tried, c.zeros, c.timeouts, c.notBuilt); got != c.want {
-			t.Errorf("eachVerdict(%d, %d, %d, %d) = %q, want %q", c.tried, c.zeros, c.timeouts, c.notBuilt, got, c.want)
+		if got := eachVerdict(c.tried, c.zeros, c.timeouts, c.notBuilt, c.unmatched); got != c.want {
+			t.Errorf("eachVerdict(%d, %d, %d, %d, %d) = %q, want %q", c.tried, c.zeros, c.timeouts, c.notBuilt, c.unmatched, got, c.want)
 		}
 	}
 }

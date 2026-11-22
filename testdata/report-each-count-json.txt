@@ -1,0 +1,68 @@
+{
+  "ok": false,
+  "exit": 3,
+  "each": {
+    "command": "go test ./...",
+    "count": "^ *--- FAIL",
+    "try_baseline": {
+      "ran": true,
+      "ok": true,
+      "status": 0,
+      "seconds": 4.1,
+      "matched": 0,
+      "output": [
+        "ok  \texample.com/x\t4.1s"
+      ]
+    },
+    "patches": [
+      {
+        "patch": "breaks.hunk:m01-off-by-one",
+        "ran": true,
+        "status": 1,
+        "seconds": 4.2,
+        "matched": 3,
+        "output": [
+          "--- FAIL: TestSplit (0.00s)",
+          "FAIL"
+        ],
+        "rolled_back": 1
+      },
+      {
+        "patch": "breaks.hunk:m02-nil-map",
+        "ran": true,
+        "status": 2,
+        "seconds": 0.9,
+        "matched": 0,
+        "output": [
+          "panic: assignment to entry in nil map",
+          "FAIL\texample.com/x\t0.9s"
+        ],
+        "rolled_back": 1
+      },
+      {
+        "patch": "breaks.hunk:m03-swap",
+        "ran": true,
+        "status": 0,
+        "seconds": 4,
+        "matched": 0,
+        "output": [
+          "ok  \texample.com/x\t4.0s"
+        ],
+        "rolled_back": 1
+      },
+      {
+        "patch": "breaks.hunk:m04-loop",
+        "ran": true,
+        "status": 124,
+        "seconds": 90,
+        "matched": 1,
+        "output": [
+          "--- FAIL: TestCache (0.00s)",
+          "=== RUN   TestLoop"
+        ],
+        "rolled_back": 1,
+        "timed_out_after": 90
+      }
+    ]
+  }
+}

@@ -810,7 +810,7 @@ func TestMeasureReportGoldens(t *testing.T) {
 		return errOut.String() + out.String(), code
 	}
 	cfg := func(rounds int) eachConfig {
-		return eachConfig{command: "go test -run '^$' -bench Parse .", measure: true, rounds: rounds}
+		return eachConfig{command: "go test -run '^$' -bench Parse .", measure: true, rounds: rounds, verifyLines: 40}
 	}
 
 	t.Run("two rounds", func(t *testing.T) {
@@ -825,7 +825,7 @@ func TestMeasureReportGoldens(t *testing.T) {
 		c := cfg(2)
 		for i, ep := range runs {
 			ep.side = i % 3
-			ep.measured(40)
+			ep.figures = c.read(ep.v)
 		}
 		c.table = measureTableOf(runs, 3)
 		got, code := stream(c, runs, eachOutcome{tried: 6, zeros: 4, stopAt: -1, seconds: 18.6})
@@ -851,7 +851,7 @@ func TestMeasureReportGoldens(t *testing.T) {
 		c := cfg(2)
 		for i, ep := range runs {
 			ep.side = i % 2
-			ep.measured(40)
+			ep.figures = c.read(ep.v)
 		}
 		c.table = measureTableOf(runs, 2)
 		got, code := stream(c, runs, eachOutcome{tried: 4, zeros: 4, stopAt: -1, seconds: 12.4})

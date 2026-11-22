@@ -66,6 +66,14 @@ package main
 // interleaved, which is what evens out a machine's drift between them, and
 // HUNK_ROUND counts them. The exit is 0 when every run ran to its end, and 3
 // when one timed out or did not build, since a measurement is missing.
+//
+// --count RE, from issue #189, says how hard each break was caught: the lines
+// of the command's whole output that match, a failing test's "--- FAIL" for
+// instance, on its line and in --json. Before it every mutation run sent each
+// patch's output to a file named by HUNK_PATCH and ended in a loop of grep -c.
+// A command that exited nonzero with no line matched was stopped by something
+// other than what the pattern names, and the summary counts those; the exit
+// is as without it, since a count is a report and not a verdict.
 
 import (
 	"errors"
@@ -73,6 +81,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -111,6 +120,9 @@ type eachConfig struct {
 	// and the tree as it is is an entry of each round rather than a gate.
 	measure bool
 	rounds  int // --rounds, 1 unless given
+	// count is --count (#189), nil without it: every run of the command has
+	// the lines of its whole output that match it counted.
+	count *regexp.Regexp
 }
 
 // eachBase is the name of a run with no patch applied: in HUNK_PATCH under
@@ -406,7 +418,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 	width := eachNameWidth(patches)
 	start := time.Now()
 
-	tried, zeros, timeouts, notBuilt := 0, 0, 0, 0
+	tried, zeros, timeouts, notBuilt, unmatched := 0, 0, 0, 0, 0
 	stopAt := -1      // index of the patch the run stopped at, -1 for none
 	var stopErr error // a mid-run refusal or I/O failure, reported before the summary
 	var sig os.Signal // the signal that ended the run, re-raised by main
@@ -464,11 +476,12 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 		// The command on the tree as it is, after the build's, which is the
 		// more precise refusal when the tree does not build: one that fails
 		// here, every patch would read as caught.
-		c, err := runOnTheTree(cfg.command, cfg.verifyLines, cfg, tree, stop, baseEnv...)
+		c, err := runOnTheTree(cfg.command, cfg.commandLines(), cfg, tree, stop, baseEnv...)
 		if err != nil {
 			return eachBaselineRefused(cfg, patches, bases, nil,
 				fmt.Sprintf("could not run the --try command: %v; nothing was tried", err), exitIO, stdout, stderr)
 		}
+		cfg.read(c)
 		bases.command = c
 		switch {
 		case c.Signal != nil:
@@ -512,9 +525,7 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 				v.Isolated = cfg.inCopy
 			}
 		}
-		if cfg.measure {
-			ep.measured(cfg.verifyLines)
-		}
+		ep.figures = cfg.read(ep.v)
 		writeEachLine(cfg, stderr, width, ep)
 		if tryErr != nil {
 			// The command or the build could not start. The batch is back
@@ -541,10 +552,12 @@ func eachRun(cfg eachConfig, patches []*eachPatch, tree *Tree, stdout, stderr io
 			timeouts++
 		case v.Status == 0:
 			zeros++
+		case v.Matched != nil && *v.Matched == 0:
+			unmatched++
 		}
 	}
 	o := eachOutcome{
-		tried: tried, zeros: zeros, timeouts: timeouts, notBuilt: notBuilt,
+		tried: tried, zeros: zeros, timeouts: timeouts, notBuilt: notBuilt, unmatched: unmatched,
 		stopAt: stopAt, stopErr: stopErr, sig: sig, inCopy: cfg.inCopy, measure: cfg.measure,
 	}
 	if stopAt < 0 && o.caught() > 0 && !cfg.measure {
@@ -603,29 +616,54 @@ func tryOne(cfg eachConfig, ep *eachPatch, txn *Txn, tree *Tree, sigs chan os.Si
 }
 
 // commandLines is how many lines of a run's command output to keep: every
-// one under --measure, whose table reads them all before measured cuts them
-// to the tail (#163), and the --verify-lines tail otherwise.
+// one under --measure, whose table reads them all (#163), and under --count,
+// which counts them all (#189), before read cuts them to the tail; the
+// --verify-lines tail otherwise.
 func (cfg eachConfig) commandLines() int {
-	if cfg.measure {
+	if cfg.measure || cfg.count != nil {
 		return 0
 	}
 	return cfg.verifyLines
 }
 
-// measured reads a --measure run's numbers from every line its command
-// printed, and then cuts the output to the --verify-lines tail that its line
-// shows and --json carries (#163). A run a timeout or a signal ended is cut
-// and not read, since its numbers are of a run that did not finish, and so is
-// one whose command never ran.
-func (ep *eachPatch) measured(lines int) {
-	v := ep.v
+// read takes what a run of the command printed, every line of it, before
+// cutting it to the --verify-lines tail that its line shows and --json
+// carries: under --measure its numbers, which it returns (#163), and under
+// --count how many of its lines match, into v.Matched (#189). A run whose
+// command never ran is only cut, and so is one a signal ended, since the run
+// stops there. A timed-out run's numbers are not read, being of a run that
+// did not finish, but its lines are counted: what it printed before the
+// timeout is what says whether a test failed before it hung.
+func (cfg eachConfig) read(v *Verify) []figure {
 	if v == nil {
-		return
+		return nil
 	}
-	if v.Ran && v.TimedOut == 0 && v.Signal == nil {
-		ep.figures = readFigures(v.Tail)
+	var figures []figure
+	if v.Ran && v.Signal == nil {
+		if cfg.measure && v.TimedOut == 0 {
+			figures = readFigures(v.Tail)
+		}
+		if cfg.count != nil {
+			n := matchingLines(cfg.count, v.Tail)
+			v.Matched = &n
+		}
 	}
-	v.Tail = tailOf(v.Tail, lines)
+	v.Tail = tailOf(v.Tail, cfg.verifyLines)
+	return figures
+}
+
+// matchingLines is how many of lines re matches, each without the carriage
+// return a CRLF ending leaves on it, since the output is split at newlines
+// alone and a pattern ending in $ would otherwise match no line a Windows
+// tool printed. Lines, not matches: a line that matches twice is one.
+func matchingLines(re *regexp.Regexp, lines []string) int {
+	n := 0
+	for _, l := range lines {
+		if re.MatchString(strings.TrimSuffix(l, "\r")) {
+			n++
+		}
+	}
+	return n
 }
 
 // tryBase is a --measure run's turn with no patch applied (#154): the build
@@ -709,10 +747,11 @@ func eachAfter(cfg eachConfig, tree *Tree, stop Stop, bases *eachBaselines) (os.
 			return b.Signal, nil
 		}
 	}
-	c, err := runOnTheTree(cfg.command, cfg.verifyLines, cfg, tree, stop, baseEnv...)
+	c, err := runOnTheTree(cfg.command, cfg.commandLines(), cfg, tree, stop, baseEnv...)
 	if err != nil {
 		return nil, &afterCannotStart{who: "the --try command", err: err}
 	}
+	cfg.read(c)
 	bases.commandAfter = c
 	return c.Signal, nil
 }
@@ -808,6 +847,7 @@ func eachBaselineRefused(cfg eachConfig, patches []*eachPatch, bases eachBaselin
 type eachOutcome struct {
 	tried, zeros, timeouts int
 	notBuilt               int   // patches whose --build failed, their command not run
+	unmatched              int   // caught patches none of whose lines matched --count (#189)
 	stopAt                 int   // index of the patch the run stopped at, -1 for none
 	stopErr                error // a mid-run refusal or I/O failure
 	sig                    os.Signal
@@ -937,7 +977,7 @@ func writeEachEnd(cfg eachConfig, patches []*eachPatch, o eachOutcome, code int,
 		fmt.Fprintf(w, "tried %s %s; %s (%.1fs)\n", what, where, measureVerdict(o), o.seconds)
 	default:
 		fmt.Fprintf(w, "tried %s %s; %s%s (%.1fs)\n",
-			patchCount(o.tried), where, eachVerdict(o.tried, o.zeros, o.timeouts, o.notBuilt), eachAfterClause(o), o.seconds)
+			patchCount(o.tried), where, eachVerdict(o.tried, o.zeros, o.timeouts, o.notBuilt, o.unmatched), eachAfterClause(o), o.seconds)
 	}
 }
 
@@ -1004,6 +1044,11 @@ func writeEachLine(cfg eachConfig, w io.Writer, width int, ep *eachPatch) {
 		fmt.Fprintf(w, "the command timed out after %s", shortDuration(v.TimedOut))
 	default:
 		fmt.Fprintf(w, "the command exited %d (%.1fs)", v.Status, v.Seconds)
+	}
+	// Under --count, how many of its lines matched (#189): a build's output
+	// is never counted, and a run a signal ended has no count.
+	if what == "command" && v.Matched != nil {
+		fmt.Fprintf(w, ", %s matched", count(*v.Matched, "line"))
 	}
 	if len(v.NotRestored) > 0 {
 		fmt.Fprintf(w, "; %s left alone", count(len(v.NotRestored), "file"))
@@ -1091,14 +1136,20 @@ func eachAfterReason(o eachOutcome) string {
 }
 
 // eachVerdict is the summary's middle: what the commands said, and how many
-// patches never reached theirs because the build failed.
-func eachVerdict(tried, zeros, timeouts, notBuilt int) string {
+// patches never reached theirs because the build failed. Under --count, the
+// caught patches none of whose lines matched follow the count they are among
+// (#189): a break stopped by something other than what the pattern names.
+func eachVerdict(tried, zeros, timeouts, notBuilt, unmatched int) string {
+	without := ""
+	if unmatched > 0 {
+		without = fmt.Sprintf(", %d with no line matched", unmatched)
+	}
 	if zeros == 0 && timeouts == 0 && notBuilt == 0 {
-		return "every command exited nonzero"
+		return "every command exited nonzero" + without
 	}
 	parts := make([]string, 0, 4)
 	if n := tried - zeros - timeouts - notBuilt; n > 0 {
-		parts = append(parts, fmt.Sprintf("%d exited nonzero", n))
+		parts = append(parts, fmt.Sprintf("%d exited nonzero%s", n, without))
 	}
 	if zeros > 0 {
 		parts = append(parts, fmt.Sprintf("%d exited 0", zeros))
@@ -1141,6 +1192,9 @@ func eachNameWidth(patches []*eachPatch) int {
 func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code int, stopReason string, stdout, stderr io.Writer) int {
 	out := jsonReport{OK: code == exitOK, Exit: code, DryRun: cfg.dryRun, Isolated: cfg.inCopy, Copy: jsonCopyOf(cfg.copied)}
 	je := &jsonEach{Command: cfg.command, Build: cfg.build}
+	if cfg.count != nil {
+		je.Count = cfg.count.String()
+	}
 	if cfg.measure {
 		je.Measure, je.Rounds = true, cfg.rounds
 	}
@@ -1196,7 +1250,7 @@ func eachJSON(cfg eachConfig, patches []*eachPatch, bases eachBaselines, code in
 				// nothing to bury in an object, and one --try's carries it
 				// (#89).
 				if v.Ran {
-					jp.Output = v.Tail
+					jp.Output, jp.Matched = v.Tail, v.Matched
 				}
 			}
 		}
@@ -1241,5 +1295,5 @@ func eachBuildJSON(b *Verify) *jsonEachRun {
 // eachCommandJSON is the command's run on the tree as it is for --json: its
 // output whatever the end, as every run of the command carries it.
 func eachCommandJSON(c *Verify) *jsonEachRun {
-	return &jsonEachRun{Ran: c.Ran, OK: c.OK, Status: c.Status, Seconds: c.Seconds, Output: c.Tail, jsonEnded: endedJSON(c)}
+	return &jsonEachRun{Ran: c.Ran, OK: c.OK, Status: c.Status, Seconds: c.Seconds, Matched: c.Matched, Output: c.Tail, jsonEnded: endedJSON(c)}
 }

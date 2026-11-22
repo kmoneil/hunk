@@ -1,0 +1,14 @@
+tried breaks.hunk:m01-off-by-one  the command exited 1 (4.2s), 3 lines matched
+tried breaks.hunk:m02-nil-map     the command exited 2 (0.9s), 0 lines matched
+tried breaks.hunk:m03-swap        the command exited 0 (4.0s), 0 lines matched
+
+$ go test ./...
+ok  	example.com/x	4.0s
+(last 1 of 1 lines)
+tried breaks.hunk:m04-loop        the command timed out after 1m30s, 1 line matched
+
+$ go test ./...
+--- FAIL: TestCache (0.00s)
+=== RUN   TestLoop
+(last 2 of 2 lines)
+tried 4 patches and put back every file; 2 exited nonzero, 1 with no line matched, 1 exited 0, 1 timed out (99.1s)

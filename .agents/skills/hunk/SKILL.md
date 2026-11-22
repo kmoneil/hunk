@@ -543,6 +543,15 @@ tried. To keep each patch's whole output, write it to a file named by
 name, or `base` with no patch applied), with `HUNK_ROUND`: `go test ./... >
 "/tmp/out/$(basename "$HUNK_PATCH").log" 2>&1`.
 
+**To record how hard each break was caught, give `--count RE`**, a Go regexp,
+rather than writing each patch's output to a file and looping `grep -c` over
+the files: `--count '^ *--- FAIL'` for `go test`. Each patch's line ends `3
+lines matched`, counted over its whole output and not the tail, and `--json`
+has `matched` on each patch. A catch with `0 lines matched` was stopped by
+something other than a failing test, a panic or a compile error that a
+missing `--build` let through, and the summary counts those: read their
+output. The exit does not change.
+
 **In a compiled language, add `--build CMD`.** A break that does not compile
 makes the test command exit nonzero, so `--each` alone scores it as caught: Zig
 and Go exit 1 for a compile error as for a failing test, and deleting one line
