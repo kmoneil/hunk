@@ -257,7 +257,13 @@ Three rules worth knowing before the first patch:
    `@@ old` of whole lines with no blank line under it takes the lines' text
    and leaves the last one's line break, an empty line where they were. And
    text taken out from between two empty lines lets them touch, two in a row
-   where there was one on each side. The batch applies as written, and the
+   where there was one on each side. The starts have to agree too. A blank
+   line at the top of a payload is the line break before its first line:
+   where the line above is empty, that is the empty line, but where the line
+   above has text, it is that line's break, and a `@@ new` with no blank line
+   at its top joins its first line onto that text. A blank line at the top of
+   `@@ new` and none at the top of `@@ old`, where a line starts, leaves an
+   empty line before the replacement. The batch applies as written, and the
    report ends with a `warning:` on stderr, under `--quiet` too, naming the
    hunk, the line it left and the fix. To add an empty line on purpose, end
    both with the blank line and give `@@ new` a second.

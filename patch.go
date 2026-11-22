@@ -985,9 +985,12 @@ newline. The report says "(no final newline)" when it does not.
 
 Give a replacement's old and new the same ending. A blank line under new and
 none under old leaves an empty line after the replacement, and the other way
-round joins the next line onto it. Either applies, and a warning after the
-report names the hunk. To add an empty line on purpose, end both with a blank
-line and new with two.
+round joins the next line onto it. Give them the same start too: a blank line
+at the top of old is the line break before its text, which where the line
+above has text is that line's, so a new without one joins onto it; and a
+blank line at the top of new alone leaves an empty line before it. Either
+applies, and a warning after the report names the hunk. To add an empty line
+on purpose, end both with a blank line and new with two.
 
 A replacement whose new is its old matches and changes nothing, and a warning
 after the report names the hunk. Under --eol auto that includes a new that

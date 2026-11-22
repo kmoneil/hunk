@@ -903,6 +903,12 @@ var reportGoldens = map[string]int{
 	"cli-slip-taken":         0,
 	"cli-slip-taken-dry-run": 0,
 	"cli-slip-taken-json":    0,
+	// #192: a warning of a replacement whose starts disagree about a newline,
+	// the line above joined on or an empty line before, beside the issue's
+	// patch where the empty line it names is there, which has none.
+	"cli-slip-leading":         0,
+	"cli-slip-leading-dry-run": 0,
+	"cli-slip-leading-json":    0,
 	// #100: a break set, one file of several patches under "@@ patch"
 	// headings. A heading fault refuses the run at 1, and a heading outside
 	// --each is a parse error.

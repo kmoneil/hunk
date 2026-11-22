@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -150,39 +151,44 @@ func TestRegexApply(t *testing.T) {
 		name, file, patch, want string
 		added, removed          int
 		strict                  bool
-		slip                    SlipKind
+		slips                   []SlipKind
 	}{
 		{
 			"the issue's example",
 			"package a\n\nfunc f() {\n\tx := oldName(a)\n\ty := oldName(bb)\n\treturn oldName(c1)\n}\n",
 			regexHunk(" x3", `\boldName\((\w+)\)`, "newName($1, ctx)"),
 			"package a\n\nfunc f() {\n\tx := newName(a, ctx)\n\ty := newName(bb, ctx)\n\treturn newName(c1, ctx)\n}\n",
-			3, 3, false, -1,
+			3, 3, false, nil,
 		},
-		{"$0 is the match", "a 1 b 22 c 333\n", regexHunk(" x3", `\d+`, "<$0>"), "a <1> b <22> c <333>\n", 1, 1, false, -1},
-		{"named groups", "k=v\nx=y\n", regexHunk(" x2", `(?P<k>\w+)=(?P<v>\w+)`, "${v}=${k}"), "v=k\ny=x\n", 2, 2, false, -1},
-		{"$$ is a $", "cost 5\n", regexHunk("", `(\d+)`, "$$$1"), "cost $5\n", 1, 1, false, -1},
-		{"a $ that starts no reference is text", "a\n", regexHunk("", "a", "$ $) ${1"), "$ $) ${1\n", 1, 1, false, -1},
-		{"a group that took no part puts nothing", "b\n", regexHunk("", "(a)?b", "[$1]"), "[]\n", 1, 1, false, -1},
-		{"a match of nothing at each line's start", "a\nb\nc", regexHunk(" x3", `(?m)^`, "// "), "// a\n// b\n// c", 3, 3, false, -1},
-		{"matches deleted with their lines", "a\n// x\nb\n// y\n", regexHunk(" x2", "// \\w\n", ""), "a\nb\n", 0, 2, false, -1},
-		{"a pattern that ends in a line break", "a\nb\nc\n", regexHunk("", "a\nb\n", "ab\n"), "ab\nc\n", 1, 2, false, -1},
-		{"under auto a line break typed in the pattern and in new is the file's", "a\r\nb\r\n", regexHunk("", "a\nb", "x\ny"), "x\r\ny\r\n", 2, 2, false, -1},
-		{"a group carries the file's own CRLF", "<a\r\nb>\r\n", regexHunk("", `(?s)<(.*)>`, "[$1]"), "[a\r\nb]\r\n", 2, 2, false, -1},
-		{"twice, in an LF file, joining nothing", "x\r\ny\nz\n", regexHunk("", `(x\r\n)`, "$1$1"), "x\r\nx\r\ny\nz\n", 1, 0, false, -1},
-		{"two groups that copy a CRLF's halves side by side join nothing", "a\r\nb\r\n", regexHunk("", `(a\r)(\nb)`, "$1$2!"), "a\r\nb!\r\n", 1, 1, false, -1},
-		{"under strict the pattern is its bytes", "a\nb\n", regexHunk("", "a\nb", "x"), "x\n", 1, 2, true, -1},
+		{"$0 is the match", "a 1 b 22 c 333\n", regexHunk(" x3", `\d+`, "<$0>"), "a <1> b <22> c <333>\n", 1, 1, false, nil},
+		{"named groups", "k=v\nx=y\n", regexHunk(" x2", `(?P<k>\w+)=(?P<v>\w+)`, "${v}=${k}"), "v=k\ny=x\n", 2, 2, false, nil},
+		{"$$ is a $", "cost 5\n", regexHunk("", `(\d+)`, "$$$1"), "cost $5\n", 1, 1, false, nil},
+		{"a $ that starts no reference is text", "a\n", regexHunk("", "a", "$ $) ${1"), "$ $) ${1\n", 1, 1, false, nil},
+		{"a group that took no part puts nothing", "b\n", regexHunk("", "(a)?b", "[$1]"), "[]\n", 1, 1, false, nil},
+		{"a match of nothing at each line's start", "a\nb\nc", regexHunk(" x3", `(?m)^`, "// "), "// a\n// b\n// c", 3, 3, false, nil},
+		{"matches deleted with their lines", "a\n// x\nb\n// y\n", regexHunk(" x2", "// \\w\n", ""), "a\nb\n", 0, 2, false, nil},
+		{"a pattern that ends in a line break", "a\nb\nc\n", regexHunk("", "a\nb\n", "ab\n"), "ab\nc\n", 1, 2, false, nil},
+		{"under auto a line break typed in the pattern and in new is the file's", "a\r\nb\r\n", regexHunk("", "a\nb", "x\ny"), "x\r\ny\r\n", 2, 2, false, nil},
+		{"a group carries the file's own CRLF", "<a\r\nb>\r\n", regexHunk("", `(?s)<(.*)>`, "[$1]"), "[a\r\nb]\r\n", 2, 2, false, nil},
+		{"twice, in an LF file, joining nothing", "x\r\ny\nz\n", regexHunk("", `(x\r\n)`, "$1$1"), "x\r\nx\r\ny\nz\n", 1, 0, false, nil},
+		{"two groups that copy a CRLF's halves side by side join nothing", "a\r\nb\r\n", regexHunk("", `(a\r)(\nb)`, "$1$2!"), "a\r\nb!\r\n", 1, 1, false, nil},
+		{"under strict the pattern is its bytes", "a\nb\n", regexHunk("", "a\nb", "x"), "x\n", 1, 2, true, nil},
 		// Two hunks on one line each count it, as two commits would.
-		{"after a literal hunk on the same file", "aaa\n", "@@ file a.txt\n@@ old\naaa\n@@ new\nbbb\n" + regexHunk("", "b+", "c"), "c\n", 2, 2, false, -1},
-		{"a replacement that ends in a line break where the match did not", "a\nc\n", regexHunk("", "a", "b\n"), "b\n\nc\n", 2, 1, false, SlipEmptyLine},
-		{"one that joins the next line on", "a\nc\n", regexHunk("", "a\n", "b"), "bc\n", 1, 2, false, SlipJoinedLine},
-		{"one that takes the empty line after it (#185)", "a\n\nc\n", regexHunk("", "a\n", "b"), "b\nc\n", 1, 2, false, SlipTakenEmptyLine},
-		{"one that adds a line under the empty line after it", "h\n\nc\n", regexHunk("", "h\n", "$0\nb"), "h\n\nb\nc\n", 1, 0, false, -1},
+		{"after a literal hunk on the same file", "aaa\n", "@@ file a.txt\n@@ old\naaa\n@@ new\nbbb\n" + regexHunk("", "b+", "c"), "c\n", 2, 2, false, nil},
+		{"a replacement that ends in a line break where the match did not", "a\nc\n", regexHunk("", "a", "b\n"), "b\n\nc\n", 2, 1, false, []SlipKind{SlipEmptyLine}},
+		{"one that joins the next line on", "a\nc\n", regexHunk("", "a\n", "b"), "bc\n", 1, 2, false, []SlipKind{SlipJoinedLine}},
+		{"one that takes the empty line after it (#185)", "a\n\nc\n", regexHunk("", "a\n", "b"), "b\nc\n", 1, 2, false, []SlipKind{SlipTakenEmptyLine}},
+		{"one that adds a line under the empty line after it", "h\n\nc\n", regexHunk("", "h\n", "$0\nb"), "h\n\nb\nc\n", 1, 0, false, nil},
 		// The empty line's break is the second match's start, so the first
 		// is followed by the second's replacement: a join.
-		{"one whose next line's break another match starts on", "a\n\nc\n", regexHunk(" x2", `a\n|\nc`, "X"), "XX\n", 1, 3, false, SlipJoinedLine},
-		{"an empty one that leaves a line's break", "x\ny\n", regexHunk("", "x", ""), "\ny\n", 1, 1, false, SlipEmptiedLine},
-		{"one that changes nothing", "a\n", regexHunk("", "a", "a"), "a\n", 0, 0, false, SlipNoChange},
+		{"one whose next line's break another match starts on", "a\n\nc\n", regexHunk(" x2", `a\n|\nc`, "X"), "XX\n", 1, 3, false, []SlipKind{SlipJoinedLine, SlipJoinedAbove}},
+		// #192: the starts disagree, and only where the line above has text
+		// is it a join.
+		{"one that joins its replacement onto the line above", "a\nc\n", regexHunk("", `\nc`, "b"), "ab\n", 1, 2, false, []SlipKind{SlipJoinedAbove}},
+		{"one that leaves an empty line before it", "a\nc\n", regexHunk("", "c", "\nb"), "a\n\nb\n", 2, 1, false, []SlipKind{SlipEmptyLineBefore}},
+		{"one that begins with the empty line above it, which it replaces", "a\n\nc\n", regexHunk("", `\nc`, "b"), "a\nb\n", 1, 2, false, nil},
+		{"an empty one that leaves a line's break", "x\ny\n", regexHunk("", "x", ""), "\ny\n", 1, 1, false, []SlipKind{SlipEmptiedLine}},
+		{"one that changes nothing", "a\n", regexHunk("", "a", "a"), "a\n", 0, 0, false, []SlipKind{SlipNoChange}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tree, root := fixture(t, map[string]string{"a.txt": c.file})
@@ -197,18 +203,19 @@ func TestRegexApply(t *testing.T) {
 			if got := readFile(t, root, "a.txt"); got != c.want {
 				t.Errorf("a.txt = %q, want %q", got, c.want)
 			}
-			if c.slip == SlipNoChange {
+			if len(c.slips) == 1 && c.slips[0] == SlipNoChange {
 				if len(r.Files) != 0 {
 					t.Errorf("files = %+v, want none listed", r.Files)
 				}
 			} else if len(r.Files) != 1 || r.Files[0].Added != c.added || r.Files[0].Removed != c.removed {
 				t.Errorf("files = %+v, want +%d -%d", r.Files, c.added, c.removed)
 			}
-			switch {
-			case c.slip < 0 && len(r.Slips) > 0:
-				t.Errorf("slips = %+v, want none", r.Slips)
-			case c.slip >= 0 && (len(r.Slips) != 1 || r.Slips[0].Kind != c.slip):
-				t.Errorf("slips = %+v, want one of kind %d", r.Slips, c.slip)
+			var kinds []SlipKind
+			for _, s := range r.Slips {
+				kinds = append(kinds, s.Kind)
+			}
+			if !slices.Equal(kinds, c.slips) {
+				t.Errorf("slips = %+v, want kinds %v", r.Slips, c.slips)
 			}
 		})
 	}

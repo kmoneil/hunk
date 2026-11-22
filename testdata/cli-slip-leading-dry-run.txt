@@ -1,0 +1,9 @@
+M f.md  +2 -1
+M g.md  +1 -0
+M e.txt +2 -1
+M x.txt +2 -4
+4 files, 4 hunks, +7 -6 (dry run: nothing written)
+
+warning: hunk 1 (patch line 2) joins its replacement onto the line above in f.md, making "- b- c": its old text begins with a newline and its new text does not; if that was not meant, leave a blank line above its new text, as above its old text
+warning: hunk 3 (patch line 18) leaves an empty line before "B" in e.txt: its new text begins with a newline and its old text does not; if that was not meant, take out the blank line above its new text
+warning: hunk 4 (patch line 24) joins each of its 2 replacements onto the line above in x.txt, the first making "aB": its old text begins with a newline and its new text does not; if that was not meant, leave a blank line above its new text, as above its old text

@@ -1,0 +1,57 @@
+{
+  "ok": true,
+  "exit": 0,
+  "files": [
+    {
+      "path": "f.md",
+      "op": "modify",
+      "added": 2,
+      "removed": 1
+    },
+    {
+      "path": "g.md",
+      "op": "modify",
+      "added": 1,
+      "removed": 0
+    },
+    {
+      "path": "e.txt",
+      "op": "modify",
+      "added": 2,
+      "removed": 1
+    },
+    {
+      "path": "x.txt",
+      "op": "modify",
+      "added": 2,
+      "removed": 4
+    }
+  ],
+  "hunks": 4,
+  "warnings": [
+    {
+      "kind": "joined_line",
+      "hunk": 1,
+      "patch_line": 2,
+      "path": "f.md",
+      "text": "- b- c",
+      "message": "hunk 1 (patch line 2) joins its replacement onto the line above in f.md, making \"- b- c\": its old text begins with a newline and its new text does not; if that was not meant, put the line break back in f.md"
+    },
+    {
+      "kind": "empty_line",
+      "hunk": 3,
+      "patch_line": 18,
+      "path": "e.txt",
+      "text": "B",
+      "message": "hunk 3 (patch line 18) leaves an empty line before \"B\" in e.txt: its new text begins with a newline and its old text does not; if that was not meant, remove the empty line from e.txt"
+    },
+    {
+      "kind": "joined_line",
+      "hunk": 4,
+      "patch_line": 24,
+      "path": "x.txt",
+      "text": "aB",
+      "message": "hunk 4 (patch line 24) joins each of its 2 replacements onto the line above in x.txt, the first making \"aB\": its old text begins with a newline and its new text does not; if that was not meant, put the line breaks back in x.txt"
+    }
+  ]
+}
