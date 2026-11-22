@@ -27,6 +27,12 @@ import (
 // number gone stale since the caller read the file quotes another block and
 // the apply cannot tell. The report of each range's first and last line is
 // there for that.
+//
+// A number may have ASCII whitespace round it, and either may be $, the last
+// line (#191). The field's way to say "to the end" was a count from wc -l,
+// which macOS pads with spaces, so it was refused; and which is one short on a
+// file whose last line has no newline, so with the padding taken off alone it
+// would quote a line short at exit 0. $ needs no count.
 
 // quoteUsage is what "hunk quote --help" prints.
 const quoteUsage = `hunk quote prints a line range of a file as a hunk, so that replacing a whole
@@ -35,9 +41,11 @@ block does not start with pasting it.
   hunk quote [flags] FILE START END
 
 On stdout: "@@ file FILE", "@@ old", and lines START through END of FILE,
-counted from 1. It is a patch like any other. Follow it with "@@ new" and the
-replacement, or pass --new, then concatenate it with other hunks and pipe the
-lot into hunk:
+counted from 1. Either may be $, FILE's last line, so a range to the end needs
+no count: wc -l is one short where the last line has no newline. Spaces round
+a number are dropped, as macOS wc -l pads one. It is a patch like any other.
+Follow it with "@@ new" and the replacement, or pass --new, then concatenate it
+with other hunks and pipe the lot into hunk:
 
   { hunk quote --new new/parse.go src/parse.go 40 95
     cat rest.hunk
@@ -77,8 +85,9 @@ for stops at exit 1 instead of applying without it.
      a --new file that cannot be read, or a --new - whose stdin is a terminal
      or empty
   2  FILE refused as the apply would refuse it, a line past the end of FILE,
-     a line of the range or of --new's file that is a directive under the
-     marker, or a range that is one empty line
+     a $ in an empty FILE or a START of $ after END, a line of the range or
+     of --new's file that is a directive under the marker, or a range that
+     is one empty line
   5  I/O error
 `
 
@@ -198,7 +207,9 @@ func runQuote(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if r != nil {
 		return refuse(r.code, r.msg)
 	}
-	if start > end {
+	// A $ is a number only once FILE is read, so a range it is in is judged
+	// there.
+	if start != lastLine && end != lastLine && start > end {
 		return refuse(exitUsage, fmt.Sprintf("START is %d and END is %d, so the range runs backwards", start, end))
 	}
 	// The parser trims a path (§3.2), so one that begins or ends with a space
@@ -246,6 +257,9 @@ func runQuote(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if r := requireState(f, hunk, tree.Shown(), false); r != nil {
 		return refuse(exitNoMatch, r.Error())
+	}
+	if start, end, r = resolveLast(path, f.orig, start, end); r != nil {
+		return refuse(r.code, r.msg)
 	}
 
 	q, r := quoteLines(path, f.orig, start, end, repl, hasNew, newName, marker)
@@ -295,23 +309,64 @@ func markerArg(args []string) string {
 	return marker
 }
 
-// lineNumber reads START or END: digits, and at least 1. Atoi alone takes a
-// sign, and "-3" is nobody's line.
+// lastLine is what lineNumber reads $ as: FILE's last line, which resolveLast
+// turns into its number once FILE is read.
+const lastLine = -1
+
+// asciiSpace is the whitespace taken off round a line number: ASCII's six.
+// Unicode's spaces are not, since nothing that prints a count pads it with
+// them, and a no-break space before a digit is more likely a paste gone wrong.
+const asciiSpace = " \t\n\v\f\r"
+
+// lineNumber reads START or END: digits, and at least 1, or $ for the last
+// line, with ASCII whitespace round either taken off (#191). Atoi alone takes
+// a sign, and "-3" is nobody's line. A refusal quotes the argument as given,
+// padding and all.
 func lineNumber(s string) (int, *quoteRefusal) {
-	bad := &quoteRefusal{exitUsage, fmt.Sprintf("START and END are line numbers counted from 1, and %q is not one", s)}
-	if s == "" {
+	bad := &quoteRefusal{exitUsage, fmt.Sprintf("START and END are line numbers counted from 1, or $ for the last line, and %q is not one", s)}
+	t := strings.Trim(s, asciiSpace)
+	if t == "$" {
+		return lastLine, nil
+	}
+	if t == "" {
 		return 0, bad
 	}
-	for _, c := range []byte(s) {
+	for _, c := range []byte(t) {
 		if c < '0' || c > '9' {
 			return 0, bad
 		}
 	}
-	n, err := strconv.Atoi(s)
+	n, err := strconv.Atoi(t)
 	if err != nil || n < 1 {
 		return 0, bad
 	}
 	return n, nil
+}
+
+// resolveLast turns a $ in START or END into file's last line, as lineCount
+// counts them, and refuses what the file makes of one: no last line in an
+// empty file, and a START of $ past a numbered END. A numbered START past the
+// end, before an END of $, is quoteLines' to refuse, in its words. These are
+// exit 2, since the tree decides them.
+func resolveLast(path string, file []byte, start, end int) (int, int, *quoteRefusal) {
+	if start != lastLine && end != lastLine {
+		return start, end, nil
+	}
+	total := lineCount(file)
+	if total == 0 {
+		return 0, 0, &quoteRefusal{exitNoMatch, fmt.Sprintf("%s has 0 lines, so there is no last line", path)}
+	}
+	if start == lastLine && end != lastLine && end < total {
+		return 0, 0, &quoteRefusal{exitNoMatch, fmt.Sprintf(
+			"START is $, line %d of %s, and END is %d, so the range runs backwards", total, path, end)}
+	}
+	if start == lastLine {
+		start = total
+	}
+	if end == lastLine {
+		end = total
+	}
+	return start, end, nil
 }
 
 // readNew reads --new's replacement, and says how a refusal names where it
@@ -366,7 +421,8 @@ func readNew(file string, stdin io.Reader) ([]byte, string, error) {
 // newlines, with none added (§3.3).
 func quoteLines(path string, file []byte, start, end int, repl []byte, hasNew bool, newName, marker string) (*Quote, *quoteRefusal) {
 	total := lineCount(file)
-	if end > total {
+	// start is past end only where end was $, and so is the last line.
+	if end > total || start > total {
 		// The first line asked for that is not there.
 		missing := end
 		if start > total {

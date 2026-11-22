@@ -4,9 +4,11 @@ block does not start with pasting it.
   hunk quote [flags] FILE START END
 
 On stdout: "@@ file FILE", "@@ old", and lines START through END of FILE,
-counted from 1. It is a patch like any other. Follow it with "@@ new" and the
-replacement, or pass --new, then concatenate it with other hunks and pipe the
-lot into hunk:
+counted from 1. Either may be $, FILE's last line, so a range to the end needs
+no count: wc -l is one short where the last line has no newline. Spaces round
+a number are dropped, as macOS wc -l pads one. It is a patch like any other.
+Follow it with "@@ new" and the replacement, or pass --new, then concatenate it
+with other hunks and pipe the lot into hunk:
 
   { hunk quote --new new/parse.go src/parse.go 40 95
     cat rest.hunk
@@ -46,6 +48,7 @@ for stops at exit 1 instead of applying without it.
      a --new file that cannot be read, or a --new - whose stdin is a terminal
      or empty
   2  FILE refused as the apply would refuse it, a line past the end of FILE,
-     a line of the range or of --new's file that is a directive under the
-     marker, or a range that is one empty line
+     a $ in an empty FILE or a START of $ after END, a line of the range or
+     of --new's file that is a directive under the marker, or a range that
+     is one empty line
   5  I/O error

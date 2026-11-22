@@ -330,7 +330,9 @@ changed.
 `@@ old` wants the text it replaces. For a block you know by its line numbers,
 because you have just read the file, do not paste a hundred lines and do not
 print them into a patch with `sed`. `hunk quote FILE START END` prints lines
-START through END as a hunk: `@@ file`, `@@ old`, and the lines.
+START through END as a hunk: `@@ file`, `@@ old`, and the lines. To the end of
+the file, END is `$`, the last line: do not count with `wc -l`, which is one
+short when the last line has no newline.
 
 ```sh
 {

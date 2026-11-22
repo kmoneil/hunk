@@ -7,23 +7,47 @@ two arguments
 four arguments
     quote takes FILE START END, and got 4 arguments; run "hunk quote --help"
 START is not a number
-    START and END are line numbers counted from 1, and "x" is not one
+    START and END are line numbers counted from 1, or $ for the last line, and "x" is not one
 END is not a number
-    START and END are line numbers counted from 1, and "2a" is not one
+    START and END are line numbers counted from 1, or $ for the last line, and "2a" is not one
 START is 0
-    START and END are line numbers counted from 1, and "0" is not one
+    START and END are line numbers counted from 1, or $ for the last line, and "0" is not one
 a sign
-    START and END are line numbers counted from 1, and "+1" is not one
+    START and END are line numbers counted from 1, or $ for the last line, and "+1" is not one
 a fraction
-    START and END are line numbers counted from 1, and "2.5" is not one
+    START and END are line numbers counted from 1, or $ for the last line, and "2.5" is not one
 an empty number
-    START and END are line numbers counted from 1, and "" is not one
+    START and END are line numbers counted from 1, or $ for the last line, and "" is not one
 a number no int holds
-    START and END are line numbers counted from 1, and "99999999999999999999" is not one
+    START and END are line numbers counted from 1, or $ for the last line, and "99999999999999999999" is not one
 a number with a control character in it
-    START and END are line numbers counted from 1, and "1\x1b[2J" is not one
+    START and END are line numbers counted from 1, or $ for the last line, and "1\x1b[2J" is not one
 START after END
     START is 6 and END is 3, so the range runs backwards
+START after END, both padded
+    START is 6 and END is 3, so the range runs backwards
+a number of spaces alone
+    START and END are line numbers counted from 1, or $ for the last line, and "   " is not one
+a space inside a number
+    START and END are line numbers counted from 1, or $ for the last line, and "1 0" is not one
+a no-break space before a number
+    START and END are line numbers counted from 1, or $ for the last line, and "\u00a01" is not one
+two $
+    START and END are line numbers counted from 1, or $ for the last line, and "$$" is not one
+a $ and a number
+    START and END are line numbers counted from 1, or $ for the last line, and "$1" is not one
+a START of $ after END
+    START is $, line 10 of f.txt, and END is 3, so the range runs backwards
+a START past the end before an END of $
+    f.txt has 10 lines, so there is no line 12
+a $ in an empty FILE
+    empty.txt has 0 lines, so there is no last line
+a START of $ in an empty FILE
+    empty.txt has 0 lines, so there is no last line
+a $ in a FILE that is not there
+    absent.txt: no such file; only @@ create makes one; the root is /the/root
+a $ that is one empty line
+    endgap.txt line 2 is empty, and an old of nothing matches at every position in the file; quote it together with a line beside it
 a path a directive line would trim
     "f.txt " begins or ends with a space or a tab, which a directive line drops, so no patch can name it
 a path with a leading tab

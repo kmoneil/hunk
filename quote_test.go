@@ -608,6 +608,19 @@ func TestQuoteRefusals(t *testing.T) {
 		{"a number no int holds", []string{"f.txt", "1", "99999999999999999999"}, exitUsage, []string{`"99999999999999999999" is not one`}, false},
 		{"a number with a control character in it", []string{"f.txt", "1\x1b[2J", "2"}, exitUsage, []string{`"1\x1b[2J" is not one`}, false},
 		{"START after END", []string{"f.txt", "6", "3"}, exitUsage, []string{"START is 6 and END is 3", "runs backwards"}, false},
+		{"START after END, both padded", []string{"f.txt", " 6", "3 "}, exitUsage, []string{"START is 6 and END is 3", "runs backwards"}, false},
+		{"a number of spaces alone", []string{"f.txt", "   ", "2"}, exitUsage, []string{`"   " is not one`}, false},
+		{"a space inside a number", []string{"f.txt", "1", "1 0"}, exitUsage, []string{`"1 0" is not one`}, false},
+		{"a no-break space before a number", []string{"f.txt", "\u00a01", "2"}, exitUsage, []string{`"\u00a01" is not one`}, false},
+		{"two $", []string{"f.txt", "1", "$$"}, exitUsage, []string{`"$$" is not one`}, false},
+		{"a $ and a number", []string{"f.txt", "$1", "2"}, exitUsage, []string{`"$1" is not one`}, false},
+		// A $ is judged once FILE is read, so these are the tree's: exit 2.
+		{"a START of $ after END", []string{"f.txt", "$", "3"}, exitNoMatch, []string{"START is $, line 10 of f.txt, and END is 3", "runs backwards"}, false},
+		{"a START past the end before an END of $", []string{"f.txt", "12", "$"}, exitNoMatch, []string{"f.txt has 10 lines", "there is no line 12"}, false},
+		{"a $ in an empty FILE", []string{"empty.txt", "1", "$"}, exitNoMatch, []string{"empty.txt has 0 lines, so there is no last line"}, false},
+		{"a START of $ in an empty FILE", []string{"empty.txt", "$", "$"}, exitNoMatch, []string{"empty.txt has 0 lines, so there is no last line"}, false},
+		{"a $ in a FILE that is not there", []string{"absent.txt", "1", "$"}, exitNoMatch, []string{"absent.txt: no such file"}, false},
+		{"a $ that is one empty line", []string{"endgap.txt", "$", "$"}, exitNoMatch, []string{"endgap.txt line 2 is empty"}, false},
 		{"a path a directive line would trim", []string{"f.txt ", "1", "2"}, exitUsage, []string{`"f.txt " begins or ends with a space`, "no patch can name it"}, false},
 		{"a path with a leading tab", []string{"\tf.txt", "1", "2"}, exitUsage, []string{`"\tf.txt" begins or ends`}, false},
 		{"an unknown flag", []string{"f.txt", "1", "2", "--nwe", "x"}, exitUsage, []string{"flag provided but not defined: -nwe", `"hunk quote --help"`}, false},
@@ -641,7 +654,7 @@ func TestQuoteRefusals(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			root := cliTree(t, map[string]string{
 				"f.txt": tenLines, "sub/in.txt": "x\n", ".git/config": "[core]\n",
-				"gap.txt": "a\n\nb\n", "doc.md": "intro\n@@ old\nx\n",
+				"gap.txt": "a\n\nb\n", "doc.md": "intro\n@@ old\nx\n", "empty.txt": "", "endgap.txt": "a\n\n",
 			})
 			before := snapshot(t, root)
 			args := make([]string, len(c.args))
@@ -839,12 +852,33 @@ func TestLineNumber(t *testing.T) {
 		{"+1", 0, false},
 		{"1.0", 0, false},
 		{"1e3", 0, false},
-		{" 1", 0, false},
-		{"1 ", 0, false},
 		{"0x10", 0, false},
 		{"1_000", 0, false},
 		{"١", 0, false},
 		{"99999999999999999999", 0, false},
+		// #191: ASCII whitespace round a number is taken off, as macOS wc -l
+		// pads its count, and $ is the last line.
+		{" 1", 1, true},
+		{"1 ", 1, true},
+		{"       3", 3, true},
+		{"\t2\n", 2, true},
+		{" \r\n7\v\f ", 7, true},
+		{"$", lastLine, true},
+		{" $ ", lastLine, true},
+		{"\t$\n", lastLine, true},
+		{"   ", 0, false},
+		{"\n", 0, false},
+		{"1 2", 0, false},
+		{" 0 ", 0, false},
+		{" -1", 0, false},
+		{"\u00a03", 0, false},
+		{"3\u0085", 0, false},
+		{"\u30003", 0, false},
+		{"$$", 0, false},
+		{"$1", 0, false},
+		{"1$", 0, false},
+		{"$ $", 0, false},
+		{"-", 0, false},
 	} {
 		got, r := lineNumber(c.in)
 		if (r == nil) != c.ok || got != c.want {
