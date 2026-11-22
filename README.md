@@ -411,7 +411,9 @@ since what each match was is in the file, not the patch.
 means pasting a hundred lines, which is slow and is where mistakes get in. When
 you know the block by its line numbers, `hunk quote FILE START END` prints it
 as a hunk instead: `@@ file FILE`, `@@ old`, and lines START through END,
-counted from 1.
+counted from 1. Either may be `$`, the last line, so a range to the end of the
+file needs no count: `wc -l` is one short when the last line has no newline.
+Spaces round a number are dropped, as macOS `wc -l` pads its count.
 
 ```sh
 {
@@ -495,9 +497,9 @@ hunk: patch line 66: "@@ end" takes no argument; found: refused by hunk quote: s
 `hunk quote` exits 1 for a call that is wrong whatever the tree holds (a flag,
 a number, START after END, a `--new` file that cannot be read, a `--new -`
 whose stdin is a terminal or empty), 2 for what the tree decides (a FILE the
-apply would refuse, a line past the end, a directive line, a range that is one
-empty line), and 5 for an I/O error. `hunk quote
---help` has the whole of it.
+apply would refuse, a line past the end, a `$` in an empty FILE or a START of
+`$` after END, a directive line, a range that is one empty line), and 5 for an
+I/O error. `hunk quote --help` has the whole of it.
 
 ## Undoing a patch: `hunk invert`
 
