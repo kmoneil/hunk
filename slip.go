@@ -19,7 +19,17 @@ import (
 // (a\n to A\n\n) is how an empty line is added on purpose, so it is not
 // warned of, and is the way to mean the empty line. A new ending in a newline
 // at the end of a file that had no final newline gives it one, which is
-// benign. The same disagreement at the payloads' starts has not been seen.
+// benign.
+//
+// The payloads' starts disagree the same way (#192). A blank line at the top
+// of a payload is the line break before its first text. Where the line above
+// the match is empty, or the match starts the file, it is that empty line,
+// and the payloads say what happens. Where the line above has text, it is
+// that line's break: in the field, a list item added before a paragraph with
+// old anchored on "the blank line, then the paragraph" where no blank line
+// was, so a new that began with the item wrote it onto the end of the last
+// one, at exit 0. The mirror, a new that begins with a line break where a
+// line starts, leaves an empty line above the replacement.
 //
 // A replacement that changed nothing is one too (#118): in the field, a hunk
 // in a batch of twelve whose new text had been left as its old, which the
@@ -56,9 +66,10 @@ type Slip struct {
 	// may, by what follows each.
 	Count, Of int
 	// Text is the line the first one leaves, without its ending: the one
-	// before the empty line, the joined one, the one the taken empty line was
-	// after, or the file's last. For an emptied line it is the line as it
-	// was, before its text went.
+	// before the empty line, or after it when the empty line is before the
+	// replacement, the joined one, the one the taken empty line was after, or
+	// the file's last. For an emptied line it is the line as it was, before
+	// its text went.
 	Text []byte
 	// For joined empty lines, of the first: how many empty lines in a row it
 	// leaves, the most either side had, and how many of the ones below old it
@@ -103,6 +114,17 @@ const (
 	// the file has that empty line no more (#185). Not where the new text
 	// begins with the old text and that empty line, which is no slip.
 	SlipTakenEmptyLine
+	// The old text begins with a newline and the new, which is not empty,
+	// does not, and the line above the match has text: the replacement is
+	// joined onto it (#192). Where that line is empty, or the match starts
+	// the file, old's newline is that empty line, which the payloads show
+	// going.
+	SlipJoinedAbove
+	// The new text begins with a newline and the old does not, a line starts
+	// where the match does, and the new text is more than line breaks: an
+	// empty line before the replacement. Inside a line the new text breaks
+	// it, which reads as meant.
+	SlipEmptyLineBefore
 )
 
 // jsonKind is the kind as --json's warnings carry it. Both ways of changing
@@ -111,9 +133,9 @@ const (
 // of its own, since a joined line is not what it left.
 func (k SlipKind) jsonKind() string {
 	switch k {
-	case SlipEmptyLine, SlipEmptiedLine, SlipJoinedEmptyLines:
+	case SlipEmptyLine, SlipEmptiedLine, SlipJoinedEmptyLines, SlipEmptyLineBefore:
 		return "empty_line"
-	case SlipJoinedLine:
+	case SlipJoinedLine, SlipJoinedAbove:
 		return "joined_line"
 	case SlipTakenEmptyLine:
 		return "taken_empty_line"
@@ -190,6 +212,9 @@ func (x *Txn) noteSlips(n int, h Hunk, f *file, old, repl, next []byte) {
 // text and that empty line, the change is whole lines added under the empty
 // line and nothing else, and is no slip.
 //
+// A change's start is judged as well, on its own (#192), by leadingSlip: one
+// change can disagree at both ends, and is warned of at each.
+//
 // Before those, a run of touching changes whose new text is empty or only
 // line breaks, with an empty line just above it and one just below, is judged
 // whole (#169): with its text gone the two empty lines touch, and the warning
@@ -244,6 +269,9 @@ func (x *Txn) noteChangeSlips(n int, h Hunk, f *file, changes []change, next []b
 		if joined[i] {
 			continue
 		}
+		if kind, text := leadingSlip(next, e, old, repl); kind != 0 {
+			note(kind, text)
+		}
 		oldNL, newNL := bytes.HasSuffix(old, lf), bytes.HasSuffix(repl, lf)
 		if len(repl) == 0 && !oldNL {
 			if len(old) == 0 || e == last || (e > 0 && next[e-1] != '\n') ||
@@ -287,6 +315,36 @@ func (x *Txn) noteChangeSlips(n int, h Hunk, f *file, changes []change, next []b
 		}
 		note(kind, lineAt(next, end-1))
 	}
+}
+
+// leadingSlip is the slip at the start of a change whose old is old and whose
+// replacement repl starts at next[e], with the line it quotes, or 0. It reads
+// the byte before the replacement in next, the bytes the hunk left, since
+// under @@ old xN an earlier copy can end just before it. A line break, LF or
+// CRLF, at the start of old and none at the start of a non-empty repl joins
+// the replacement onto the line above, unless a line starts there, where
+// old's break was that empty line's own. One at the start of repl and none at
+// old's, where a line starts, leaves an empty line before the replacement,
+// quoting the line after it; a repl of nothing but line breaks is judged at
+// its end only, since its start and its end are the same breaks.
+func leadingSlip(next []byte, e int, old, repl []byte) (SlipKind, []byte) {
+	oldBreak := bytes.HasPrefix(old, lf) || bytes.HasPrefix(old, crlf)
+	newBreak := bytes.HasPrefix(repl, lf) || bytes.HasPrefix(repl, crlf)
+	if oldBreak == newBreak || len(repl) == 0 {
+		return 0, nil
+	}
+	lineStarts := e == 0 || next[e-1] == '\n'
+	switch {
+	case oldBreak && !lineStarts:
+		return SlipJoinedAbove, lineAt(next, e)
+	case newBreak && lineStarts && len(bytes.ReplaceAll(bytes.ReplaceAll(repl, crlf, nil), lf, nil)) > 0:
+		brk := len(lf)
+		if bytes.HasPrefix(repl, crlf) {
+			brk = len(crlf)
+		}
+		return SlipEmptyLineBefore, lineAt(next, e+brk)
+	}
+	return 0, nil
 }
 
 // joinsEmptyLines reports whether replacing cur[at:end] with repl, which is
@@ -413,8 +471,8 @@ func (x *Txn) slipOf(first int, kind SlipKind) *Slip {
 
 // lineAt is the line of b that holds b[i], without its ending, or the one
 // that b[i] ends when it is a newline: for a slip, the line before the
-// empty one, the joined line, the line a taken one was after, or the file's
-// last. It is read off the bytes the hunk left, since under @@ old xN a
+// empty one or after it, the joined line, the line a taken one was after, or
+// the file's last. It is read off the bytes the hunk left, since under @@ old xN a
 // replacement before this one may be on the same line.
 func lineAt(b []byte, i int) []byte {
 	start := bytes.LastIndexByte(b[:i], '\n') + 1
@@ -537,6 +595,26 @@ func slipMessage(patchName string, s Slip, onDisk bool) string {
 		fix = "leave a blank line under its new text, as under its old text"
 		if onDisk {
 			fix = "put the line break" + plural + " back in " + path
+		}
+	case SlipJoinedAbove:
+		msg = fmt.Sprintf("%s joins its replacement onto the line above in %s, making %s", where, path, line)
+		if of != "" {
+			msg = fmt.Sprintf("%s joins %s onto the line above in %s, the first making %s", where, of, path, line)
+		}
+		msg += ": its old text begins with a newline and its new text does not"
+		fix = "leave a blank line above its new text, as above its old text"
+		if onDisk {
+			fix = "put the line break" + plural + " back in " + path
+		}
+	case SlipEmptyLineBefore:
+		msg = fmt.Sprintf("%s leaves an empty line before %s in %s", where, line, path)
+		if of != "" {
+			msg = fmt.Sprintf("%s leaves an empty line before %s in %s, the first before %s", where, of, path, line)
+		}
+		msg += ": its new text begins with a newline and its old text does not"
+		fix = "take out the blank line above its new text"
+		if onDisk {
+			fix = "remove the empty line" + plural + " from " + path
 		}
 	case SlipTakenEmptyLine:
 		msg = fmt.Sprintf("%s takes the empty line after %s out of %s", where, line, path)

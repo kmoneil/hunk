@@ -205,6 +205,15 @@ where the line after `@@ old` is empty, a `@@ new` that begins with the
 is how an entry goes under a heading and the blank line below it. To add an
 empty line on purpose, end both with a blank line and `@@ new` with two.
 
+Their starts have to agree as well. A blank line at the top of a payload is
+the line break before its first line. Where the line above the match is
+empty, that is the empty line; where it has text, it is that line's break.
+So an `@@ old` of a blank line and a paragraph, matched where no empty line
+stands above the paragraph, and an `@@ new` that starts with a new list item,
+writes the item onto the end of the line above. A blank line at the top of
+`@@ new` and none at the top of `@@ old` leaves an empty line before the
+replacement. Both apply at exit 0 with a `warning:`, like the ends.
+
 **2. `@@ old` means exactly one occurrence.** `@@ old x3` means exactly three,
 and replaces all three. There is no "one or more". If you do not know the count,
 that is the thing `hunk` is here to refuse: add context until it is unique.
