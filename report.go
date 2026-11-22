@@ -43,6 +43,11 @@ type Verify struct {
 	Tail       []string
 	TotalLines int
 
+	// Matched is how many lines of the whole output matched --count under
+	// --try --each (#189), read before Tail was cut to its tail; nil without
+	// --count, and for a run a signal ended.
+	Matched *int
+
 	// Applied, RolledBack and NotRestored describe the failure (§5.3, §6.3).
 	Applied     int
 	RolledBack  int
@@ -994,6 +999,7 @@ func endedJSON(v *Verify) jsonEnded {
 type jsonEach struct {
 	Command          string          `json:"command"`
 	Build            string          `json:"build,omitempty"`
+	Count            string          `json:"count,omitempty"`
 	Measure          bool            `json:"measure,omitempty"`
 	Rounds           int             `json:"rounds,omitempty"`
 	Baseline         *jsonEachRun    `json:"baseline,omitempty"`
@@ -1015,6 +1021,7 @@ type jsonEachRun struct {
 	OK      bool     `json:"ok"`
 	Status  int      `json:"status"`
 	Seconds float64  `json:"seconds"`
+	Matched *int     `json:"matched,omitempty"`
 	Output  []string `json:"output,omitempty"`
 	jsonEnded
 }
@@ -1029,6 +1036,8 @@ type jsonEachRun struct {
 // command never ran, and rolled_back and the rest are what the build's own
 // putting back did. Under --measure (#154) base says the entry is the run
 // with no patch applied, whose patch is "base", and round is its round.
+// matched is --count's (#189), a pointer as status is: 0 lines matched is a
+// catch by something other than the pattern, and absent is no --count.
 type jsonEachPatch struct {
 	Patch       string        `json:"patch"`
 	Base        bool          `json:"base,omitempty"`
@@ -1040,6 +1049,7 @@ type jsonEachPatch struct {
 	Hunks       int           `json:"hunks,omitempty"`
 	Added       *int          `json:"added,omitempty"`
 	Removed     *int          `json:"removed,omitempty"`
+	Matched     *int          `json:"matched,omitempty"`
 	Output      []string      `json:"output,omitempty"`
 	RolledBack  int           `json:"rolled_back,omitempty"`
 	NotRestored []jsonRestore `json:"not_restored,omitempty"`

@@ -88,6 +88,17 @@ FLAGS
                         patch's name, or base for a run with no patch applied,
                         and HUNK_ROUND, its round, 1 outside --measure, in
                         their environment. A patch file named base is refused.
+  --count RE            With --try --each: count the lines of each command's
+                        output that match RE, a Go regexp, and put the number
+                        on its line, "2 lines matched", and in --json: how many
+                        tests a break failed, with '^ *--- FAIL' for go test.
+                        Every line the command printed is read, not only the
+                        --verify-lines tail, a CR at a line's end left off. A
+                        command that exited nonzero with no line matched was
+                        stopped by something else, a panic or a compile error,
+                        and the summary counts those. The exit is as without
+                        it, and a --build's output is not counted. Refused,
+                        exit 1, without --each, or given twice.
   --build CMD           With --try --each: run CMD once on the tree as it is,
                         then after each patch is applied and before the --try
                         command. A break that does not compile exits nonzero

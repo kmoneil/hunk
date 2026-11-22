@@ -799,6 +799,8 @@ var reportGoldens = map[string]int{
 	"report-each-isolated-stopped":                    5,
 	"report-each-measure":                             0,
 	"report-each-measure-json":                        0,
+	"report-each-count":                               3,
+	"report-each-count-json":                          3,
 	"report-each-measure-same":                        0,
 	"report-each-measure-same-json":                   0,
 	"report-each-measure-missing":                     3,

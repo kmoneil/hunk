@@ -758,6 +758,34 @@ since the exit scored would be the filter's. `--json` carries the same tail
 for every patch, given or not: its last `--verify-lines` lines, 40 by default,
 not its whole output.
 
+To count what caught each break, give `--count RE`, a Go regular expression.
+Each patch's line says how many lines of its command's output match it, read
+from the whole output and not the `--verify-lines` tail, so a pattern for a
+failing test says how many tests the break failed:
+
+```sh
+hunk --try 'go test ./...' --build 'go vet ./...' --count '^ *--- FAIL' --each breaks.hunk
+```
+
+```
+tried breaks.hunk:m01-off-by-one  the command exited 1 (4.2s), 3 lines matched
+tried breaks.hunk:m02-nil-map     the command exited 2 (0.9s), 0 lines matched
+tried 2 patches and put back every file; every command exited nonzero, 1 with no line matched (5.1s)
+```
+
+A break whose command exited nonzero with no line matched was stopped by
+something other than what the pattern names, a panic or a harness that gave
+up, and the summary counts those; the exit is as it would be without
+`--count`. A line is matched without the carriage return a Windows tool ends
+it with, so a `$` in the pattern works. A run that timed out is counted, from
+what it printed before the timeout; a `--build`'s output never is, and nor is
+a run a signal ended. Under `--measure` every run is counted, `base` included.
+In `--json`, `each.count` is the pattern, and every run of the command has
+`matched`, the runs on the tree as it is (`try_baseline`,
+`try_baseline_after`) too. An empty pattern, one Go's regexp does not read,
+`--count` given twice, and `--count` without `--each` are refused, exit 1,
+nothing run.
+
 To keep every patch's whole output, let the command name a file for it. Each
 run's build and command get `HUNK_PATCH` in their environment, the patch as its
 line names it, or `base` for a run with no patch applied, and `HUNK_ROUND`, the
