@@ -5,3 +5,5 @@ FAIL
 (last 1 of 1 lines)
 
 new, which hunk made as a directory, is not empty, so hunk left it.
+
+the patch is kept in $TMPDIR/hunk-patch-N.hunk, to change and resend with -f

@@ -8,3 +8,5 @@ sub/d.txt was not restored.
   sub, the directory hunk deleted it from, is now a symbolic link,
   so hunk wrote nothing there.
   hunk did not write its original bytes back, and keeps no copy of them.
+
+the patch is kept in $TMPDIR/hunk-patch-N.hunk, to change and resend with -f

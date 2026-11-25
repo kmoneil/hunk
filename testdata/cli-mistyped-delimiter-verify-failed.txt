@@ -4,4 +4,6 @@ $ echo FAIL; false
 FAIL
 (last 1 of 1 lines)
 
+the patch is kept in $TMPDIR/hunk-patch-N.hunk, to change and resend with -f
+
 warning: patch line 6 is "HUHUNK", which looks like a mistyped heredoc delimiter; it is payload for notes.txt, so if it was meant to end the heredoc, take it out of the patch

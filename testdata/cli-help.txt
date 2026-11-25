@@ -18,9 +18,12 @@ is untouched.
 FLAGS
 
   --verify CMD          Shell command run after a successful apply. Non-zero
-                        rolls everything back. Optional: 58% of the measured
-                        calls this tool was designed from bundled one, and
-                        requiring it would be obnoxious for documentation edits.
+                        rolls everything back, and a patch read from stdin is
+                        kept in a new file in the temporary directory, named on
+                        the report's last line, to change and resend with -f.
+                        Optional: 58% of the measured calls this tool was
+                        designed from bundled one, and requiring it would be
+                        obnoxious for documentation edits.
                         Refused, exit 1, if its last pipeline ends in a filter
                         whose exit is 0 whatever it reads: tail, head, tee,
                         cat, uniq, wc, cut, tr, nl, column, tac, rev or fold;

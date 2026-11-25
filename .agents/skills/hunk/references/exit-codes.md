@@ -11,7 +11,7 @@ guarantee.
 | 0 | applied, verify passed if given | changed |
 | 1 | usage or a malformed patch | untouched |
 | 2 | a hunk did not match | untouched |
-| 3 | verify failed, rolled back | the same bytes and mode |
+| 3 | verify failed, rolled back; a patch from stdin is kept in the file the last line names | the same bytes and mode |
 | 4 | verify failed and rollback was incomplete | **inconsistent** |
 | 5 | I/O error | untouched, unless the message says otherwise |
 | 6 | a file changed on disk between read and write, or another `hunk` run holds the tree | untouched |

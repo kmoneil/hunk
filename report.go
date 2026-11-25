@@ -129,6 +129,10 @@ type Report struct {
 	Copy *copyMade
 	// Inverse is the patch --inverse-to wrote, where the batch stayed (#155).
 	Inverse *Inverse
+	// Kept is the file a patch from stdin was kept in, after --verify rolled
+	// its batch back (#195), and KeptErr why it could not be.
+	Kept    string
+	KeptErr error
 }
 
 // count is the summary form: "1 file", "3 files". Distinct from plural, which
@@ -310,6 +314,20 @@ func (r *Report) text(out, errOut io.Writer, quiet bool) {
 			writeNotRestored(errOut, v.NotRestored)
 		}
 	}
+	// Last, after the verify's output, since it is what to act on (#195). A
+	// path and not a command: the patch resent as it is fails as it did.
+	switch {
+	case r.Kept != "":
+		fmt.Fprintf(errOut, "\nthe patch is kept in %s, to change and resend with -f\n", showControls(r.Kept))
+	case r.KeptErr != nil:
+		fmt.Fprintf(errOut, "\n%s\n", notKept(r.KeptErr))
+	}
+}
+
+// notKept is the line for a patch from stdin that could not be kept after its
+// batch was rolled back: "the patch could not be kept in DIR: why".
+func notKept(err error) string {
+	return "the patch could not be kept " + err.Error()
 }
 
 func (r *Report) writeSuccess(w io.Writer) {
@@ -846,6 +864,9 @@ type jsonReport struct {
 	// Inverse is the patch --inverse-to wrote (#155), where the batch stayed:
 	// its path, and the arguments to hunk that apply it.
 	Inverse *jsonInverse `json:"inverse,omitempty"`
+	// KeptPatch is the file a patch from stdin was kept in once --verify
+	// rolled its batch back (#195).
+	KeptPatch string `json:"kept_patch,omitempty"`
 	// Isolated says the --try command ran in a copy of the tree (#130), so
 	// the tree itself was never written: under --each, once the copy was
 	// made, and for one --try, once the batch was in it.
@@ -1148,6 +1169,7 @@ func (r *Report) JSON(w io.Writer) error {
 	if r.Inverse != nil {
 		out.Inverse = &jsonInverse{Path: r.Inverse.Path, Args: r.Inverse.Args, Nothing: r.Inverse.Nothing}
 	}
+	out.KeptPatch = r.Kept
 	if v := r.Verify; v != nil && v.Try {
 		jt := &jsonTry{
 			Ran: v.Ran, Status: v.Status, Seconds: v.Seconds, Command: v.Command,
