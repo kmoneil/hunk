@@ -8,3 +8,5 @@ d.txt was not restored.
   hunk deleted it and something has since put a symbolic link there,
   so restoring would replace that link with a file.
   hunk did not write its original bytes back, and keeps no copy of them.
+
+the patch is kept in $TMPDIR/hunk-patch-N.hunk, to change and resend with -f

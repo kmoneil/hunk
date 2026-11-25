@@ -119,9 +119,12 @@ is untouched.
 FLAGS
 
   --verify CMD          Shell command run after a successful apply. Non-zero
-                        rolls everything back. Optional: 58% of the measured
-                        calls this tool was designed from bundled one, and
-                        requiring it would be obnoxious for documentation edits.
+                        rolls everything back, and a patch read from stdin is
+                        kept in a new file in the temporary directory, named on
+                        the report's last line, to change and resend with -f.
+                        Optional: 58% of the measured calls this tool was
+                        designed from bundled one, and requiring it would be
+                        obnoxious for documentation edits.
                         Refused, exit 1, if its last pipeline ends in a filter
                         whose exit is 0 whatever it reads: tail, head, tee,
                         cat, uniq, wc, cut, tr, nl, column, tac, rev or fold;
@@ -687,8 +690,10 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 
 	// --each reads its patches itself, one file each, once the tree is open.
 	var p *Patch
+	var src []byte // the patch as read, kept if --verify rolls back one from stdin
 	if !*each {
-		src, readErr := readPatch(patchFile.path, stdin)
+		var readErr error
+		src, readErr = readPatch(patchFile.path, stdin)
 		if readErr != nil {
 			return fail(exitUsage, readErr, "")
 		}
@@ -868,19 +873,35 @@ func invoke(args []string, stdin io.Reader, stdout, stderr io.Writer, interrupte
 	// The inverse stays with the batch (#155): a verify that rolled it back,
 	// a signal, a command that could not start, all take the inverse too,
 	// and --keep-on-fail keeps both.
-	if stays := v == nil && err == nil || v != nil && (v.Kept || v.OK && err == nil); !stays {
+	stays := v == nil && err == nil || v != nil && (v.Kept || v.OK && err == nil)
+	if !stays {
 		if dropErr := txn.dropInverse(); dropErr != nil {
 			fmt.Fprintf(stderr, "hunk: the batch did not stay, and its inverse could not be removed: %v\n", dropErr)
 		}
 	}
+	// A patch from stdin that --verify applied and rolled back is kept in a
+	// file (#195), since the fix is usually one more hunk and the heredoc is
+	// gone: a verify that failed or could not start, a rollback that could
+	// not finish, a signal. Not -f's file, which is the caller's already; not
+	// --keep-on-fail's batch, which stays; not --try's, which is meant to go.
+	var kept string
+	var keptErr error
+	if v != nil && !stays && *verify != "" && !*dryRun && patchFromStdin(patchFile.path) {
+		kept, keptErr = keepPatch(src)
+	}
 
 	rep := NewReport(res, err, v, *dryRun, len(p.Hunks))
+	rep.Kept, rep.KeptErr = kept, keptErr
 	rep.Inverse = txn.kept()
 	rep.Strays = p.Strays
 	rep.Copy = made
 	if *asJSON {
 		// --json wins over --quiet: a caller that asked for machine output
-		// asked for it on every path. It is alone on stdout.
+		// asked for it on every path. It is alone on stdout, so a patch that
+		// could not be kept is said on stderr.
+		if keptErr != nil {
+			fmt.Fprintf(stderr, "hunk: %s\n", notKept(keptErr))
+		}
 		if err := rep.JSON(stdout); err != nil {
 			// Exit 5 leaves the tree as it was unless the message says
 			// otherwise, and here the batch may be on disk.

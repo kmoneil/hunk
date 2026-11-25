@@ -26,5 +26,6 @@
         "state": "is not empty"
       }
     ]
-  }
+  },
+  "kept_patch": "$TMPDIR/hunk-patch-N.hunk"
 }

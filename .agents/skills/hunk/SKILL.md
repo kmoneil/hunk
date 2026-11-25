@@ -49,7 +49,7 @@ success.
 | `would fall above the top of the file` | Re-read the file | Your `old` overhangs the top. The line it did find is printed with its number; drop the lines above it from your `old` |
 | `skipped: same file as hunk N` | Fix this hunk | It was never evaluated. Fix hunk N; this one may then be fine |
 | exit 1, `--verify cannot see the command piped into tail fail` | Wrap the pipe in a subshell to get it past | Drop the pipe. The verify's output is printed only when it fails, and then only its last 40 lines |
-| exit 3, `verify failed, rolled back` | Re-apply and hope | Every file is back to the same bytes and mode. The verify output is below the line; fix the patch |
+| exit 3, `verify failed, rolled back` | Re-apply and hope, or type the batch out again | Every file is back to the same bytes and mode. The verify output is below the line; fix the patch. One sent on stdin is in the file the last line names: send it with the missing hunk after it, or change it and `hunk -f` it |
 | exit 4, `was not restored` | Ignore it | The tree is inconsistent. Read which file and why, then repair it before doing anything else |
 | exit 5 | Assume the edit landed | Read the message. Unless it says otherwise, nothing was written, or it was put back. The cause is outside the patch: a missing shell, a name the filesystem refused, a full disk |
 | exit 6, `changed on disk` | Retry the same patch | Something else wrote the tree. Re-read the file and rebuild the patch against what is there now |
@@ -474,6 +474,27 @@ through any symlink, is exit 2. Change git's own files with `git`.
 `--verify CMD` runs after a successful apply, in `--root`, via `sh -c`. If it
 exits non-zero, **every file goes back** and the exit is 3. You do not need a
 backup and you do not need a cleanup call.
+
+**When it fails on something the batch missed**, a caller of a function whose
+signature one hunk changed, the fix is one more hunk, not the batch again. A
+patch that came on stdin is kept, and the report's last line names the file:
+`the patch is kept in /tmp/hunk-patch-N.hunk, to change and resend with -f`.
+Send it with the missing hunk after it, as the parts of one batch are sent
+(above):
+
+```sh
+{ cat /tmp/hunk-patch-N.hunk; cat <<'HUNK'
+@@ file cmd/report.go
+@@ old
+...
+HUNK
+} | hunk --verify 'go build ./...'
+```
+
+If a hunk in it was wrong instead, change the file with your file-editing tool
+and `hunk -f` it. Resent as it is, it fails as it did. Nothing is kept for a
+patch given with `-f`, which is a file already, under `--keep-on-fail`, whose
+batch stays, or under `--try`.
 
 `CMD` is any shell command, run with the user's permissions, and so is
 `--try`'s. A permission rule that allows `hunk` therefore allows whatever those

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -20,11 +21,33 @@ import (
 // a test can run it as a separate process. §8.1's concurrency test is about two
 // hunk processes, and two goroutines in one would share a scheduler and a
 // process that two runs of the tool do not.
+//
+// The suite runs with the temporary directory one of its own, removed at the
+// end: a --verify that rolls back a patch from stdin keeps it there (#195), and
+// a suite that fails verifies on purpose would otherwise leave a file in the
+// real one for each. A process run as hunk inherits it.
 func TestMain(m *testing.M) {
 	if os.Getenv("HUNK_TEST_AS_HUNK") == "1" {
 		main()
 	}
-	os.Exit(m.Run())
+	os.Exit(runInATempDir(m))
+}
+
+func runInATempDir(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "hunk-test-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	// TMPDIR on Unix; TMP, then TEMP, on Windows.
+	for _, k := range []string{"TMPDIR", "TMP", "TEMP"} {
+		if err := os.Setenv(k, dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	}
+	return m.Run()
 }
 
 // cli is invoke for a test that has no use for the signal it hands to main.
@@ -37,7 +60,8 @@ func runCLI(t *testing.T, root string, args []string, stdin string) (code int, s
 	var out, errOut bytes.Buffer
 	args = append([]string{"--root", root}, args...)
 	code = cli(args, strings.NewReader(stdin), &out, &errOut)
-	return code, out.String(), errOut.String()
+	// A kept patch's name is random (#195): checked, then hidden.
+	return code, hideKept(t, stdin, out.String()), hideKept(t, stdin, errOut.String())
 }
 
 func cliTree(t *testing.T, files map[string]string) string {

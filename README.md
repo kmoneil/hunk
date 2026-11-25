@@ -609,6 +609,35 @@ still 3. If the command cannot start at all, with no `sh` on the `PATH` for
 instance, nothing is written and the exit is 5: an edit that was never checked
 is not kept.
 
+A patch sent on stdin, as a heredoc, is nowhere but in the command that sent
+it, and the fix for a failed verify is usually one more hunk: the caller of a
+function whose signature the batch changed. So when `--verify` puts back a
+batch whose patch came on stdin (no `-f`, or `-f -`), `hunk` keeps the patch,
+its bytes as they came, in a new file in the temporary directory (`$TMPDIR`;
+`TMP` on Windows), and the report's last line names it:
+
+```
+hunk: applied 2 hunks, verify failed, rolled back 1 file
+
+$ go build ./...
+./report.go:41:14: not enough arguments in call to area
+(last 1 of 1 lines)
+
+the patch is kept in /tmp/hunk-patch-2210473.hunk, to change and resend with -f
+```
+
+Resent as it is, it fails as it did. Change it, or send it with the missing
+hunk after it: patches one after another are one batch, so
+`cat /tmp/hunk-patch-2210473.hunk more.hunk | hunk --verify 'go build ./...'`
+applies both or neither. `--json` carries the path as `kept_patch`. The same
+goes for a verify that could not start, a rollback that could not finish
+(exit 4) and a signal while the batch was on disk. Nothing is kept for a patch
+given with `-f FILE`, which is a file already, under `--keep-on-fail`, whose
+batch stays, or under `--try`, which is for an edit you do not mean to keep.
+The file is readable by its owner only, and is not removed: the system clears
+its temporary directory. A patch that could not be kept is said in that line's
+place, and the exit is the rollback's.
+
 `CMD` is any shell command, run with your permissions, and so is `--try`'s:
 that is what the two flags are for. So a harness rule that allows `hunk` allows
 every command those flags carry. An agent that may run `hunk` without asking may

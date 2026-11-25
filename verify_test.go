@@ -727,7 +727,7 @@ func TestAVerifyThatCannotStart(t *testing.T) {
 			if !strings.Contains(out+errOut, c.says) {
 				t.Errorf("want %q in:\n%s%s", c.says, out, errOut)
 			}
-			if c.exit == exitIO && c.after == "one\n" && c.written && !strings.HasSuffix(errOut, "; the batch was rolled back\n") {
+			if c.exit == exitIO && c.after == "one\n" && c.written && !strings.HasSuffix(errOut, "; the batch was rolled back\n\nthe patch is kept in "+keptPlaceholder+", to change and resend with -f\n") {
 				t.Errorf("does not say the batch was rolled back: %q", errOut)
 			}
 			if got := readFile(t, root, "a.txt"); got != c.after {

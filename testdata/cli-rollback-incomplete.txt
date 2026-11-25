@@ -9,3 +9,5 @@ a.txt was not restored.
   discard that work. hunk wrote bd52020371c0; the file is now 73cb3858a687.
   --verify-may-format says the verify command is expected to rewrite files.
   hunk did not write its original bytes back, and keeps no copy of them.
+
+the patch is kept in $TMPDIR/hunk-patch-N.hunk, to change and resend with -f

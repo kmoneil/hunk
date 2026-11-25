@@ -490,7 +490,8 @@ func TestASignalWhileTheBatchIsWritten(t *testing.T) {
 		name, flag string
 		say        string
 	}{
-		{"before a verify", "--verify", "hunk: interrupted by SIGTERM before the --verify command ran; the batch was put back\n"},
+		{"before a verify", "--verify", "hunk: interrupted by SIGTERM before the --verify command ran; the batch was put back\n" +
+			"\nthe patch is kept in " + keptPlaceholder + ", to change and resend with -f\n"},
 		{"before a --try", "--try", "hunk: interrupted by SIGTERM before the --try command ran; the batch was put back\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

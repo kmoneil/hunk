@@ -21,5 +21,6 @@
         "reason": "hunk deleted it and something has since put a symbolic link there,\nso restoring would replace that link with a file."
       }
     ]
-  }
+  },
+  "kept_patch": "$TMPDIR/hunk-patch-N.hunk"
 }

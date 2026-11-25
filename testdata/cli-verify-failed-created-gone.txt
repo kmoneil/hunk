@@ -5,3 +5,5 @@ FAIL
 (last 1 of 1 lines)
 
 new/x.go, which hunk created, was already gone: something else removed it.
+
+the patch is kept in $TMPDIR/hunk-patch-N.hunk, to change and resend with -f

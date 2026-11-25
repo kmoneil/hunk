@@ -24,5 +24,6 @@
         "reason": "sub, the directory hunk deleted it from, is now a symbolic link,\nso hunk wrote nothing there."
       }
     ]
-  }
+  },
+  "kept_patch": "$TMPDIR/hunk-patch-N.hunk"
 }
